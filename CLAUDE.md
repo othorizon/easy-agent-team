@@ -31,10 +31,12 @@ easy-agent-team：面向团队的 AI 能力集中管理与分发平台（Skill /
 
 ## 远程开发环境须知（Claude Code on the web 容器）
 
+**本节及「容器内直接起 PostgreSQL」的方案仅适用于 Claude Code 云端会话**——因为云端容器没有 Docker 守护进程，只能这样起库。用户本地开发时不采用此方案：直接用 Docker 起 PostgreSQL 或连自有实例即可。
+
 - **没有 Docker 守护进程**（docker CLI 存在但连不上 daemon），不要尝试 docker run / testcontainers。
 - **PostgreSQL 16 服务端已装**（/usr/lib/postgresql/16/bin），本地起库即可开发测试，不依赖外部数据库。已验证可用。
 - 容器以 root 运行，而 Postgres 拒绝 root：需 `runuser -u postgres --` 执行，且数据目录放 postgres 用户可访问的路径（如 /var/lib/postgresql；scratchpad 的父目录是 root 700，postgres 穿不过去）。
-- 统一用 `scripts/dev-db.sh start` 启动本地库（端口 5433，trust 认证，自动创建 eat_dev / eat_test），连接串：`postgres://dev@127.0.0.1:5433/eat_dev`。
+- 云端会话统一用 `scripts/dev-db.sh start` 启动本地库（端口 5433，trust 认证，自动创建 eat_dev / eat_test），连接串：`postgres://dev@127.0.0.1:5433/eat_dev`。
 - 容器是临时的：数据库数据不跨会话保留，schema 靠 Drizzle 迁移 + seed 脚本随时重建，这是预期行为。
 - 出站网络走代理；将来联调内网服务（Dokploy、团队数据库）可能不可达，届时由用户本地联调，这里负责开发与 mock 测试。
 

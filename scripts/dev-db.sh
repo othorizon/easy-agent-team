@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# 本地开发用 PostgreSQL 16，无需 Docker。
+# 【仅用于 Claude Code 云端会话】容器内直接起 PostgreSQL 16。
+# 云端容器没有 Docker 守护进程，只能用这种方式起库；
+# 本地开发请用 Docker 起 PostgreSQL 或连自有实例，不要用本脚本。
 # 用法: scripts/dev-db.sh {start|stop|status|psql [db]}
 # 连接串: postgres://dev@127.0.0.1:5433/eat_dev
 set -euo pipefail
