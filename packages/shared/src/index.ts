@@ -7,3 +7,4 @@ export * from './ai.js';
 export * from './template.js';
 export * from './mcp.js';
 export * from './db.js';
+export * from './deploy.js';

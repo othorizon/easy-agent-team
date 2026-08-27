@@ -443,6 +443,64 @@ export const aiCallLogs = pgTable(
   (t) => [index('ai_call_log_purpose_idx').on(t.purpose)],
 );
 
+/** Dokploy 接入配置（单行） */
+export const dokploySettings = pgTable('dokploy_setting', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  apiUrl: text('api_url').notNull(),
+  apiTokenEncrypted: text('api_token_encrypted').notNull(),
+  enabled: boolean('enabled').notNull().default(true),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const projects = pgTable('project', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  slug: text('slug').notNull().unique(),
+  name: text('name').notNull(),
+  repoUrl: text('repo_url').notNull().default(''),
+  dokployApplicationId: text('dokploy_application_id').notNull(),
+  description: text('description').notNull().default(''),
+  ownerId: uuid('owner_id')
+    .notNull()
+    .references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const projectMembers = pgTable(
+  'project_member',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+  },
+  (t) => [uniqueIndex('project_member_idx').on(t.projectId, t.userId)],
+);
+
+/** 部署记录；CLI 端检查报告存 report（决策 #8：不建平台侧 runner） */
+export const deployments = pgTable(
+  'deployment',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    triggeredBy: uuid('triggered_by')
+      .notNull()
+      .references(() => users.id),
+    status: text('status', { enum: ['deploying', 'success', 'failed'] })
+      .notNull()
+      .default('deploying'),
+    report: jsonb('report').$type<Record<string, unknown>>(),
+    error: text('error'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('deployment_project_idx').on(t.projectId)],
+);
+
 export const auditLogs = pgTable(
   'audit_log',
   {

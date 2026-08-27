@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module';
 import { AppExceptionFilter } from './common/http-exception.filter';
 import { DbModule } from './db/db.module';
 import { DbsModule } from './dbs/dbs.module';
+import { DeployModule } from './deploy/deploy.module';
 import { EnvsModule } from './envs/envs.module';
 import { HelpModule } from './help/help.module';
 import { McpConfigsModule } from './mcp-configs/mcp-configs.module';
@@ -28,6 +29,7 @@ import { UsersModule } from './users/users.module';
     TemplatesModule,
     McpConfigsModule,
     DbsModule,
+    DeployModule,
   ],
   providers: [{ provide: APP_FILTER, useClass: AppExceptionFilter }],
 })
