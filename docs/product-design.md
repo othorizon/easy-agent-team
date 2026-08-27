@@ -637,3 +637,4 @@ easy-agent-team/
 | 4 | 经验沉淀的 AI 自动整理 | **引入**。平台以 OpenAI 接口范式接入 AI（api_base_url / api_key / model 可配），用于经验沉淀等功能，随 P1 交付（§3.9） |
 | 5 | 本地已有 skill 的纳管 | **支持**。`eat skill push` 上传纳管，随 P0 交付（§3.2.3） |
 | 6 | 平台开发框架 | **NestJS（Fastify）单体 + React/Vite/AntD SPA + pnpm monorepo**，队列用 pg-boss，ORM 首选 Drizzle（§7.2–7.4） |
+| 7 | 存储 | **全量 PostgreSQL，不引入对象存储**。Skill 附属文件限单文件 256KB / 整包 1MB，超限拒收并引导外部引用（§3.2.4）；将来出现真实大文件需求再评估 OSS |

@@ -11,6 +11,6 @@ export default defineConfig({
   },
   plugins: [
     // NestJS 依赖 emitDecoratorMetadata，esbuild 不支持，改用 swc 转译
-    swc.vite({ module: { type: 'commonjs' } }),
+    swc.vite({ module: { type: 'es6' } }),
   ],
 });
