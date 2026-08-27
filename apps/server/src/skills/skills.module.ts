@@ -5,5 +5,6 @@ import { SkillsService } from './skills.service';
 @Module({
   controllers: [SkillsController],
   providers: [SkillsService],
+  exports: [SkillsService],
 })
 export class SkillsModule {}

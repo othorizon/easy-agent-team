@@ -207,6 +207,121 @@ export const skillSubscriptions = pgTable(
   (t) => [uniqueIndex('skill_subscription_user_skill_idx').on(t.userId, t.skillId)],
 );
 
+/** 可求助者登记：description 会被 AI 读取用于选择求助对象 */
+export const helperProfiles = pgTable('helper_profile', {
+  userId: uuid('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  description: text('description').notNull(),
+  webhookUrl: text('webhook_url'),
+  webhookSecretEncrypted: text('webhook_secret_encrypted'),
+  available: boolean('available').notNull().default(true),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const helpRequests = pgTable(
+  'help_request',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    requesterId: uuid('requester_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    helperId: uuid('helper_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    skillId: uuid('skill_id').references(() => skills.id, { onDelete: 'set null' }),
+    title: text('title').notNull(),
+    description: text('description').notNull(),
+    tried: text('tried').notNull().default(''),
+    status: text('status', { enum: ['open', 'answered', 'resolved', 'closed'] })
+      .notNull()
+      .default('open'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('help_request_helper_idx').on(t.helperId), index('help_request_requester_idx').on(t.requesterId)],
+);
+
+export const helpMessages = pgTable(
+  'help_message',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    requestId: uuid('request_id')
+      .notNull()
+      .references(() => helpRequests.id, { onDelete: 'cascade' }),
+    senderId: uuid('sender_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    content: text('content').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('help_message_request_idx').on(t.requestId)],
+);
+
+/** 经验沉淀：求助 ↔ 沉淀出的 skill 的关联与配置 */
+export const experiences = pgTable('experience', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  helpRequestId: uuid('help_request_id')
+    .notNull()
+    .unique()
+    .references(() => helpRequests.id, { onDelete: 'cascade' }),
+  skillId: uuid('skill_id')
+    .notNull()
+    .references(() => skills.id, { onDelete: 'cascade' }),
+  public: boolean('public').notNull(),
+  grantedToRequester: boolean('granted_to_requester').notNull().default(true),
+  grantedToHelper: boolean('granted_to_helper').notNull().default(true),
+  createdBy: uuid('created_by')
+    .notNull()
+    .references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const webhookDeliveries = pgTable(
+  'webhook_delivery',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    eventType: text('event_type').notNull(),
+    targetUrl: text('target_url').notNull(),
+    /** 摘要信息（不含敏感正文） */
+    summary: text('summary').notNull().default(''),
+    status: text('status', { enum: ['pending', 'success', 'failed'] })
+      .notNull()
+      .default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('webhook_delivery_status_idx').on(t.status)],
+);
+
+/** 平台 AI 接入配置（单行；OpenAI 接口范式） */
+export const aiSettings = pgTable('ai_setting', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  apiBaseUrl: text('api_base_url').notNull(),
+  apiKeyEncrypted: text('api_key_encrypted').notNull(),
+  model: text('model').notNull(),
+  enabled: boolean('enabled').notNull().default(true),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const aiCallLogs = pgTable(
+  'ai_call_log',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    purpose: text('purpose').notNull(),
+    model: text('model').notNull(),
+    promptTokens: integer('prompt_tokens').notNull().default(0),
+    completionTokens: integer('completion_tokens').notNull().default(0),
+    status: text('status', { enum: ['success', 'failed'] }).notNull(),
+    error: text('error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('ai_call_log_purpose_idx').on(t.purpose)],
+);
+
 export const auditLogs = pgTable(
   'audit_log',
   {

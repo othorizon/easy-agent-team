@@ -40,8 +40,15 @@ export class SkillsService {
     private readonly audit: AuditService,
   ) {}
 
-  private canSee(skill: SkillRow, user: AuthUser): boolean {
-    return skill.visibility === 'team' || skill.ownerId === user.id || user.role === 'admin';
+  /**
+   * 可见性：team 全员；private 仅作者/管理员；
+   * granted（经验沉淀用）= 作者/管理员/已被系统授予订阅的用户。
+   */
+  private canSee(skill: SkillRow, user: AuthUser, subs: Set<string>): boolean {
+    if (skill.ownerId === user.id || user.role === 'admin') return true;
+    if (skill.visibility === 'team') return true;
+    if (skill.visibility === 'granted') return subs.has(skill.id);
+    return false;
   }
 
   private canManage(skill: SkillRow, user: AuthUser): boolean {
@@ -87,13 +94,14 @@ export class SkillsService {
       .orderBy(desc(skills.updatedAt));
     const subs = await this.subscribedSkillIds(user.id);
     return rows
-      .filter((r) => this.canSee(r.skill, user))
+      .filter((r) => this.canSee(r.skill, user, subs))
       .map((r) => this.toInfo(r.skill, r.ownerName, subs.has(r.skill.id)));
   }
 
   async detail(user: AuthUser, slug: string): Promise<SkillDetail> {
     const skill = await this.getBySlug(slug);
-    if (!this.canSee(skill, user)) {
+    const subsForSee = await this.subscribedSkillIds(user.id);
+    if (!this.canSee(skill, user, subsForSee)) {
       throw new NotFoundException({ error: 'NOT_FOUND', message: `Skill ${slug} 不存在` });
     }
     const [owner] = await this.db.select({ name: users.name }).from(users).where(eq(users.id, skill.ownerId));
@@ -104,9 +112,8 @@ export class SkillsService {
         .where(and(eq(skillVersions.skillId, skill.id), eq(skillVersions.version, skill.currentVersion)))
         .limit(1)
     )[0];
-    const subs = await this.subscribedSkillIds(user.id);
     return {
-      ...this.toInfo(skill, owner?.name ?? '(已删除)', subs.has(skill.id)),
+      ...this.toInfo(skill, owner?.name ?? '(已删除)', subsForSee.has(skill.id)),
       content: version?.content ?? '',
       files: version?.files ?? [],
     };
@@ -114,7 +121,7 @@ export class SkillsService {
 
   async versions(user: AuthUser, slug: string): Promise<SkillVersionInfo[]> {
     const skill = await this.getBySlug(slug);
-    if (!this.canSee(skill, user)) {
+    if (!this.canSee(skill, user, await this.subscribedSkillIds(user.id))) {
       throw new NotFoundException({ error: 'NOT_FOUND', message: `Skill ${slug} 不存在` });
     }
     const rows = await this.db
@@ -247,7 +254,7 @@ export class SkillsService {
 
   async subscribe(user: AuthUser, slug: string) {
     const skill = await this.getBySlug(slug);
-    if (!this.canSee(skill, user)) {
+    if (!this.canSee(skill, user, await this.subscribedSkillIds(user.id))) {
       throw new NotFoundException({ error: 'NOT_FOUND', message: `Skill ${slug} 不存在` });
     }
     await this.db
@@ -275,7 +282,7 @@ export class SkillsService {
       .select()
       .from(skills)
       .where(inArray(skills.id, [...subs]));
-    const visible = rows.filter((s) => this.canSee(s, user) && s.currentVersion > 0);
+    const visible = rows.filter((s) => this.canSee(s, user, subs) && s.currentVersion > 0);
     if (visible.length === 0) return [];
     const versions = await this.db
       .select()
