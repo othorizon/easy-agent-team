@@ -4,3 +4,6 @@ export * from './env.js';
 export * from './skill.js';
 export * from './help.js';
 export * from './ai.js';
+export * from './template.js';
+export * from './mcp.js';
+export * from './db.js';

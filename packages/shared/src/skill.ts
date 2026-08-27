@@ -93,8 +93,8 @@ export const syncSkillSchema = z.object({
   name: z.string(),
   description: z.string(),
   source: z.enum(['manual', 'experience']),
-  /** own=自己创建；subscribed=订阅他人 */
-  relation: z.enum(['own', 'subscribed']),
+  /** own=自己创建；subscribed=订阅他人；template=来自所选角色模板 */
+  relation: z.enum(['own', 'subscribed', 'template']),
   version: z.number(),
   content: z.string(),
   files: z.array(skillFileSchema),

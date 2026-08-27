@@ -202,9 +202,130 @@ export const skillSubscriptions = pgTable(
     source: text('source', { enum: ['manual', 'template', 'experience'] })
       .notNull()
       .default('manual'),
+    /** 对模板派生的 skill 的"排除"标记：用户主动退掉模板里的某一项 */
+    excluded: boolean('excluded').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex('skill_subscription_user_skill_idx').on(t.userId, t.skillId)],
+);
+
+/** 角色模板：管理员预定义的能力套餐 */
+export const roleTemplates = pgTable('role_template', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  createdBy: uuid('created_by')
+    .notNull()
+    .references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const templateItems = pgTable(
+  'template_item',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    templateId: uuid('template_id')
+      .notNull()
+      .references(() => roleTemplates.id, { onDelete: 'cascade' }),
+    itemType: text('item_type', { enum: ['skill', 'mcp_config', 'environment'] }).notNull(),
+    itemId: uuid('item_id').notNull(),
+  },
+  (t) => [uniqueIndex('template_item_idx').on(t.templateId, t.itemType, t.itemId)],
+);
+
+/** 成员选用的模板（一人一个，可换可清） */
+export const userTemplateSelections = pgTable('user_template_selection', {
+  userId: uuid('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  templateId: uuid('template_id')
+    .notNull()
+    .references(() => roleTemplates.id, { onDelete: 'cascade' }),
+  selectedAt: timestamp('selected_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** 分发的 MCP Server 配置；env/headers 的值可写 ${env:slug/KEY} 引用 */
+export const mcpConfigs = pgTable('mcp_config', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  slug: text('slug').notNull().unique(),
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  transport: text('transport', { enum: ['stdio', 'http'] }).notNull(),
+  command: text('command'),
+  args: jsonb('args').$type<string[]>().notNull().default([]),
+  url: text('url'),
+  headers: jsonb('headers').$type<Record<string, string>>().notNull().default({}),
+  env: jsonb('env').$type<Record<string, string>>().notNull().default({}),
+  visibility: text('visibility', { enum: ['team', 'private'] })
+    .notNull()
+    .default('team'),
+  ownerId: uuid('owner_id')
+    .notNull()
+    .references(() => users.id),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const mcpSubscriptions = pgTable(
+  'mcp_subscription',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    configId: uuid('config_id')
+      .notNull()
+      .references(() => mcpConfigs.id, { onDelete: 'cascade' }),
+    source: text('source', { enum: ['manual', 'template'] }).notNull().default('manual'),
+    excluded: boolean('excluded').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('mcp_subscription_user_config_idx').on(t.userId, t.configId)],
+);
+
+/** 团队共享数据库实例（管理凭证加密存储） */
+export const dbInstances = pgTable('db_instance', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull(),
+  engine: text('engine', { enum: ['postgres', 'mysql'] }).notNull(),
+  host: text('host').notNull(),
+  port: integer('port').notNull(),
+  adminUser: text('admin_user').notNull(),
+  adminPasswordEncrypted: text('admin_password_encrypted').notNull(),
+  note: text('note').notNull().default(''),
+  createdBy: uuid('created_by')
+    .notNull()
+    .references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** 库 + 专属账号的分配记录；active 后关联生成的环境 */
+export const dbAssignments = pgTable(
+  'db_assignment',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    instanceId: uuid('instance_id')
+      .notNull()
+      .references(() => dbInstances.id, { onDelete: 'cascade' }),
+    requesterId: uuid('requester_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    dbName: text('db_name').notNull(),
+    dbUser: text('db_user').notNull(),
+    purpose: text('purpose').notNull(),
+    status: text('status', { enum: ['pending', 'active', 'failed', 'rejected', 'disabled', 'deleted'] })
+      .notNull()
+      .default('pending'),
+    environmentId: uuid('environment_id').references(() => environments.id, { onDelete: 'set null' }),
+    error: text('error'),
+    decidedBy: uuid('decided_by').references(() => users.id),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('db_assignment_requester_idx').on(t.requesterId),
+    uniqueIndex('db_assignment_instance_dbname_idx').on(t.instanceId, t.dbName),
+  ],
 );
 
 /** 可求助者登记：description 会被 AI 读取用于选择求助对象 */

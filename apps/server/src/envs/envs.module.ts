@@ -6,5 +6,6 @@ import { EnvsService } from './envs.service';
 @Module({
   controllers: [EnvsController],
   providers: [EnvsService, AccessRequestsService],
+  exports: [EnvsService],
 })
 export class EnvsModule {}

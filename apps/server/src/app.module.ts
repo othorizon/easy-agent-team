@@ -5,14 +5,30 @@ import { AuditModule } from './audit/audit.module';
 import { AuthModule } from './auth/auth.module';
 import { AppExceptionFilter } from './common/http-exception.filter';
 import { DbModule } from './db/db.module';
+import { DbsModule } from './dbs/dbs.module';
 import { EnvsModule } from './envs/envs.module';
 import { HelpModule } from './help/help.module';
+import { McpConfigsModule } from './mcp-configs/mcp-configs.module';
 import { NotifyModule } from './notify/notify.module';
 import { SkillsModule } from './skills/skills.module';
+import { TemplatesModule } from './templates/templates.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
-  imports: [DbModule, AuditModule, NotifyModule, AiModule, AuthModule, UsersModule, EnvsModule, SkillsModule, HelpModule],
+  imports: [
+    DbModule,
+    AuditModule,
+    NotifyModule,
+    AiModule,
+    AuthModule,
+    UsersModule,
+    EnvsModule,
+    SkillsModule,
+    HelpModule,
+    TemplatesModule,
+    McpConfigsModule,
+    DbsModule,
+  ],
   providers: [{ provide: APP_FILTER, useClass: AppExceptionFilter }],
 })
 export class AppModule {}

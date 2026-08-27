@@ -18,7 +18,7 @@ import { SKILL_FILE_MAX_BYTES, SKILL_TOTAL_MAX_BYTES } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
 import { DB, type Db } from '../db/db.module';
-import { skills, skillSubscriptions, skillVersions, users } from '../db/schema';
+import { skills, skillSubscriptions, skillVersions, templateItems, users, userTemplateSelections } from '../db/schema';
 
 type SkillRow = typeof skills.$inferSelect;
 
@@ -65,8 +65,39 @@ export class SkillsService {
     const rows = await this.db
       .select({ skillId: skillSubscriptions.skillId })
       .from(skillSubscriptions)
-      .where(eq(skillSubscriptions.userId, userId));
+      .where(and(eq(skillSubscriptions.userId, userId), eq(skillSubscriptions.excluded, false)));
     return new Set(rows.map((r) => r.skillId));
+  }
+
+  /** 用户主动排除的（模板派生）skill */
+  private async excludedSkillIds(userId: string): Promise<Set<string>> {
+    const rows = await this.db
+      .select({ skillId: skillSubscriptions.skillId })
+      .from(skillSubscriptions)
+      .where(and(eq(skillSubscriptions.userId, userId), eq(skillSubscriptions.excluded, true)));
+    return new Set(rows.map((r) => r.skillId));
+  }
+
+  /** 用户所选角色模板包含的 skill */
+  private async templateSkillIds(userId: string): Promise<Set<string>> {
+    const rows = await this.db
+      .select({ itemId: templateItems.itemId })
+      .from(userTemplateSelections)
+      .innerJoin(templateItems, eq(userTemplateSelections.templateId, templateItems.templateId))
+      .where(and(eq(userTemplateSelections.userId, userId), eq(templateItems.itemType, 'skill')));
+    return new Set(rows.map((r) => r.itemId));
+  }
+
+  /** 有效同步集合 = 订阅（含经验沉淀）∪（模板 − 排除） */
+  private async effectiveSkillIds(userId: string): Promise<{ subs: Set<string>; effective: Set<string> }> {
+    const [subs, template, excluded] = await Promise.all([
+      this.subscribedSkillIds(userId),
+      this.templateSkillIds(userId),
+      this.excludedSkillIds(userId),
+    ]);
+    const effective = new Set(subs);
+    for (const id of template) if (!excluded.has(id)) effective.add(id);
+    return { subs, effective };
   }
 
   private toInfo(row: SkillRow, ownerName: string, subscribed: boolean): SkillInfo {
@@ -92,10 +123,10 @@ export class SkillsService {
       .from(skills)
       .innerJoin(users, eq(skills.ownerId, users.id))
       .orderBy(desc(skills.updatedAt));
-    const subs = await this.subscribedSkillIds(user.id);
+    const { subs, effective } = await this.effectiveSkillIds(user.id);
     return rows
       .filter((r) => this.canSee(r.skill, user, subs))
-      .map((r) => this.toInfo(r.skill, r.ownerName, subs.has(r.skill.id)));
+      .map((r) => this.toInfo(r.skill, r.ownerName, effective.has(r.skill.id)));
   }
 
   async detail(user: AuthUser, slug: string): Promise<SkillDetail> {
@@ -257,31 +288,47 @@ export class SkillsService {
     if (!this.canSee(skill, user, await this.subscribedSkillIds(user.id))) {
       throw new NotFoundException({ error: 'NOT_FOUND', message: `Skill ${slug} 不存在` });
     }
+    // 之前排除过（模板派生）则解除排除
     await this.db
       .insert(skillSubscriptions)
       .values({ userId: user.id, skillId: skill.id })
-      .onConflictDoNothing();
+      .onConflictDoUpdate({
+        target: [skillSubscriptions.userId, skillSubscriptions.skillId],
+        set: { excluded: false, source: 'manual' },
+      });
     await this.audit.record({ actorId: user.id, action: 'skill.subscribed', targetType: 'skill', targetId: skill.id, meta: { slug } });
     return { ok: true };
   }
 
   async unsubscribe(user: AuthUser, slug: string) {
     const skill = await this.getBySlug(slug);
-    await this.db
-      .delete(skillSubscriptions)
-      .where(and(eq(skillSubscriptions.userId, user.id), eq(skillSubscriptions.skillId, skill.id)));
+    const fromTemplate = (await this.templateSkillIds(user.id)).has(skill.id);
+    if (fromTemplate) {
+      // 模板派生的条目：退订 = 记录排除标记（模板本身不受影响）
+      await this.db
+        .insert(skillSubscriptions)
+        .values({ userId: user.id, skillId: skill.id, source: 'template', excluded: true })
+        .onConflictDoUpdate({
+          target: [skillSubscriptions.userId, skillSubscriptions.skillId],
+          set: { excluded: true },
+        });
+    } else {
+      await this.db
+        .delete(skillSubscriptions)
+        .where(and(eq(skillSubscriptions.userId, user.id), eq(skillSubscriptions.skillId, skill.id)));
+    }
     await this.audit.record({ actorId: user.id, action: 'skill.unsubscribed', targetType: 'skill', targetId: skill.id, meta: { slug } });
     return { ok: true };
   }
 
-  /** eat sync 的落地内容：订阅的（含自己的）且仍可见的 skill 当前版本 */
+  /** eat sync 的落地内容：（订阅 ∪ 模板−排除）且仍可见的 skill 当前版本 */
   async syncBundle(user: AuthUser): Promise<SyncSkill[]> {
-    const subs = await this.subscribedSkillIds(user.id);
-    if (subs.size === 0) return [];
+    const { subs, effective } = await this.effectiveSkillIds(user.id);
+    if (effective.size === 0) return [];
     const rows = await this.db
       .select()
       .from(skills)
-      .where(inArray(skills.id, [...subs]));
+      .where(inArray(skills.id, [...effective]));
     const visible = rows.filter((s) => this.canSee(s, user, subs) && s.currentVersion > 0);
     if (visible.length === 0) return [];
     const versions = await this.db
@@ -305,7 +352,10 @@ export class SkillsService {
         name: s.name,
         description: s.description,
         source: s.source,
-        relation: (s.ownerId === user.id ? 'own' : 'subscribed') as 'own' | 'subscribed',
+        relation: (s.ownerId === user.id ? 'own' : subs.has(s.id) ? 'subscribed' : 'template') as
+          | 'own'
+          | 'subscribed'
+          | 'template',
         version: s.currentVersion,
         content: v?.content ?? '',
         files: v?.files ?? [],
