@@ -6,7 +6,10 @@
     "node": ">=18"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["@swc/core", "esbuild"]
+    "onlyBuiltDependencies": [
+      "@swc/core",
+      "esbuild"
+    ]
   },
   "scripts": {
     "build": "pnpm -r build",
@@ -16,5 +19,8 @@
     "dev:web": "pnpm --filter @eat/web dev",
     "db:migrate": "pnpm --filter @eat/server db:migrate",
     "db:seed": "pnpm --filter @eat/server db:seed"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.62.1"
   }
 }

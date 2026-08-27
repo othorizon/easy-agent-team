@@ -6,7 +6,21 @@
 
 easy-agent-team：面向团队的 AI 能力集中管理与分发平台（Skill / MCP 配置 / 环境变量 / 数据库账号 / 部署托管 / 人机求助与经验沉淀）。
 
-**当前状态：设计已完成、决策已拍板，尚未开始编码。** 下一步是初始化 monorepo 骨架并实现 P0（见设计文档 §9 路线图）。
+**当前状态：P0 环境变量纵切已完成并全链路验证**——server（19 个 e2e 用例）、CLI（设备码登录真实流程）、MCP（4 个工具）、Web 控制台（浏览器冒烟）。尚未实现：Skill 管理模块（P0 剩余部分）、P1 求助系统、P2/P3（见设计文档 §9 路线图）。
+
+## 常用命令
+
+```bash
+scripts/dev-db.sh start        # 本地 PostgreSQL（仅云端会话；端口 5433）
+pnpm install && pnpm build     # 安装 + 全量构建（shared → server/cli/web 拓扑序）
+pnpm db:migrate && pnpm db:seed  # 迁移 + 初始管理员（admin@example.com / admin12345）
+pnpm --filter @eat/server test   # server e2e（连 eat_test 库，需先起数据库）
+node apps/server/dist/main.js    # 启动平台（http://localhost:3000，含控制台静态托管）
+node apps/cli/dist/index.js      # eat CLI（login/env list/env pull/mcp 等）
+```
+
+- schema 改动流程：改 `apps/server/src/db/schema.ts` → `pnpm --filter @eat/server db:generate` 生成迁移 SQL（提交进库）→ `pnpm db:migrate`。
+- server 测试用 vitest + unplugin-swc（es6 模块，tsup/esbuild 不产 decorator metadata 所以必须 swc）；CLI 是 ESM + tsup 单文件（banner 里有 createRequire 垫片，勿删）。
 
 ## 唯一事实源
 
