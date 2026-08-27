@@ -5,7 +5,10 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import * as path from 'node:path';
+import type { SecretFingerprint } from '@eat/shared';
 import { Api, ApiError } from './client.js';
+import { scanWorkspace } from './scan.js';
 
 const TOOLS = [
   {
@@ -113,6 +116,36 @@ const TOOLS = [
       required: ['requestId', 'content'],
     },
   },
+  {
+    name: 'list_projects',
+    description: '列出部署项目与当前用户是否可部署（canDeploy）。部署前先确认项目 slug。',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'trigger_deploy',
+    description:
+      '部署项目到 Dokploy。会先在 workdir 本地执行密钥扫描（通用规则 + 平台密钥指纹 + .env 误提交），发现问题则返回 findings 并拒绝部署——此时修复问题后重试，绝不要试图绕过检查。成功触发后用 get_deploy_status 跟踪结果。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: { type: 'string', description: '项目 slug（list_projects 查看）' },
+        workdir: { type: 'string', description: '项目代码目录的绝对路径' },
+      },
+      required: ['project', 'workdir'],
+    },
+  },
+  {
+    name: 'get_deploy_status',
+    description:
+      '查询部署状态。status=failed 时 error 字段说明原因（构建失败请查看 Dokploy 该应用的部署日志，修复代码后重新 trigger_deploy）。缺省 deploymentId 时传 project 可列出项目的部署历史。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        deploymentId: { type: 'string', description: '部署 ID' },
+        project: { type: 'string', description: '项目 slug（列历史用）' },
+      },
+    },
+  },
 ] as const;
 
 function jsonResult(data: unknown) {
@@ -196,6 +229,46 @@ export async function startMcpServer(): Promise<void> {
               content: args.content,
             }),
           );
+        }
+        case 'list_projects': {
+          return jsonResult(await api.request('GET', '/api/projects'));
+        }
+        case 'trigger_deploy': {
+          const workdir = path.resolve(args.workdir as string);
+          const fingerprints = await api.request<SecretFingerprint[]>('GET', '/api/secret-fingerprints');
+          const { scannedFiles, findings } = scanWorkspace(workdir, fingerprints);
+          const report = {
+            passed: findings.length === 0,
+            scannedFiles,
+            findings,
+            cliVersion: '0.1.0',
+            ranAt: new Date().toISOString(),
+          };
+          if (!report.passed) {
+            return {
+              content: [
+                {
+                  type: 'text' as const,
+                  text: JSON.stringify(
+                    { error: 'PRECHECK_FAILED', message: '本地密钥扫描未通过，已阻止部署。修复 findings 后重试', report },
+                    null,
+                    2,
+                  ),
+                },
+              ],
+              isError: true,
+            };
+          }
+          return jsonResult(await api.request('POST', `/api/projects/${args.project as string}/deploy`, { report }));
+        }
+        case 'get_deploy_status': {
+          if (args.deploymentId) {
+            return jsonResult(await api.request('GET', `/api/deployments/${args.deploymentId as string}`));
+          }
+          if (args.project) {
+            return jsonResult(await api.request('GET', `/api/projects/${args.project as string}/deployments`));
+          }
+          return errorResult(new Error('需要 deploymentId 或 project 参数'));
         }
         default:
           return errorResult(new Error(`未知工具: ${req.params.name}`));

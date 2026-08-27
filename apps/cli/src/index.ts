@@ -4,6 +4,7 @@ import { login, logout, whoami } from './commands/auth.js';
 import { envList, envPull, envRequest, envRequests } from './commands/env.js';
 import { askCreate, askList, askReply, askResolve, askShow, askTargets } from './commands/ask.js';
 import { dbInstances, dbList, dbRequest } from './commands/db.js';
+import { deployList, deployRun, deployStatus, projectsList, scanOnly } from './commands/deploy.js';
 import { skillList, skillPush, skillSubscribe, skillUnsubscribe } from './commands/skill.js';
 import { sync } from './commands/sync.js';
 import { startMcpServer } from './mcp.js';
@@ -90,6 +91,20 @@ db
   .requiredOption('--purpose <purpose>', '用途说明（给管理员看）')
   .action(dbRequest);
 db.command('list').description('我的数据库分配与凭证环境').action(dbList);
+
+program.command('projects').description('查看部署项目与自己的成员身份').action(projectsList);
+program
+  .command('scan [dir]')
+  .description('本地密钥扫描（通用规则 + 平台密钥指纹 + .env 误提交），不部署')
+  .action(scanOnly);
+program
+  .command('deploy [project]')
+  .description('部署项目：本地前置检查通过后触发 Dokploy 部署')
+  .option('--dir <dir>', '代码目录（默认当前目录）')
+  .option('--check <cmd>', '可选的本地预跑命令（如 "pnpm build"），非零退出则阻止部署')
+  .action(deployRun);
+program.command('deploy-status <id>').description('查询部署状态').action(deployStatus);
+program.command('deploy-list <project>').description('项目的部署历史').action(deployList);
 
 program
   .command('mcp')
