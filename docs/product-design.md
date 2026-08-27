@@ -1,7 +1,7 @@
 # easy-agent-team 产品设计文档
 
-> 版本：v0.1（设计稿）
-> 状态：待评审
+> 版本：v0.2
+> 状态：核心决策已拍板（见 §10 决策记录）
 > 本文基于最初的需求构思整理、补全而成，补充的设计决策在文中以「💡 设计说明」标出，可以按需推翻。
 
 ---
@@ -40,7 +40,7 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 | 名词 | 说明 |
 |---|---|
 | 平台 / 控制台 | Web 管理端 |
-| CLI | 命令行工具，暂定命令名 `eat`（easy-agent-team 缩写） |
+| CLI | 命令行工具，命令名 `eat`（easy-agent-team 缩写，已定名） |
 | MCP Server | 随 CLI 一起分发的 MCP 服务，本地 AI 通过它访问平台 |
 | Skill | 一段可被 AI 加载的能力说明（对应 Claude Code 的 skill 目录形态） |
 | 角色模板 | 管理员预定义的「能力套餐」：一组 Skill + MCP 配置 + 环境引用 |
@@ -129,9 +129,10 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 
 - `eat sync`：将当前用户的有效 Skill 集合落地到本地（默认 `~/.claude/skills/`，可配置项目级目录），同时生成/更新 MCP 配置；
 - 采用「平台为准」的单向同步：本地被用户手工改过的沉淀目录会提示冲突，`--force` 覆盖；
-- 每个落地的 skill 目录带 `.eat-meta.json` 记录来源与版本，便于增量更新与清理已退订项。
+- 每个落地的 skill 目录带 `.eat-meta.json` 记录来源与版本，便于增量更新与清理已退订项；
+- **本地已有 skill 的纳管**：`eat skill push <目录>` 把本地写好的 skill 上传到平台——首次推送创建新 Skill（自己为 Owner），再次推送产生新版本；推送后平台成为该 Skill 的事实源，本地目录转为受管目录。
 
-💡 设计说明：不做双向同步。个人确实要改的 Skill，引导在平台上改（平台是唯一事实源），避免版本发散。
+💡 设计说明：不做双向同步。个人确实要改的 Skill，引导在平台上改或改完 `push`（平台是唯一事实源），避免版本发散。
 
 ### 3.2.4 MCP 配置分发
 
@@ -252,7 +253,7 @@ stateDiagram-v2
 - 每个请求有**请求 ID** + 标题 + 问题描述 + 可选上下文（代码片段、报错信息——由 AI 组织，注意提示不要携带密钥）；
 - 支持**多轮对话**：请求下是一串消息，双方都可追加；
 - 创建与每次回复都会：落库 + 推送对方的 webhook + 站内通知；
-- **可见性：默认仅求助者与被求助者两人可见**（含管理员也不可见正文，管理员仅见统计——见开放问题 §10）；
+- **可见性：默认仅求助者、被求助者与管理员可见**（管理员可见用于日常管理与合规审查；对其他普通成员不可见）；
 - AI 侧通过 `get_help_request(id)` 读取最新回复；CLI 也可 `eat ask show <id>`。
 
 ### 3.5.4 防骚扰
@@ -276,7 +277,7 @@ stateDiagram-v2
 
 ### 3.6.2 沉淀形式：经验即 Skill
 
-- 沉淀时，系统（可用 AI 辅助）把 Q&A 整理成一个 Skill：描述 = 问题的适用场景，正文 = 结论与操作要点，并保留对原求助的引用；
+- 沉淀时，平台调用配置的 AI 模型（见 3.9）把 Q&A 自动整理成 Skill 草稿：描述 = 问题的适用场景，正文 = 结论与操作要点，并保留对原求助的引用；被求助者确认或修改草稿后发布；AI 不可用时回退为手工模板编辑；
 - 该 Skill 的来源类型为 `经验沉淀`，Owner 为被求助者；
 - 沉淀目标用户（求助者/被求助者）的个人 Skill 库自动加入该 Skill，下次 `eat sync` 落地本地；
 - **引用式而非拷贝式**：被求助者后续修改经验，所有订阅方 sync 后自动拿到最新版；
@@ -339,6 +340,7 @@ CLI 与 MCP Server 同一个包分发（`npm i -g @team/eat`），MCP Server 由
 |---|---|
 | `eat login` / `eat logout` / `eat whoami` | 设备码登录、登出、查看当前身份 |
 | `eat sync` | 同步 Skill + MCP 配置到本地（模板 + 订阅 + 自建 + 沉淀经验） |
+| `eat skill push <dir>` | 把本地已有 skill 上传纳管（首次创建、再次推送出新版本） |
 | `eat env list [env]` | 列出可见环境与变量清单（key + 备注 + 权限状态） |
 | `eat env pull <env> [--format dotenv]` | 拉取有权限的变量值，写入 `.env` 或输出 |
 | `eat env request <env>/<KEY> --reason "..."` | 发起权限申请 |
@@ -362,7 +364,18 @@ CLI 与 MCP Server 同一个包分发（`npm i -g @team/eat`），MCP Server 由
 
 💡 设计说明：平台随角色模板内置一个「平台使用指南」基础 Skill，教 AI 正确的行为序列（先搜经验 → 再求助；先 list → 再 pull → 无权限则申请），这比在每个工具描述里堆规则更有效。
 
-## 3.9 通知与 Webhook
+## 3.9 平台 AI 接入
+
+平台自身引入 AI 来完成「经验沉淀整理」等需要模型能力的功能：
+
+- **配置方式**：管理员在系统设置中配置 `api_base_url` / `api_key` / `model` 三个参数，**采用 OpenAI 接口范式**（Chat Completions 兼容），可对接任意兼容网关或代理；
+- **当前用途**：经验沉淀的 Q&A → Skill 草稿整理（P1）；
+- **可扩展用途**（后续按需开启）：求助路由建议（根据 helper 描述推荐求助对象）、变量/环境备注的润色生成、公开经验的检索摘要；
+- **安全与观测**：`api_key` 加密存储；每次调用记录用途、模型、token 用量，便于观测成本；
+- **数据边界**：沉淀整理会把求助正文发送给所配置的模型服务——控制台在配置处明示这一点，接入的服务由团队自行选择信任；
+- **降级**：AI 配置缺失或调用失败时，相关功能回退为手工模式，不阻塞主流程。
+
+## 3.10 通知与 Webhook
 
 - 平台级出站 webhook：求助创建/回复、权限申请/审批结果、部署完成/失败；
 - 用户级 webhook：helper 登记时配置的告警地址（3.5.2）、个人通知偏好；
@@ -379,8 +392,8 @@ CLI 与 MCP Server 同一个包分发（`npm i -g @team/eat`），MCP Server 由
 | Skill（定向授权） | 不可见 | Owner 授权 | Owner |
 | 环境变量 | 默认 key+备注可见（可关）；值不可见 | Owner 授权 / 申请审批，可带有效期 | Owner / Admin |
 | 数据库账号 | 仅本人 | 申请或管理员分配 | Admin |
-| 求助请求 | 仅求助双方 | — | — |
-| 经验（非公开） | 仅求助双方 | 沉淀时指定 | 被求助者 |
+| 求助请求 | 仅求助双方 + 管理员 | — | — |
+| 经验（非公开） | 仅求助双方 + 管理员 | 沉淀时指定 | 被求助者 |
 | 经验（公开） | 全员 | 订阅即用 | — |
 | 部署项目 | 项目成员 | Owner 添加成员 | 项目 Owner |
 | 角色模板 | 全员可选用 | 管理员维护 | Admin |
@@ -389,7 +402,7 @@ CLI 与 MCP Server 同一个包分发（`npm i -g @team/eat`），MCP Server 由
 
 1. 变量**值**永远不出现在无权限的响应里（包括报错信息、日志、审计详情对第三方的展示）；
 2. 经验的编辑入口只对被求助者开放；求助者对沉淀内容只读；
-3. 求助正文对双方之外的任何人（含 Admin）不可见；
+3. 求助正文与非公开经验仅对求助双方和管理员可见，对其他普通成员不可见；
 4. 所有敏感读取（取值、查看密钥、拉取数据库凭证）必须落审计。
 
 ---
@@ -458,6 +471,9 @@ erDiagram
 **deployment**：id, project_id, triggered_by, status(pending|checking|deploying|success|failed), dokploy_ref, created_at
 **precheck_result**：id, deployment_id, check_type(secret_scan|build|custom), status, report, created_at
 
+**ai_setting**：id, api_base_url, api_key_encrypted, model, enabled（单行系统配置，OpenAI 接口范式）
+**ai_call_log**：id, purpose(experience_distill|...), model, prompt_tokens, completion_tokens, status, created_at
+
 **audit_log**：id, actor_id, actor_token_id, action, target_type, target_id, meta(jsonb), ip, created_at
 
 **webhook_delivery**：id, event_type, target_url, payload_digest, status, attempts, last_attempt_at
@@ -517,10 +533,19 @@ sequenceDiagram
 | 平台服务 | **Next.js 全栈**（控制台 + API 同仓）或 NestJS+React 分离 | 团队内部工具，单体最省事；一个容器丢进 Dokploy |
 | 数据库 | PostgreSQL | jsonb 灵活、单库承载业务+审计足够 |
 | ORM | Drizzle / Prisma | 迁移管理 |
-| CLI + MCP | TypeScript 单包，npm 分发；MCP 用官方 `@modelcontextprotocol/sdk`（stdio） | 与前后端同栈；`eat mcp` 即起 server |
+| CLI + MCP | TypeScript 单包；tsup(esbuild) 打包为单文件 JS，npm 分发；MCP 用官方 `@modelcontextprotocol/sdk`（stdio）；详见 7.3 | 与前后端同栈；`eat mcp` 即起 server |
+| 平台 AI 调用 | OpenAI 接口范式（Chat Completions 兼容），`api_base_url / api_key / model` 可配 | 可对接任意兼容网关，不绑定供应商 |
 | 加密 | 信封加密，KEK 走部署环境变量，AES-256-GCM | 无需引入外部 KMS |
 | 检查 Runner | 平台内起 Docker 容器执行（同机） | 日常项目规模够用 |
 | 部署 | 平台自身用 Docker 部署在 Dokploy 上 | 自举，吃自己的狗粮 |
+
+### 7.3 CLI 构建与分发
+
+- **语言与运行时目标**：TypeScript，产物兼容 Node ≥ 18；不使用 Bun/Deno 独有 API。团队成员使用 Claude Code 时本机已有 Node，npm 分发零额外门槛；
+- **打包**：tsup（底层 esbuild）打包为单文件 JS + shebang，依赖全部内联，安装即 `npm i -g @team/eat`，也支持 `npx @team/eat` 免安装使用；
+- **开发期**：可以用 Bun 跑测试与本地开发提速，但 CI 产物始终按 Node 目标构建，避免运行时行为差异；
+- **可选补充产物**：如需分发给完全没有 Node 环境的机器，CI 用 `bun build --compile` 从同一份代码额外产出免依赖单二进制（macOS / Linux / Windows），作为附加下载而非主渠道；
+- **不选型**：Go/Rust 重写会造成与平台的技术栈分裂（CLI 与后端共享 API 类型定义的收益丢失）；Deno 生态与 npm 包（MCP SDK）仍有摩擦。
 
 ---
 
@@ -528,7 +553,7 @@ sequenceDiagram
 
 1. **密钥永不下发明文到无权限方**：包括错误消息、日志、webhook payload（webhook 只带事件与链接，不带值）；
 2. **传输**：全程 HTTPS；CLI Token 仅存本地用户目录（0600）；
-3. **存储**：变量值、数据库管理凭证、Dokploy Token、webhook secret 全部加密落库；
+3. **存储**：变量值、数据库管理凭证、Dokploy Token、webhook secret、平台 AI 的 api_key 全部加密落库；
 4. **审计**：敏感读取/授权变更/部署操作全量审计，控制台可按资源、按人检索；
 5. **提示注入面**：求助内容、helper 描述、经验正文都会被 AI 读取——控制台展示时提示"此内容会被 AI 读取"，MCP 返回中以数据段包裹并注明来源，不作为指令执行（写进平台基础 Skill 的安全准则）；
 6. **防泄漏闭环**：部署前置检查内置密钥扫描，扫描规则联动平台内登记的变量值指纹（对值做不可逆指纹匹配，不存明文规则）。
@@ -541,16 +566,17 @@ sequenceDiagram
 
 - 用户/登录/Token、设备码授权
 - 环境变量管理：环境/变量 CRUD、备注、授权、无权限可见性开关、申请审批闭环
-- Skill 管理：创建、版本、团队可见/私有、订阅
-- CLI + MCP：login / sync / env list / env pull / request_access
+- Skill 管理：创建、版本、团队可见/私有、订阅、本地纳管（`eat skill push`）
+- CLI + MCP：login / sync / skill push / env list / env pull / request_access
 - 审计日志（敏感读取）
 
 ### P1 —— 人机协作（求助与经验）
 
 - Helper 登记（描述 + webhook + 勿扰）
 - Skill「允许求助」入口
-- 求助全流程（创建/多轮/状态机/双方可见性）+ webhook 推送
-- 经验沉淀（公开性、沉淀对象、helper 独占编辑、经验即 Skill 分发）
+- 求助全流程（创建/多轮/状态机/可见性）+ webhook 推送
+- **平台 AI 接入**（OpenAI 接口范式：api_base_url / api_key / model，加密存储 + 调用观测）
+- 经验沉淀（公开性、沉淀对象、helper 独占编辑、经验即 Skill 分发、AI 自动整理草稿 + 手工回退）
 - MCP：search_experiences / list_helpers / create_help_request / get_help_request
 
 ### P2 —— 能力扩展
@@ -567,10 +593,14 @@ sequenceDiagram
 
 ---
 
-## 10. 开放问题（需要拍板）
+## 10. 决策记录
 
-1. **管理员对求助内容的可见性**：本设计取"管理员也不可见正文，仅见统计"。若团队需要合规审查，可加"双方同意后可导出"机制——需要拍板。
-2. **CLI/平台命名**：`eat` 只是占位，是否要正式命名？
-3. **求助的响应时效**：是否需要"超时未响应自动转派/升级"机制？MVP 建议不做，靠 webhook 提醒 + 人肉催。
-4. **经验沉淀是否引入 AI 自动整理**：建议 P1 先做"手工编辑 + 模板"，AI 辅助整理放 P2（平台侧需要配一个模型调用）。
-5. **本地已有 skill 的纳管**：是否提供 `eat skill push` 把本地已写好的 skill 上传到平台？建议做，成本低、对能力建设者体验重要。
+以下问题已于 2026-08-27 拍板，正文已按结论更新：
+
+| # | 问题 | 结论 |
+|---|---|---|
+| 1 | 管理员对求助内容的可见性 | **可见**。求助正文与非公开经验对求助双方 + 管理员可见，对其他成员不可见（§3.5.3、§4） |
+| 2 | CLI / 平台命名 | 就叫 **`eat`**（§1.4） |
+| 3 | 求助的响应时效 | MVP 暂不考虑超时转派/升级，靠 webhook 提醒 + 人肉催 |
+| 4 | 经验沉淀的 AI 自动整理 | **引入**。平台以 OpenAI 接口范式接入 AI（api_base_url / api_key / model 可配），用于经验沉淀等功能，随 P1 交付（§3.9） |
+| 5 | 本地已有 skill 的纳管 | **支持**。`eat skill push` 上传纳管，随 P0 交付（§3.2.3） |
