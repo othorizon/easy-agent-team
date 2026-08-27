@@ -7,6 +7,7 @@ import { EnvDetailPage } from './pages/EnvDetail';
 import { EnvsPage } from './pages/Envs';
 import { HelpPage } from './pages/Help';
 import { McpConfigsPage } from './pages/McpConfigs';
+import { ProjectsPage } from './pages/Projects';
 import { TemplatesPage } from './pages/Templates';
 import { HelpDetailPage } from './pages/HelpDetail';
 import { LoginPage } from './pages/Login';
@@ -20,7 +21,9 @@ function Shell({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const first = `/${location.pathname.split('/')[1] ?? ''}`;
-  const selected = ['/skills', '/templates', '/mcp', '/db', '/requests', '/help', '/device', '/settings'].includes(first)
+  const selected = ['/skills', '/templates', '/mcp', '/db', '/projects', '/requests', '/help', '/device', '/settings'].includes(
+    first,
+  )
     ? first
     : '/';
   return (
@@ -41,6 +44,7 @@ function Shell({ children }: { children: React.ReactNode }) {
             { key: '/templates', label: '模板' },
             { key: '/mcp', label: 'MCP' },
             { key: '/db', label: '数据库' },
+            { key: '/projects', label: '项目' },
             { key: '/help', label: '求助' },
             { key: '/requests', label: '权限申请' },
             { key: '/device', label: '设备授权' },
@@ -89,6 +93,7 @@ export function App() {
       <Route path="/templates" element={<RequireAuth><TemplatesPage /></RequireAuth>} />
       <Route path="/mcp" element={<RequireAuth><McpConfigsPage /></RequireAuth>} />
       <Route path="/db" element={<RequireAuth><DbsPage /></RequireAuth>} />
+      <Route path="/projects" element={<RequireAuth><ProjectsPage /></RequireAuth>} />
       <Route path="/requests" element={<RequireAuth><RequestsPage /></RequireAuth>} />
       <Route path="/help" element={<RequireAuth><HelpPage /></RequireAuth>} />
       <Route path="/help/:id" element={<RequireAuth><HelpDetailPage /></RequireAuth>} />

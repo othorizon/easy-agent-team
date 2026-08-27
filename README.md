@@ -13,8 +13,26 @@
 
 ## 文档
 
-- [产品设计文档](docs/product-design.md) —— 完整的产品设计：角色、功能模块、权限模型、数据模型、API / CLI / MCP 设计、技术架构与路线图。
+- [产品设计文档](docs/product-design.md) —— 完整的产品设计：角色、功能模块、权限模型、数据模型、API / CLI / MCP 设计、技术架构与路线图（含全部决策记录）。
 
 ## 当前状态
 
-设计阶段。本仓库当前只包含产品设计文档，尚未开始编码。
+**P0–P3 全部路线图已实现并通过全链路验证**（server 62 个 e2e 用例 + CLI/浏览器真实冒烟）：
+
+- 环境变量：两级可见性、授权（含有效期）、申请审批、信封加密、读取审计
+- Skill：`eat skill push` 纳管、版本、订阅、`eat sync` 落地、经验沉淀
+- 求助系统：Helper 登记 + webhook（HMAC）、双入口求助、多轮对话、平台 AI 整理经验
+- 角色模板、MCP 配置分发（`${env:slug/KEY}` 按权限渲染）、数据库账号分配（真实建库建号）
+- 部署托管：Dokploy 挂载、CLI 端密钥扫描（含平台密钥指纹匹配）、部署门禁与状态透传
+- 三端齐备：Web 控制台（9 个页面）、eat CLI、MCP server（12 个工具）
+
+## 快速开始
+
+```bash
+pnpm install && pnpm build
+pnpm db:migrate && pnpm db:seed      # 初始管理员 admin@example.com / admin12345
+node apps/server/dist/main.js        # http://localhost:3000
+node apps/cli/dist/index.js login    # CLI 设备码登录
+```
+
+数据库连接串通过 `DATABASE_URL` 配置（默认 `postgres://dev@127.0.0.1:5433/eat_dev`）；生产部署需配置 `EAT_KEK`（base64 的 32 字节主密钥）与 `EAT_PUBLIC_URL`。

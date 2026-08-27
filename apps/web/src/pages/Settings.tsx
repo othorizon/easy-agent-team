@@ -1,10 +1,68 @@
-import type { AiSettingsInfo, UpdateAiSettingsRequest } from '@eat/shared';
+import type { AiSettingsInfo, DokploySettingsInfo, UpdateAiSettingsRequest, UpdateDokploySettingsRequest } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, Card, Form, Input, Switch, Typography } from 'antd';
+import { App, Button, Card, Form, Input, Space, Switch, Typography } from 'antd';
 import { api, ApiError } from '../api';
 
-/** 系统设置（仅管理员）：平台 AI 接入配置 */
+/** 系统设置（仅管理员）：平台 AI 接入 + Dokploy 接入 */
 export function SettingsPage() {
+  return (
+    <Space direction="vertical" size="large" style={{ width: '100%' }}>
+      <AiSettingsCard />
+      <DokploySettingsCard />
+    </Space>
+  );
+}
+
+function DokploySettingsCard() {
+  const { message } = App.useApp();
+  const queryClient = useQueryClient();
+  const settings = useQuery({
+    queryKey: ['dokploy-settings'],
+    queryFn: () => api<DokploySettingsInfo>('GET', '/api/admin/dokploy-settings'),
+  });
+  const save = useMutation({
+    mutationFn: (v: UpdateDokploySettingsRequest) => api('PUT', '/api/admin/dokploy-settings', v),
+    onSuccess: () => {
+      message.success('已保存');
+      void queryClient.invalidateQueries({ queryKey: ['dokploy-settings'] });
+    },
+    onError: (err) => message.error(err instanceof ApiError ? err.message : '保存失败'),
+  });
+  if (!settings.data) return <Card loading />;
+  const s = settings.data;
+  return (
+    <Card title="Dokploy 接入" style={{ maxWidth: 640 }}>
+      <Typography.Paragraph type="secondary">
+        部署托管挂载 Dokploy：平台通过其 API 触发部署与查询状态。API Token 加密存储。
+      </Typography.Paragraph>
+      <Form
+        layout="vertical"
+        key={s.configured ? 'y' : 'n'}
+        initialValues={{ apiUrl: s.apiUrl, apiToken: '', enabled: s.enabled }}
+        onFinish={(v: UpdateDokploySettingsRequest) => save.mutate(v)}
+      >
+        <Form.Item name="apiUrl" label="API 地址（如 https://dokploy.example.com/api）" rules={[{ required: true, type: 'url' }]}>
+          <Input placeholder="https://dokploy.example.com/api" />
+        </Form.Item>
+        <Form.Item
+          name="apiToken"
+          label={s.configured ? `API Token（当前 ${s.apiTokenMasked}，留空保持不变）` : 'API Token'}
+          rules={s.configured ? [] : [{ required: true }]}
+        >
+          <Input.Password placeholder={s.configured ? '留空保持现有 Token' : 'Dokploy 控制台生成'} />
+        </Form.Item>
+        <Form.Item name="enabled" label="启用" valuePropName="checked">
+          <Switch />
+        </Form.Item>
+        <Button type="primary" htmlType="submit" loading={save.isPending}>
+          保存
+        </Button>
+      </Form>
+    </Card>
+  );
+}
+
+function AiSettingsCard() {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
 
