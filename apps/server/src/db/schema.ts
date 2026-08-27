@@ -141,6 +141,72 @@ export const accessRequests = pgTable(
   (t) => [index('access_request_status_idx').on(t.status)],
 );
 
+export const skills = pgTable('skill', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  slug: text('slug').notNull().unique(),
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  ownerId: uuid('owner_id')
+    .notNull()
+    .references(() => users.id),
+  visibility: text('visibility', { enum: ['team', 'granted', 'private'] })
+    .notNull()
+    .default('team'),
+  /** 是否允许对此 skill 发起求助（P1 求助系统入口） */
+  allowHelp: boolean('allow_help').notNull().default(false),
+  source: text('source', { enum: ['manual', 'experience'] })
+    .notNull()
+    .default('manual'),
+  currentVersion: integer('current_version').notNull().default(0),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export interface SkillFileRow {
+  path: string;
+  encoding: 'utf8' | 'base64';
+  content: string;
+  executable: boolean;
+}
+
+export const skillVersions = pgTable(
+  'skill_version',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    skillId: uuid('skill_id')
+      .notNull()
+      .references(() => skills.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    /** SKILL.md 正文 */
+    content: text('content').notNull(),
+    files: jsonb('files').$type<SkillFileRow[]>().notNull().default([]),
+    changelog: text('changelog').notNull().default(''),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('skill_version_idx').on(t.skillId, t.version)],
+);
+
+export const skillSubscriptions = pgTable(
+  'skill_subscription',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    skillId: uuid('skill_id')
+      .notNull()
+      .references(() => skills.id, { onDelete: 'cascade' }),
+    source: text('source', { enum: ['manual', 'template', 'experience'] })
+      .notNull()
+      .default('manual'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('skill_subscription_user_skill_idx').on(t.userId, t.skillId)],
+);
+
 export const auditLogs = pgTable(
   'audit_log',
   {

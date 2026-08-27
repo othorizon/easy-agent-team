@@ -5,10 +5,11 @@ import { AuthModule } from './auth/auth.module';
 import { AppExceptionFilter } from './common/http-exception.filter';
 import { DbModule } from './db/db.module';
 import { EnvsModule } from './envs/envs.module';
+import { SkillsModule } from './skills/skills.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
-  imports: [DbModule, AuditModule, AuthModule, UsersModule, EnvsModule],
+  imports: [DbModule, AuditModule, AuthModule, UsersModule, EnvsModule, SkillsModule],
   providers: [{ provide: APP_FILTER, useClass: AppExceptionFilter }],
 })
 export class AppModule {}

@@ -39,7 +39,7 @@ async function api(
 beforeAll(async () => {
   // 重建测试库 schema
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-  await pool.query('drop schema public cascade; create schema public;');
+  await pool.query('drop schema public cascade; create schema public; drop schema if exists drizzle cascade;');
   // vitest 以 apps/server 为 cwd 运行
   await migrate(drizzle(pool), { migrationsFolder: path.resolve(process.cwd(), 'drizzle') });
   const db = drizzle(pool, { schema });
