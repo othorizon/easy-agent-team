@@ -6,7 +6,9 @@
 
 easy-agent-team：面向团队的 AI 能力集中管理与分发平台（Skill / MCP 配置 / 环境变量 / 数据库账号 / 部署托管 / 人机求助与经验沉淀）。
 
-**当前状态：P0 + P1 全部完成并全链路验证**——P0：环境变量（可见性/授权/申请审批/审计/加密）+ Skill 管理（push 纳管/版本/订阅/sync 落地）+ 认证（密码/设备码/Token）；P1：求助系统（Helper 登记 + webhook HMAC 推送、双入口求助、状态机、频率限制、双方+管理员可见）+ 平台 AI 接入（OpenAI 范式，key 加密、用量记录）+ 经验沉淀（AI 整理草稿/模板回退、经验即 Skill、granted 可见性）。server 42 个 e2e 用例全过（测试自带本地 webhook 接收端与 mock OpenAI），MCP 9 工具、CLI（含 eat ask）、控制台（求助中心/详情/AI 设置）均做过真实冒烟。下一步：P2（角色模板、MCP 配置分发、数据库账号分配），见设计文档 §9。
+**当前状态：P0 + P1 + P2 全部完成并全链路验证**——P0：环境变量 + Skill 管理 + 认证；P1：求助系统 + 平台 AI 接入 + 经验沉淀；P2：角色模板（选用/排除/sync 合并）+ MCP 配置分发（`${env:slug/KEY}` 引用按权限渲染，落 `~/.eat/mcp.generated.json`）+ 数据库账号分配（申请→批准→PostgreSQL 真实建库建号→凭证生成为环境，禁用/删除回收；MySQL 自动执行暂缓）。server 55 个 e2e 用例全过（数据库部分对本地 PG 真实建库连库验证），CLI（eat db/sync 扩展）与控制台（模板/MCP/数据库页）均做过真实冒烟。下一步：P3 部署托管（Dokploy API + 前置检查），见设计文档 §9。
+
+**已知环境行为**：云端容器会不定期回收后台进程（postgres、node server 都可能消失，无 OOM、日志无 shutdown 记录）——重跑 `scripts/dev-db.sh start` 和重启 server 即可，不必排查。
 
 ## 常用命令
 

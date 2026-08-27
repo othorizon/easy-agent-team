@@ -3,6 +3,7 @@ import { ApiError } from './client.js';
 import { login, logout, whoami } from './commands/auth.js';
 import { envList, envPull, envRequest, envRequests } from './commands/env.js';
 import { askCreate, askList, askReply, askResolve, askShow, askTargets } from './commands/ask.js';
+import { dbInstances, dbList, dbRequest } from './commands/db.js';
 import { skillList, skillPush, skillSubscribe, skillUnsubscribe } from './commands/skill.js';
 import { sync } from './commands/sync.js';
 import { startMcpServer } from './mcp.js';
@@ -79,6 +80,16 @@ program
   .option('--dir <dir>', '落地目录')
   .option('--force', '覆盖非 eat 管理的同名目录 / 强制重写')
   .action(sync);
+
+const db = program.command('db').description('数据库账号：查看实例、申请库、查看我的分配');
+db.command('instances').description('查看可用的数据库实例').action(dbInstances);
+db
+  .command('request <dbName>')
+  .description('申请在某实例上创建库与专属账号')
+  .requiredOption('--instance <instance>', '实例 ID 或名称（eat db instances 查看）')
+  .requiredOption('--purpose <purpose>', '用途说明（给管理员看）')
+  .action(dbRequest);
+db.command('list').description('我的数据库分配与凭证环境').action(dbList);
 
 program
   .command('mcp')

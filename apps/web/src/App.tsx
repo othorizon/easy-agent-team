@@ -1,10 +1,13 @@
 import { Button, Layout, Menu, Space, Typography } from 'antd';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { clearSession, getStoredUser, getToken } from './api';
+import { DbsPage } from './pages/Dbs';
 import { DevicePage } from './pages/Device';
 import { EnvDetailPage } from './pages/EnvDetail';
 import { EnvsPage } from './pages/Envs';
 import { HelpPage } from './pages/Help';
+import { McpConfigsPage } from './pages/McpConfigs';
+import { TemplatesPage } from './pages/Templates';
 import { HelpDetailPage } from './pages/HelpDetail';
 import { LoginPage } from './pages/Login';
 import { RequestsPage } from './pages/Requests';
@@ -17,7 +20,9 @@ function Shell({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const first = `/${location.pathname.split('/')[1] ?? ''}`;
-  const selected = ['/skills', '/requests', '/help', '/device', '/settings'].includes(first) ? first : '/';
+  const selected = ['/skills', '/templates', '/mcp', '/db', '/requests', '/help', '/device', '/settings'].includes(first)
+    ? first
+    : '/';
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Layout.Header style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
@@ -33,6 +38,9 @@ function Shell({ children }: { children: React.ReactNode }) {
           items={[
             { key: '/', label: '环境变量' },
             { key: '/skills', label: 'Skill' },
+            { key: '/templates', label: '模板' },
+            { key: '/mcp', label: 'MCP' },
+            { key: '/db', label: '数据库' },
             { key: '/help', label: '求助' },
             { key: '/requests', label: '权限申请' },
             { key: '/device', label: '设备授权' },
@@ -78,6 +86,9 @@ export function App() {
       <Route path="/envs/:slug" element={<RequireAuth><EnvDetailPage /></RequireAuth>} />
       <Route path="/skills" element={<RequireAuth><SkillsPage /></RequireAuth>} />
       <Route path="/skills/:slug" element={<RequireAuth><SkillDetailPage /></RequireAuth>} />
+      <Route path="/templates" element={<RequireAuth><TemplatesPage /></RequireAuth>} />
+      <Route path="/mcp" element={<RequireAuth><McpConfigsPage /></RequireAuth>} />
+      <Route path="/db" element={<RequireAuth><DbsPage /></RequireAuth>} />
       <Route path="/requests" element={<RequireAuth><RequestsPage /></RequireAuth>} />
       <Route path="/help" element={<RequireAuth><HelpPage /></RequireAuth>} />
       <Route path="/help/:id" element={<RequireAuth><HelpDetailPage /></RequireAuth>} />
