@@ -6,6 +6,8 @@ import { EnvDetailPage } from './pages/EnvDetail';
 import { EnvsPage } from './pages/Envs';
 import { LoginPage } from './pages/Login';
 import { RequestsPage } from './pages/Requests';
+import { SkillDetailPage } from './pages/SkillDetail';
+import { SkillsPage } from './pages/Skills';
 
 function Shell({ children }: { children: React.ReactNode }) {
   const user = getStoredUser();
@@ -15,7 +17,9 @@ function Shell({ children }: { children: React.ReactNode }) {
     ? '/requests'
     : location.pathname.startsWith('/device')
       ? '/device'
-      : '/';
+      : location.pathname.startsWith('/skills')
+        ? '/skills'
+        : '/';
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Layout.Header style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
@@ -30,6 +34,7 @@ function Shell({ children }: { children: React.ReactNode }) {
           style={{ flex: 1, minWidth: 0 }}
           items={[
             { key: '/', label: '环境变量' },
+            { key: '/skills', label: 'Skill' },
             { key: '/requests', label: '权限申请' },
             { key: '/device', label: '设备授权' },
           ]}
@@ -71,6 +76,8 @@ export function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/" element={<RequireAuth><EnvsPage /></RequireAuth>} />
       <Route path="/envs/:slug" element={<RequireAuth><EnvDetailPage /></RequireAuth>} />
+      <Route path="/skills" element={<RequireAuth><SkillsPage /></RequireAuth>} />
+      <Route path="/skills/:slug" element={<RequireAuth><SkillDetailPage /></RequireAuth>} />
       <Route path="/requests" element={<RequireAuth><RequestsPage /></RequireAuth>} />
       <Route path="/device" element={<RequireAuth><DevicePage /></RequireAuth>} />
       <Route path="*" element={<Navigate to="/" replace />} />
