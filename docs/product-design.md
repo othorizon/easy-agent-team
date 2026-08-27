@@ -528,18 +528,44 @@ sequenceDiagram
 
 ### 7.2 选型建议
 
-| 层 | 建议 | 理由 |
+| 层 | 选择 | 理由 |
 |---|---|---|
-| 平台服务 | **Next.js 全栈**（控制台 + API 同仓）或 NestJS+React 分离 | 团队内部工具，单体最省事；一个容器丢进 Dokploy |
-| 数据库 | PostgreSQL | jsonb 灵活、单库承载业务+审计足够 |
-| ORM | Drizzle / Prisma | 迁移管理 |
-| CLI + MCP | TypeScript 单包；tsup(esbuild) 打包为单文件 JS，npm 分发；MCP 用官方 `@modelcontextprotocol/sdk`（stdio）；详见 7.3 | 与前后端同栈；`eat mcp` 即起 server |
+| 平台服务 | **NestJS（Fastify 适配器）单体**：REST API + 后台任务一体 | 领域模块多、后台工作重（webhook 重试/部署轮询/检查调度），模块化 + DI + Guard 承载资源级权限最顺手；一个容器丢进 Dokploy |
+| 控制台前端 | React + Vite + Ant Design（SPA），构建产物由后端静态托管 | 内部管理后台无 SEO 需求；表格/表单/审批流重，AntD 最快路径；部署仍是一个容器 |
+| 任务队列 / 定时 | pg-boss（队列落 PostgreSQL）+ `@nestjs/schedule` | 重试与轮询不为此引入 Redis，基础设施保持「一个容器 + 一个库」 |
+| 数据库 | PostgreSQL | jsonb 灵活、单库承载业务+审计+队列足够 |
+| ORM | Drizzle（首选）/ Prisma | SQL 可控、迁移即 SQL、无引擎二进制 |
+| CLI + MCP | TypeScript 单包；tsup(esbuild) 打包为单文件 JS，npm 分发；MCP 用官方 `@modelcontextprotocol/sdk`（stdio）；详见 7.5 | 与前后端同栈；`eat mcp` 即起 server |
 | 平台 AI 调用 | OpenAI 接口范式（Chat Completions 兼容），`api_base_url / api_key / model` 可配 | 可对接任意兼容网关，不绑定供应商 |
 | 加密 | 信封加密，KEK 走部署环境变量，AES-256-GCM | 无需引入外部 KMS |
 | 检查 Runner | 平台内起 Docker 容器执行（同机） | 日常项目规模够用 |
 | 部署 | 平台自身用 Docker 部署在 Dokploy 上 | 自举，吃自己的狗粮 |
 
-### 7.3 CLI 构建与分发
+### 7.3 为什么是 NestJS 而不是 Next.js 全栈
+
+早先候选里有 Next.js 全栈，最终定为 NestJS 单体，理由：
+
+1. **平台的重心不在页面**：主要消费者是 CLI 和 MCP（非浏览器客户端），控制台只是内部管理后台——Next.js 的核心优势（SSR/RSC/SEO）在这里全用不上；
+2. **大量请求之外的后台工作**：webhook 失败重试、部署状态轮询、前置检查容器调度、授权过期清理、AI 调用。Next.js 的 API Route 是请求驱动的，要做这些得另起 worker 进程，「单体最省事」的初衷反而被破坏；NestJS 配 pg-boss / `@nestjs/schedule` 是常规路径，单进程搞定；
+3. **领域模块多**：skill / env / grant / help / experience / deploy / audit，NestJS 的模块化与依赖注入适合 domain-heavy 单体；Token 鉴权与资源级权限检查用 Guard/装饰器承载，横切逻辑不散落。
+
+### 7.4 Monorepo 结构
+
+```
+easy-agent-team/
+├── apps/
+│   ├── server/    # NestJS：REST API + 后台任务 + 静态托管控制台
+│   ├── web/       # React + Vite + Ant Design 控制台
+│   └── cli/       # eat CLI + MCP server（tsup 打包，npm 分发）
+├── packages/
+│   └── shared/    # zod 契约与 API 类型 + typed client（三端共用）
+└── pnpm-workspace.yaml
+```
+
+- 请求/响应契约用 zod 定义在 `shared`：服务端用 nestjs-zod 校验，CLI 与前端用同一份类型生成 typed client——三端类型一致由编译器保证；
+- 单容器镜像：构建时把 web 产物拷进 server 镜像，NestJS ServeStatic 托管。
+
+### 7.5 CLI 构建与分发
 
 - **语言与运行时目标**：TypeScript，产物兼容 Node ≥ 18；不使用 Bun/Deno 独有 API。团队成员使用 Claude Code 时本机已有 Node，npm 分发零额外门槛；
 - **打包**：tsup（底层 esbuild）打包为单文件 JS + shebang，依赖全部内联，安装即 `npm i -g @team/eat`，也支持 `npx @team/eat` 免安装使用；
@@ -604,3 +630,4 @@ sequenceDiagram
 | 3 | 求助的响应时效 | MVP 暂不考虑超时转派/升级，靠 webhook 提醒 + 人肉催 |
 | 4 | 经验沉淀的 AI 自动整理 | **引入**。平台以 OpenAI 接口范式接入 AI（api_base_url / api_key / model 可配），用于经验沉淀等功能，随 P1 交付（§3.9） |
 | 5 | 本地已有 skill 的纳管 | **支持**。`eat skill push` 上传纳管，随 P0 交付（§3.2.3） |
+| 6 | 平台开发框架 | **NestJS（Fastify）单体 + React/Vite/AntD SPA + pnpm monorepo**，队列用 pg-boss，ORM 首选 Drizzle（§7.2–7.4） |
