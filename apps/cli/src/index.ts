@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import { ApiError } from './client.js';
 import { login, logout, whoami } from './commands/auth.js';
 import { envList, envPull, envRequest, envRequests } from './commands/env.js';
+import { askCreate, askList, askReply, askResolve, askShow, askTargets } from './commands/ask.js';
 import { skillList, skillPush, skillSubscribe, skillUnsubscribe } from './commands/skill.js';
 import { sync } from './commands/sync.js';
 import { startMcpServer } from './mcp.js';
@@ -51,6 +52,26 @@ skill
 skill.command('list').description('列出平台上可见的 skill 与订阅状态').action(skillList);
 skill.command('subscribe <slug>').description('订阅 skill（eat sync 时落地本地）').action(skillSubscribe);
 skill.command('unsubscribe <slug>').description('退订 skill').action(skillUnsubscribe);
+
+const ask = program.command('ask').description('向团队真人求助、读取回复');
+ask.command('targets').description('查看可求助的人与 skill').action(askTargets);
+ask
+  .command('create')
+  .description('发起求助（--to 与 --skill 二选一）')
+  .requiredOption('--title <title>', '问题标题')
+  .requiredOption('--description <description>', '问题详细描述')
+  .requiredOption('--tried <tried>', '已经尝试过什么')
+  .option('--to <userId>', '向登记的 helper 求助（用户 ID，eat ask targets 查看）')
+  .option('--skill <slug>', '向某个 skill 的作者求助')
+  .action(askCreate);
+ask.command('list').description('我发起的与找我的求助').action(askList);
+ask.command('show <id>').description('查看求助详情与对话（支持 ID 前缀）').action(askShow);
+ask
+  .command('reply <id>')
+  .description('回复 / 追问')
+  .requiredOption('--message <message>', '内容')
+  .action(askReply);
+ask.command('resolve <id>').description('标记已解决').action(askResolve);
 
 program
   .command('sync')

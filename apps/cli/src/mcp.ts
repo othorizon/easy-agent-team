@@ -56,6 +56,63 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'search_experiences',
+    description:
+      '搜索团队经验库（由过往求助沉淀的知识）。遇到不懂的团队内部问题时【先搜经验库】，搜不到再用 create_help_request 向真人求助。返回匹配的经验 skill，详细内容可让用户 eat sync 后阅读，或直接依据 snippet 与 description 判断。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        q: { type: 'string', description: '搜索关键词（匹配经验的标题/描述/正文）' },
+      },
+      required: ['q'],
+    },
+  },
+  {
+    name: 'list_helpers',
+    description:
+      '列出可求助的对象：登记的可求助者（description 描述其擅长领域，据此选择最合适的人）+ 开启了求助的 skill 及其作者（问题与某个 skill 相关时优先走 skill 入口）。发起求助前先调用这个。',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'create_help_request',
+    description:
+      '向团队里的真人发起求助。适用场景：用户听不懂你的技术问题、或你依赖别人项目的知识而经验库里没有。先 search_experiences，搜不到再求助。tried 必填（说明已经尝试过什么）。helperUserId 与 skillSlug 二选一。求助有频率限制，同一问题不要重复发起。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: '问题标题（一句话）' },
+        description: { type: 'string', description: '问题详细描述与上下文（不要携带密钥等敏感值）' },
+        tried: { type: 'string', description: '已经尝试过什么（必填）' },
+        helperUserId: { type: 'string', description: '向登记的 helper 求助（其 userId，来自 list_helpers）' },
+        skillSlug: { type: 'string', description: '向某个 skill 的作者求助（skill slug，来自 list_helpers）' },
+      },
+      required: ['title', 'description', 'tried'],
+    },
+  },
+  {
+    name: 'get_help_request',
+    description:
+      '查看求助的当前状态与完整对话。status=answered 表示对方已回复，读取 messages 中的答案继续工作；open 表示还在等待，稍后再查或先做别的事。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        requestId: { type: 'string', description: '求助 ID；缺省列出我发起的全部求助' },
+      },
+    },
+  },
+  {
+    name: 'reply_help_request',
+    description: '在求助中追问或补充信息（也用于替用户回复）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        requestId: { type: 'string', description: '求助 ID' },
+        content: { type: 'string', description: '追问或补充的内容' },
+      },
+      required: ['requestId', 'content'],
+    },
+  },
 ] as const;
 
 function jsonResult(data: unknown) {
@@ -109,6 +166,36 @@ export async function startMcpServer(): Promise<void> {
             return jsonResult(await api.request('GET', `/api/access-requests/${args.requestId as string}`));
           }
           return jsonResult(await api.request('GET', '/api/access-requests/mine'));
+        }
+        case 'search_experiences': {
+          return jsonResult(await api.request('GET', `/api/experiences?q=${encodeURIComponent(args.q as string)}`));
+        }
+        case 'list_helpers': {
+          return jsonResult(await api.request('GET', '/api/helpers'));
+        }
+        case 'create_help_request': {
+          return jsonResult(
+            await api.request('POST', '/api/help-requests', {
+              title: args.title,
+              description: args.description,
+              tried: args.tried,
+              helperUserId: args.helperUserId,
+              skillSlug: args.skillSlug,
+            }),
+          );
+        }
+        case 'get_help_request': {
+          if (args.requestId) {
+            return jsonResult(await api.request('GET', `/api/help-requests/${args.requestId as string}`));
+          }
+          return jsonResult(await api.request('GET', '/api/help-requests/mine'));
+        }
+        case 'reply_help_request': {
+          return jsonResult(
+            await api.request('POST', `/api/help-requests/${args.requestId as string}/reply`, {
+              content: args.content,
+            }),
+          );
         }
         default:
           return errorResult(new Error(`未知工具: ${req.params.name}`));

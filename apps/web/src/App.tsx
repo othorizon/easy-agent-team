@@ -4,8 +4,11 @@ import { clearSession, getStoredUser, getToken } from './api';
 import { DevicePage } from './pages/Device';
 import { EnvDetailPage } from './pages/EnvDetail';
 import { EnvsPage } from './pages/Envs';
+import { HelpPage } from './pages/Help';
+import { HelpDetailPage } from './pages/HelpDetail';
 import { LoginPage } from './pages/Login';
 import { RequestsPage } from './pages/Requests';
+import { SettingsPage } from './pages/Settings';
 import { SkillDetailPage } from './pages/SkillDetail';
 import { SkillsPage } from './pages/Skills';
 
@@ -13,13 +16,8 @@ function Shell({ children }: { children: React.ReactNode }) {
   const user = getStoredUser();
   const navigate = useNavigate();
   const location = useLocation();
-  const selected = location.pathname.startsWith('/requests')
-    ? '/requests'
-    : location.pathname.startsWith('/device')
-      ? '/device'
-      : location.pathname.startsWith('/skills')
-        ? '/skills'
-        : '/';
+  const first = `/${location.pathname.split('/')[1] ?? ''}`;
+  const selected = ['/skills', '/requests', '/help', '/device', '/settings'].includes(first) ? first : '/';
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Layout.Header style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
@@ -35,8 +33,10 @@ function Shell({ children }: { children: React.ReactNode }) {
           items={[
             { key: '/', label: '环境变量' },
             { key: '/skills', label: 'Skill' },
+            { key: '/help', label: '求助' },
             { key: '/requests', label: '权限申请' },
             { key: '/device', label: '设备授权' },
+            ...(user?.role === 'admin' ? [{ key: '/settings', label: '系统设置' }] : []),
           ]}
         />
         <Space>
@@ -79,6 +79,9 @@ export function App() {
       <Route path="/skills" element={<RequireAuth><SkillsPage /></RequireAuth>} />
       <Route path="/skills/:slug" element={<RequireAuth><SkillDetailPage /></RequireAuth>} />
       <Route path="/requests" element={<RequireAuth><RequestsPage /></RequireAuth>} />
+      <Route path="/help" element={<RequireAuth><HelpPage /></RequireAuth>} />
+      <Route path="/help/:id" element={<RequireAuth><HelpDetailPage /></RequireAuth>} />
+      <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
       <Route path="/device" element={<RequireAuth><DevicePage /></RequireAuth>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
