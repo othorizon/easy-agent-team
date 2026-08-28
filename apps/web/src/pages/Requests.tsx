@@ -14,7 +14,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from '../components/ui/input';
 import { TableSkeleton } from '../components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { formatDateTime } from '../lib/utils';
+import { useTabParam } from '../lib/use-tab-param';
 
 const STATUS_BADGE: Record<string, JSX.Element> = {
   pending: <Badge variant="warning">待审批</Badge>,
@@ -25,6 +27,7 @@ const STATUS_BADGE: Record<string, JSX.Element> = {
 export function RequestsPage() {
   const queryClient = useQueryClient();
   const [approving, setApproving] = useState<AccessRequestInfo | null>(null);
+  const [tab, setTab] = useTabParam('inbox');
 
   const inbox = useQuery({
     queryKey: ['inbox'],
@@ -89,72 +92,84 @@ export function RequestsPage() {
         description="成员对环境变量发起的读取申请。CLI 里 eat env request 或 AI 通过 MCP 也可以发起。"
       />
 
-      <Card>
-        <CardContent>
-          <h2 className="mb-3 text-sm font-semibold">待我审批</h2>
-          {inbox.isLoading ? (
-            <TableSkeleton rows={2} />
-          ) : (inbox.data ?? []).length === 0 ? (
-            <Empty text="没有待审批的申请" className="py-6" />
-          ) : (
-            <Table className="min-w-[640px]">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-24">申请人</TableHead>
-                  {headCells}
-                  <TableHead className="w-32">操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(inbox.data ?? []).map((row) => (
-                  <TableRow key={row.id}>
-                    <TableCell className="font-medium whitespace-nowrap">{row.requesterName}</TableCell>
-                    <RequestCells row={row} />
-                    <TableCell>
-                      <div className="flex items-center gap-1.5">
-                        <Button size="sm" onClick={() => setApproving(row)}>
-                          批准
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline-destructive"
-                          onClick={() => decide.mutate({ id: row.id, decision: 'rejected' })}
-                        >
-                          驳回
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList>
+          <TabsTrigger value="inbox">
+            待我审批
+            {(inbox.data ?? []).length > 0 && <Badge className="px-1.5">{(inbox.data ?? []).length}</Badge>}
+          </TabsTrigger>
+          <TabsTrigger value="mine">我发起的申请</TabsTrigger>
+        </TabsList>
 
-      <Card>
-        <CardContent>
-          <h2 className="mb-3 text-sm font-semibold">我发起的申请</h2>
-          {mine.isLoading ? (
-            <TableSkeleton rows={2} />
-          ) : (mine.data ?? []).length === 0 ? (
-            <Empty text="暂无申请。CLI 里 eat env request 或 AI 通过 MCP 也可以发起。" className="py-6" />
-          ) : (
-            <Table className="min-w-[520px]">
-              <TableHeader>
-                <TableRow>{headCells}</TableRow>
-              </TableHeader>
-              <TableBody>
-                {(mine.data ?? []).map((row) => (
-                  <TableRow key={row.id}>
-                    <RequestCells row={row} />
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+        <TabsContent value="inbox" className="mt-4">
+          <Card>
+            <CardContent>
+              {inbox.isLoading ? (
+                <TableSkeleton rows={2} />
+              ) : (inbox.data ?? []).length === 0 ? (
+                <Empty text="没有待审批的申请" className="py-6" />
+              ) : (
+                <Table className="min-w-[640px]">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-24">申请人</TableHead>
+                      {headCells}
+                      <TableHead className="w-32">操作</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(inbox.data ?? []).map((row) => (
+                      <TableRow key={row.id}>
+                        <TableCell className="font-medium whitespace-nowrap">{row.requesterName}</TableCell>
+                        <RequestCells row={row} />
+                        <TableCell>
+                          <div className="flex items-center gap-1.5">
+                            <Button size="sm" onClick={() => setApproving(row)}>
+                              批准
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline-destructive"
+                              onClick={() => decide.mutate({ id: row.id, decision: 'rejected' })}
+                            >
+                              驳回
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="mine" className="mt-4">
+          <Card>
+            <CardContent>
+              {mine.isLoading ? (
+                <TableSkeleton rows={2} />
+              ) : (mine.data ?? []).length === 0 ? (
+                <Empty text="暂无申请。CLI 里 eat env request 或 AI 通过 MCP 也可以发起。" className="py-6" />
+              ) : (
+                <Table className="min-w-[520px]">
+                  <TableHeader>
+                    <TableRow>{headCells}</TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(mine.data ?? []).map((row) => (
+                      <TableRow key={row.id}>
+                        <RequestCells row={row} />
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
       {approving && (
         <ApproveDialog

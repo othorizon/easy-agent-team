@@ -20,6 +20,8 @@ import { Input, Textarea } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { TableSkeleton } from '../components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { useTabParam } from '../lib/use-tab-param';
 
 const STATUS_BADGE: Record<string, JSX.Element> = {
   pending: <Badge variant="warning">待批准</Badge>,
@@ -36,6 +38,7 @@ export function DbsPage() {
   const isAdmin = me?.role === 'admin';
   const [addingInstance, setAddingInstance] = useState(false);
   const [requesting, setRequesting] = useState(false);
+  const [tab, setTab] = useTabParam('mine');
 
   const instances = useQuery({ queryKey: ['db-instances'], queryFn: () => api<DbInstanceInfo[]>('GET', '/api/db/instances') });
   const mine = useQuery({ queryKey: ['db-mine'], queryFn: () => api<DbAssignmentInfo[]>('GET', '/api/db/assignments/mine') });
@@ -44,6 +47,9 @@ export function DbsPage() {
     queryFn: () => api<DbAssignmentInfo[]>('GET', '/api/db/assignments'),
     enabled: isAdmin,
   });
+
+  // 管理员 tab 角标：待批准的申请数
+  const pendingCount = (all.data ?? []).filter((r) => r.status === 'pending').length;
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['db-instances'] });
@@ -205,86 +211,102 @@ export function DbsPage() {
         }
       />
 
-      <Card>
-        <CardContent>
-          <h2 className="mb-3 text-sm font-semibold">数据库实例</h2>
-          {instances.isLoading ? (
-            <TableSkeleton rows={2} />
-          ) : (instances.data ?? []).length === 0 ? (
-            <Empty text="暂无实例（由管理员登记）" className="py-6" />
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>名称</TableHead>
-                  <TableHead className="w-24">类型</TableHead>
-                  <TableHead className="hidden md:table-cell">地址</TableHead>
-                  <TableHead className="w-18 text-right">已分配</TableHead>
-                  <TableHead className="hidden lg:table-cell">备注</TableHead>
-                  {isAdmin && <TableHead className="w-20">操作</TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(instances.data ?? []).map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell className="font-medium whitespace-nowrap">
-                      {r.name}
-                      <div className="mt-0.5 text-xs text-muted-foreground md:hidden">
-                        {r.host}:{r.port}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="secondary">{r.engine}</Badge>
-                    </TableCell>
-                    <TableCell className="hidden md:table-cell">
-                      <InlineCode>
-                        {r.host}:{r.port}
-                      </InlineCode>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">{r.assignmentCount}</TableCell>
-                    <TableCell className="hidden max-w-xs truncate text-muted-foreground lg:table-cell">{r.note}</TableCell>
-                    {isAdmin && (
-                      <TableCell>
-                        <Confirm
-                          title="删除实例登记？"
-                          description="不影响实例本身，仅移除平台上的登记。"
-                          confirmText="删除"
-                          onConfirm={() => removeInstance.mutate(r.id)}
-                        >
-                          <Button size="sm" variant="outline-destructive">
-                            删除
-                          </Button>
-                        </Confirm>
-                      </TableCell>
-                    )}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+      <Tabs value={!isAdmin && tab === 'all' ? 'mine' : tab} onValueChange={setTab}>
+        <TabsList>
+          <TabsTrigger value="mine">我的数据库</TabsTrigger>
+          <TabsTrigger value="instances">数据库实例</TabsTrigger>
+          {isAdmin && (
+            <TabsTrigger value="all">
+              全部分配
+              {pendingCount > 0 && <Badge className="px-1.5">{pendingCount}</Badge>}
+            </TabsTrigger>
           )}
-        </CardContent>
-      </Card>
+        </TabsList>
 
-      <Card>
-        <CardContent>
-          <h2 className="mb-3 text-sm font-semibold">我的数据库</h2>
-          <AssignmentTable
-            rows={mine.data ?? []}
-            admin={false}
-            loading={mine.isLoading}
-            emptyText="暂无。点击「申请数据库」，批准后凭证会出现在你的环境列表里。"
-          />
-        </CardContent>
-      </Card>
+        <TabsContent value="mine" className="mt-4">
+          <Card>
+            <CardContent>
+              <AssignmentTable
+                rows={mine.data ?? []}
+                admin={false}
+                loading={mine.isLoading}
+                emptyText="暂无。点击「申请数据库」，批准后凭证会出现在你的环境列表里。"
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-      {isAdmin && (
-        <Card>
-          <CardContent>
-            <h2 className="mb-3 text-sm font-semibold">全部分配（管理员）</h2>
-            <AssignmentTable rows={all.data ?? []} admin loading={all.isLoading} emptyText="暂无分配" />
-          </CardContent>
-        </Card>
-      )}
+        <TabsContent value="instances" className="mt-4">
+          <Card>
+            <CardContent>
+              {instances.isLoading ? (
+                <TableSkeleton rows={2} />
+              ) : (instances.data ?? []).length === 0 ? (
+                <Empty text="暂无实例（由管理员登记）" className="py-6" />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>名称</TableHead>
+                      <TableHead className="w-24">类型</TableHead>
+                      <TableHead className="hidden md:table-cell">地址</TableHead>
+                      <TableHead className="w-18 text-right">已分配</TableHead>
+                      <TableHead className="hidden lg:table-cell">备注</TableHead>
+                      {isAdmin && <TableHead className="w-20">操作</TableHead>}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(instances.data ?? []).map((r) => (
+                      <TableRow key={r.id}>
+                        <TableCell className="font-medium whitespace-nowrap">
+                          {r.name}
+                          <div className="mt-0.5 text-xs text-muted-foreground md:hidden">
+                            {r.host}:{r.port}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="secondary">{r.engine}</Badge>
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell">
+                          <InlineCode>
+                            {r.host}:{r.port}
+                          </InlineCode>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{r.assignmentCount}</TableCell>
+                        <TableCell className="hidden max-w-xs truncate text-muted-foreground lg:table-cell">{r.note}</TableCell>
+                        {isAdmin && (
+                          <TableCell>
+                            <Confirm
+                              title="删除实例登记？"
+                              description="不影响实例本身，仅移除平台上的登记。"
+                              confirmText="删除"
+                              onConfirm={() => removeInstance.mutate(r.id)}
+                            >
+                              <Button size="sm" variant="outline-destructive">
+                                删除
+                              </Button>
+                            </Confirm>
+                          </TableCell>
+                        )}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {isAdmin && (
+          <TabsContent value="all" className="mt-4">
+            <Card>
+              <CardContent>
+                <AssignmentTable rows={all.data ?? []} admin loading={all.isLoading} emptyText="暂无分配" />
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+      </Tabs>
 
       {addingInstance && (
         <AddInstanceDialog

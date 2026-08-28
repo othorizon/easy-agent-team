@@ -544,7 +544,7 @@ sequenceDiagram
 | 层 | 选择 | 理由 |
 |---|---|---|
 | 平台服务 | **NestJS（Fastify 适配器）单体**：REST API + 后台任务一体 | 领域模块多、后台工作重（webhook 重试/部署轮询/检查调度），模块化 + DI + Guard 承载资源级权限最顺手；一个容器丢进 Dokploy |
-| 控制台前端 | React + Vite + **Tailwind CSS v4 + shadcn 风格组件**（SPA），构建产物由后端静态托管 | 内部管理后台无 SEO 需求；组件源码内置仓库（Radix 原语 + cva + react-hook-form），样式完全可控、包体积小；桌面侧边栏 + 移动端抽屉的响应式布局；部署仍是一个容器（初版用 Ant Design，决策 21 迁移） |
+| 控制台前端 | React + Vite + **Tailwind CSS v4 + shadcn 风格组件**（SPA），构建产物由后端静态托管 | 内部管理后台无 SEO 需求；组件源码内置仓库（Radix 原语 + cva + react-hook-form），样式完全可控、包体积小；桌面侧边栏 + 移动端抽屉的响应式布局；多板块页面（求助/数据库/权限申请）用页内 tabs 组织并同步 URL `?tab=`（决策 22）；部署仍是一个容器（初版用 Ant Design，决策 21 迁移） |
 | 任务队列 / 定时 | pg-boss（队列落 PostgreSQL）+ `@nestjs/schedule` | 重试与轮询不为此引入 Redis，基础设施保持「一个容器 + 一个库」 |
 | 数据库 | PostgreSQL | jsonb 灵活、单库承载业务+审计+队列足够 |
 | ORM | Drizzle（首选）/ Prisma | SQL 可控、迁移即 SQL、无引擎二进制 |
@@ -660,3 +660,4 @@ easy-agent-team/
 | 19 | 开放注册 | 管理员可开启**自助注册**（默认关闭），并可限制**允许的邮箱后缀**（多个；留空 = 任意邮箱；服务端规整为小写带 `@` 前缀）。开启后登录页出现注册入口；注册产生 member 账号、邮箱统一小写、**注册即登录**；无审批流（要审批的团队保持关闭、走管理员建号）。设置存单行 `registration_setting` 表，`GET /api/auth/registration` 对未登录公开开关与后缀（§3.1） |
 | 20 | Agent 安装流程与 MCP 定位 | **给 Agent 的安装流程只装 CLI**（安装 → 登录 → sync → 验证），不再提及 MCP——有终端环境的 Agent 用 CLI 即覆盖全部能力。**MCP 是无 shell 环境 AI 客户端的接入方式**，配置方法拆为独立板块：安装页独立卡片 + 免鉴权 `GET /install/MCP.md`（前提为 CLI 已装已登录，MCP 复用 CLI 凭证）。平台指南 Skill 同步改为 CLI 优先表述（§3.8、§7.5） |
 | 21 | 控制台 UI 迁移 shadcn + Tailwind | 控制台从 Ant Design 全量重构为 **Tailwind CSS v4 + shadcn 风格组件**（Radix 原语 + cva 源码内置 `apps/web/src/components/ui/`，不走 shadcn CLI；表单栈 react-hook-form，消息 sonner，图标 lucide，搜索选择 cmdk；移除 antd/dayjs，日期改原生 `datetime-local`）。布局重设计：桌面**左侧分组侧边栏**（能力分发/协作/资源/接入/管理）+ 顶栏用户菜单，移动端汉堡 + 抽屉导航；**手机端自适应**——表格次要列按断点隐藏并折叠进主列、横向滚动兜底、弹窗与表单全宽适配。全部 16 页面经 Playwright 桌面/移动双视口截图与交互冒烟（登录、校验、弹窗建删、抽屉导航）验证（§7.2） |
+| 22 | 多板块页面改 tabs 布局 | 一个页面上下平铺多个功能板块的布局不合理，改为**页内 tabs**（新增 `components/ui/tabs.tsx`，Radix Tabs）：求助页「找我的求助 / 我发起的求助」、数据库页「我的数据库（默认）/ 数据库实例 / 全部分配（仅管理员）」、权限申请页「待我审批 / 我发起的申请」。tab 触发器带**待处理数角标**（待我回复的求助 / 有新回复 / 待批准 / 待审批）；当前 tab 同步到 URL `?tab=`（`useTabParam`，默认 tab 不写 URL、replace 不污染历史），刷新与深链可用。求助页「我的可求助登记」为低频配置，不再平铺，收进页头「可求助登记」按钮弹窗（按钮带接单状态圆点）。设置页（两块配置表单纵排）与用户页保持原布局——settings 型页面平铺表单是常规形态（§7.2） |

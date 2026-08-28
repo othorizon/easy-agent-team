@@ -1,6 +1,6 @@
 import type { HelperInfo, HelpRequestInfo, HelpTargets, UpsertHelperProfileRequest } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, Plus } from 'lucide-react';
+import { ChevronDown, Plus, UserCog } from 'lucide-react';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { Link } from 'react-router-dom';
@@ -15,12 +15,14 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { TableSkeleton } from '../components/ui/skeleton';
 import { Switch } from '../components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { formatDateTime } from '../lib/utils';
+import { useTabParam } from '../lib/use-tab-param';
 
 export const HELP_STATUS_BADGE: Record<string, JSX.Element> = {
   open: <Badge variant="warning">等待回复</Badge>,
@@ -44,6 +46,8 @@ type MyProfile =
 export function HelpPage() {
   const queryClient = useQueryClient();
   const [asking, setAsking] = useState(false);
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [tab, setTab] = useTabParam('inbox');
 
   const profile = useQuery({ queryKey: ['helper-me'], queryFn: () => api<MyProfile>('GET', '/api/helpers/me') });
   const targets = useQuery({ queryKey: ['help-targets'], queryFn: () => api<HelpTargets>('GET', '/api/helpers') });
@@ -54,6 +58,7 @@ export function HelpPage() {
     mutationFn: (v: UpsertHelperProfileRequest) => api<MyProfile>('PUT', '/api/helpers/me', v),
     onSuccess: () => {
       toast.success('已保存');
+      setEditingProfile(false);
       void queryClient.invalidateQueries({ queryKey: ['helper-me'] });
       void queryClient.invalidateQueries({ queryKey: ['help-targets'] });
     },
@@ -77,6 +82,10 @@ export function HelpPage() {
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '发起失败'),
   });
+
+  // tab 角标：找我的 = 等待我回复的数量；我发起的 = 有新回复待我确认的数量
+  const inboxOpen = (inbox.data ?? []).filter((r) => r.status === 'open').length;
+  const mineAnswered = (mine.data ?? []).filter((r) => r.status === 'answered').length;
 
   function RequestTable({ rows, dir, loading, emptyText }: { rows: HelpRequestInfo[]; dir: 'in' | 'out'; loading: boolean; emptyText: React.ReactNode }) {
     if (loading) return <TableSkeleton rows={2} />;
@@ -124,48 +133,84 @@ export function HelpPage() {
         title="求助"
         description="遇到 AI 解决不了的问题时向擅长的同事求助；也可以登记为可求助者，帮助他人并沉淀经验。"
         actions={
-          <Button onClick={() => setAsking(true)}>
-            <Plus />
-            发起求助
-          </Button>
+          <>
+            <Button variant="outline" onClick={() => setEditingProfile(true)}>
+              <UserCog />
+              可求助登记
+              {profile.data?.registered && (
+                <span
+                  className={`size-1.5 rounded-full ${profile.data.available ? 'bg-success' : 'bg-muted-foreground/40'}`}
+                  title={profile.data.available ? '接单中' : '勿扰中'}
+                />
+              )}
+            </Button>
+            <Button onClick={() => setAsking(true)}>
+              <Plus />
+              发起求助
+            </Button>
+          </>
         }
       />
 
-      <Card>
-        <CardContent>
-          <h2 className="mb-1 text-sm font-semibold">我的可求助登记</h2>
-          <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
-            登记后，其他成员（和他们的 AI）遇到你擅长的问题时会来求助。「能力描述」会被 AI 读取用于选择求助对象，请写清楚擅长领域。
-          </p>
-          {profile.data && (
-            <ProfileForm
-              key={profile.data.registered ? 'registered' : 'new'}
-              profile={profile.data}
-              pending={saveProfile.isPending}
-              onSubmit={(v) => saveProfile.mutate(v)}
-            />
-          )}
-        </CardContent>
-      </Card>
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList>
+          <TabsTrigger value="inbox">
+            找我的求助
+            {inboxOpen > 0 && <Badge className="px-1.5">{inboxOpen}</Badge>}
+          </TabsTrigger>
+          <TabsTrigger value="mine">
+            我发起的求助
+            {mineAnswered > 0 && <Badge className="px-1.5">{mineAnswered}</Badge>}
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="inbox" className="mt-4">
+          <Card>
+            <CardContent>
+              <RequestTable
+                rows={inbox.data ?? []}
+                dir="in"
+                loading={inbox.isLoading}
+                emptyText="暂无找你的求助。完善「可求助登记」的能力描述，同事的 AI 才找得到你。"
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+        <TabsContent value="mine" className="mt-4">
+          <Card>
+            <CardContent>
+              <RequestTable
+                rows={mine.data ?? []}
+                dir="out"
+                loading={mine.isLoading}
+                emptyText="暂无。AI 也可以通过 MCP 的 create_help_request 替你发起。"
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
-      <Card>
-        <CardContent>
-          <h2 className="mb-3 text-sm font-semibold">找我的求助</h2>
-          <RequestTable rows={inbox.data ?? []} dir="in" loading={inbox.isLoading} emptyText="暂无" />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent>
-          <h2 className="mb-3 text-sm font-semibold">我发起的求助</h2>
-          <RequestTable
-            rows={mine.data ?? []}
-            dir="out"
-            loading={mine.isLoading}
-            emptyText="暂无。AI 也可以通过 MCP 的 create_help_request 替你发起。"
-          />
-        </CardContent>
-      </Card>
+      {editingProfile && (
+        <Dialog open onOpenChange={(open) => !open && setEditingProfile(false)}>
+          <DialogContent className="max-w-xl">
+            <DialogHeader>
+              <DialogTitle>我的可求助登记</DialogTitle>
+              <DialogDescription>
+                登记后，其他成员（和他们的 AI）遇到你擅长的问题时会来求助。「能力描述」会被 AI 读取用于选择求助对象，请写清楚擅长领域。
+              </DialogDescription>
+            </DialogHeader>
+            {profile.data ? (
+              <ProfileForm
+                key={profile.data.registered ? 'registered' : 'new'}
+                profile={profile.data}
+                pending={saveProfile.isPending}
+                onSubmit={(v) => saveProfile.mutate(v)}
+              />
+            ) : (
+              <TableSkeleton rows={2} />
+            )}
+          </DialogContent>
+        </Dialog>
+      )}
 
       {asking && (
         <AskDialog
@@ -260,7 +305,7 @@ function ProfileForm({
           render={({ field }) => <Switch checked={field.value} onCheckedChange={field.onChange} />}
         />
       </Field>
-      <Button type="submit" loading={pending} className="w-fit">
+      <Button type="submit" loading={pending} className="w-full">
         {profile.registered ? '更新登记' : '登记为可求助者'}
       </Button>
     </form>
