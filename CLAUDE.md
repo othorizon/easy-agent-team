@@ -32,19 +32,6 @@ node apps/cli/dist/index.js      # eat CLI（login/env list/env pull/mcp 等）
 - §7 技术选型（已定）：NestJS(Fastify) 单体 + React/Vite/Ant Design SPA + pnpm monorepo；任务队列 pg-boss（不引入 Redis）；ORM 首选 Drizzle；CLI/MCP 为 TS 单包、tsup 打包、npm 分发；平台 AI 调用采用 OpenAI 接口范式（api_base_url / api_key / model 可配）。
 - §7.4 Monorepo 结构：apps/server、apps/web、apps/cli + packages/shared（zod 契约三端共用）。
 
-## 网页版设计文档（Artifact）
-
-设计文档有一份对外评审用的网页镜像（用户所有，链接保持不变）：
-
-- URL：https://claude.ai/code/artifact/114704b4-203e-4147-acbf-b1759fe28c27
-- 修改 `docs/product-design.md` 后需同步更新它：用 Artifact 工具 `action: "read"` 读回当前 HTML（新会话本地没有源文件），做同样内容修改后带 `url` 参数重新发布到同一链接。favicon 固定为 🎛️。
-
-## 工作约定
-
-- 开发分支：`claude/skill-mcp-env-platform-v8uhpv`，提交后推送到该分支；不经允许不推其他分支。
-- 未经用户要求不创建 PR。
-- 文档、注释、面向用户的文本使用中文。
-
 ## 远程开发环境须知（Claude Code on the web 容器）
 
 **本节及「容器内直接起 PostgreSQL」的方案仅适用于 Claude Code 云端会话**——因为云端容器没有 Docker 守护进程，只能这样起库。用户本地开发时不采用此方案：直接用 Docker 起 PostgreSQL 或连自有实例即可。
