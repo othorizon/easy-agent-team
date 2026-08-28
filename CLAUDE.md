@@ -24,6 +24,22 @@ node apps/cli/dist/index.js      # eat CLI（login/env list/env pull/mcp 等）
 - schema 改动流程：改 `apps/server/src/db/schema.ts` → `pnpm --filter @eat/server db:generate` 生成迁移 SQL（提交进库）→ `pnpm db:migrate`。
 - server 测试用 vitest + unplugin-swc（es6 模块，tsup/esbuild 不产 decorator metadata 所以必须 swc）；CLI 是 ESM + tsup 单文件（banner 里有 createRequire 垫片，勿删）。
 
+## 本地开发（用户本机）
+
+**仓库根有 `.env` 且配置了 `DATABASE_URL` 时，一律优先使用 `.env` 里的配置**，不要起本地 Docker 库或假设 5433 端口：
+
+- 启动 server：`node --env-file=.env apps/server/dist/main.js`（Node 20.6+ 原生支持）。
+- 跑 server e2e：测试会 **drop schema 重建**，绝不能指向 `.env` 里的业务库；用同一实例上的独立 `eat_test` 库，通过 `TEST_DATABASE_URL` 注入：
+
+  ```bash
+  set -a; source .env; set +a
+  TEST_DATABASE_URL="${DATABASE_URL%/*}/eat_test" pnpm --filter @eat/server test
+  ```
+
+  `eat_test` 库不存在时先在该实例上 `CREATE DATABASE eat_test` 一次。
+- 已知限制：p2.spec.ts 的 5 个「真实建库」用例硬编码登记 `127.0.0.1:5433` 本地 PG 做真实建库建号（避免在远端实例残留测试库/账号），本机没起 5433 时这 5 个用例失败属预期，其余用例应全过。
+- 没有 `.env` 时才回退到 Docker 起 PostgreSQL 或连自有实例。
+
 ## 唯一事实源
 
 `docs/product-design.md` 是产品与技术设计的唯一事实源：
@@ -34,7 +50,7 @@ node apps/cli/dist/index.js      # eat CLI（login/env list/env pull/mcp 等）
 
 ## 远程开发环境须知（Claude Code on the web 容器）
 
-**本节及「容器内直接起 PostgreSQL」的方案仅适用于 Claude Code 云端会话**——因为云端容器没有 Docker 守护进程，只能这样起库。用户本地开发时不采用此方案：直接用 Docker 起 PostgreSQL 或连自有实例即可。
+**本节及「容器内直接起 PostgreSQL」的方案仅适用于 Claude Code 云端会话**——因为云端容器没有 Docker 守护进程，只能这样起库。用户本地开发时不采用此方案：按上一节「本地开发（用户本机）」优先用 `.env` 配置。
 
 - **没有 Docker 守护进程**（docker CLI 存在但连不上 daemon），不要尝试 docker run / testcontainers。
 - **PostgreSQL 16 服务端已装**（/usr/lib/postgresql/16/bin），本地起库即可开发测试，不依赖外部数据库。已验证可用。
