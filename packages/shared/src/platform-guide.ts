@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 1;
+export const PLATFORM_GUIDE_VERSION = 2;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -44,7 +44,7 @@ MCP 工具 \`trigger_deploy\` / \`get_deploy_status\` / \`get_deploy_logs\`（�
 
 | 命令 | 用途 |
 |---|---|
-| \`eat sync\` | 同步 Skill 与 MCP 配置到本地（本指南也由它维护更新） |
+| \`eat sync\` | 同步 Skill 与 MCP 配置到本地（本指南也由它维护更新）；默认装到全局 \`~/.agents/skills\`，\`--project\` 装到当前项目 \`./.agents/skills\` |
 | \`eat env list / pull / request\` | 环境变量：看清单 / 取值 / 申请权限 |
 | \`eat skill push <dir>\` | 把本地写好的 skill 上传到平台纳管分享 |
 | \`eat ask create / show / reply\` | 求助的 CLI 入口 |

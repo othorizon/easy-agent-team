@@ -65,10 +65,16 @@ function writeSkill(dir: string, skill: SyncSkill): void {
 }
 
 /**
- * 把 linkPath 维护成指向 dir 的软链接（~/.claude/skills/<slug> → ~/.agents/skills/<slug>）。
+ * 把 linkPath 维护成指向 dir 的软链接（.claude/skills/<slug> → .agents/skills/<slug>）。
  * 历史版本直接落地在 .claude 的受管真实目录会被替换为链接（迁移）；非 eat 管理的占位仅 --force 才覆盖。
+ * relative 时写相对链接（项目模式：目录随仓库整体移动/克隆后链接仍有效）。
  */
-function ensureLink(linkPath: string, dir: string, force: boolean): 'ok' | 'linked' | 'conflict' {
+export function ensureLink(
+  linkPath: string,
+  dir: string,
+  force: boolean,
+  relative: boolean,
+): 'ok' | 'linked' | 'conflict' {
   let st: fs.Stats | undefined;
   try {
     st = fs.lstatSync(linkPath);
@@ -76,25 +82,59 @@ function ensureLink(linkPath: string, dir: string, force: boolean): 'ok' | 'link
     st = undefined;
   }
   if (st?.isSymbolicLink()) {
-    if (fs.readlinkSync(linkPath) === dir) return 'ok';
+    if (path.resolve(path.dirname(linkPath), fs.readlinkSync(linkPath)) === dir) return 'ok';
     fs.rmSync(linkPath, { force: true });
   } else if (st) {
     if (!readMeta(linkPath) && !force) return 'conflict';
     fs.rmSync(linkPath, { recursive: true, force: true });
   }
-  fs.symlinkSync(dir, linkPath, 'dir');
+  fs.symlinkSync(relative ? path.relative(path.dirname(linkPath), dir) : dir, linkPath, 'dir');
   return st?.isSymbolicLink() ? 'ok' : 'linked';
 }
 
-export async function sync(opts: { dir?: string; force?: boolean }): Promise<void> {
-  // 实际文件落 ~/.agents/skills（跨 Agent 工具共用），~/.claude/skills 里只放软链接；
+export interface SyncOpts {
+  dir?: string;
+  force?: boolean;
+  global?: boolean;
+  project?: boolean;
+}
+
+interface SyncRoots {
+  target: string;
+  /** null = --dir 自定义目录模式，不建软链 */
+  linkRoot: string | null;
+  relativeLinks: boolean;
+}
+
+/** 安装范围：默认/--global 落用户目录，--project 落当前项目，--dir 自定义目录；三者互斥 */
+export function resolveSyncRoots(opts: SyncOpts, cwd = process.cwd()): SyncRoots {
+  const picked = [
+    opts.global ? '--global' : null,
+    opts.project ? '--project' : null,
+    opts.dir !== undefined ? '--dir' : null,
+  ].filter((f): f is string => f !== null);
+  if (picked.length > 1) {
+    throw new Error(`${picked.join(' 与 ')} 不能同时使用，请只指定一种安装范围`);
+  }
+  if (opts.dir !== undefined) {
+    return { target: path.resolve(cwd, opts.dir), linkRoot: null, relativeLinks: false };
+  }
+  const root = opts.project ? cwd : os.homedir();
+  return {
+    target: path.join(root, '.agents', 'skills'),
+    linkRoot: path.join(root, '.claude', 'skills'),
+    relativeLinks: opts.project ?? false,
+  };
+}
+
+export async function sync(opts: SyncOpts): Promise<void> {
+  // 实际文件落 .agents/skills（跨 Agent 工具共用），.claude/skills 里只放软链接；
+  // 默认落用户目录（--global），--project 落当前项目（类 npx skills 的 global/project 语义），
   // 指定 --dir 时直接落该目录，不建链接（保持可预期）。
-  const defaultMode = !opts.dir;
-  const target = path.resolve(opts.dir ?? path.join(os.homedir(), '.agents', 'skills'));
-  const linkRoot = path.join(os.homedir(), '.claude', 'skills');
-  fs.mkdirSync(target, { recursive: true });
-  if (defaultMode) fs.mkdirSync(linkRoot, { recursive: true });
+  const { target, linkRoot, relativeLinks } = resolveSyncRoots(opts);
   const api = Api.fromSaved();
+  fs.mkdirSync(target, { recursive: true });
+  if (linkRoot) fs.mkdirSync(linkRoot, { recursive: true });
   const bundle = await api.request<SyncSkill[]>('GET', '/api/skills/sync-bundle');
 
   const added: string[] = [];
@@ -119,9 +159,12 @@ export async function sync(opts: { dir?: string; force?: boolean }): Promise<voi
       writeSkill(dir, skill);
       updated.push(`${skill.slug}（v${meta?.version ?? '?'} → v${skill.version}）`);
     }
-    if (defaultMode) {
+    if (linkRoot) {
       try {
-        if (ensureLink(path.join(linkRoot, skill.slug), dir, opts.force ?? false) === 'conflict') {
+        if (
+          ensureLink(path.join(linkRoot, skill.slug), dir, opts.force ?? false, relativeLinks) ===
+          'conflict'
+        ) {
           linkConflicts.push(skill.slug);
         }
       } catch (err) {
@@ -142,12 +185,12 @@ export async function sync(opts: { dir?: string; force?: boolean }): Promise<voi
       removed.push(meta.slug);
     }
   }
-  if (defaultMode) {
+  if (linkRoot) {
     for (const entry of fs.readdirSync(linkRoot, { withFileTypes: true })) {
       const p = path.join(linkRoot, entry.name);
       if (entry.isSymbolicLink()) {
-        // 指向 target 内但源已被清理的悬空链接
-        const to = fs.readlinkSync(p);
+        // 指向 target 内但源已被清理的悬空链接（相对链接先解析回绝对路径）
+        const to = path.resolve(linkRoot, fs.readlinkSync(p));
         if (to.startsWith(target + path.sep) && !fs.existsSync(to)) fs.rmSync(p, { force: true });
       } else if (entry.isDirectory()) {
         // 历史版本直接落地在 .claude 的受管目录：不在同步范围则一并清理
@@ -157,7 +200,7 @@ export async function sync(opts: { dir?: string; force?: boolean }): Promise<voi
     }
   }
 
-  console.log(`Skill 同步完成 → ${target}${defaultMode ? `（已软链到 ${linkRoot}）` : ''}`);
+  console.log(`Skill 同步完成 → ${target}${linkRoot ? `（已软链到 ${linkRoot}）` : ''}`);
   if (added.length) console.log(`  新增: ${added.join(', ')}`);
   if (updated.length) console.log(`  更新: ${updated.join(', ')}`);
   if (removed.length) console.log(`  移除(退订/已删除): ${removed.join(', ')}`);
