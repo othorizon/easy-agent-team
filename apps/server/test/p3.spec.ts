@@ -72,6 +72,14 @@ beforeAll(async () => {
       });
       return;
     }
+    if (req.method === 'GET' && req.url === '/api/project.all') {
+      if (req.headers['x-api-key'] !== 'dok-token-abcdef123456') {
+        res.writeHead(401, { 'content-type': 'application/json' }).end('{"message":"invalid token"}');
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' }).end('[]');
+      return;
+    }
     if (req.method === 'GET' && req.url?.startsWith('/api/application.one')) {
       res
         .writeHead(200, { 'content-type': 'application/json' })
@@ -117,6 +125,34 @@ describe('Dokploy 接入配置', () => {
     const get = await api('GET', '/api/admin/dokploy-settings', { token: adminToken });
     expect(get.body.apiTokenMasked).toBe('dok-****3456');
     expect(get.body.apiUrl).toBe(dokployUrl);
+  });
+
+  it('连通性测试：token 留空回落已保存值，错 token/错地址返回 ok=false，仅管理员可用', async () => {
+    expect((await api('POST', '/api/admin/dokploy-settings/test', { token: ownerToken, payload: { apiUrl: dokployUrl, apiToken: '' } })).status).toBe(403);
+
+    const ok = await api('POST', '/api/admin/dokploy-settings/test', {
+      token: adminToken,
+      payload: { apiUrl: dokployUrl, apiToken: '' },
+    });
+    expect(ok.status).toBe(200);
+    expect(ok.body.ok).toBe(true);
+    expect(typeof ok.body.latencyMs).toBe('number');
+
+    const badToken = await api('POST', '/api/admin/dokploy-settings/test', {
+      token: adminToken,
+      payload: { apiUrl: dokployUrl, apiToken: 'wrong-token' },
+    });
+    expect(badToken.status).toBe(200);
+    expect(badToken.body.ok).toBe(false);
+    expect(badToken.body.message).toContain('401');
+
+    const badUrl = await api('POST', '/api/admin/dokploy-settings/test', {
+      token: adminToken,
+      payload: { apiUrl: `${dokployUrl}/nope`, apiToken: '' },
+    });
+    expect(badUrl.status).toBe(200);
+    expect(badUrl.body.ok).toBe(false);
+    expect(badUrl.body.message).toContain('404');
   });
 });
 

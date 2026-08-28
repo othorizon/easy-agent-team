@@ -1,6 +1,15 @@
-import type { AiSettingsInfo, DokploySettingsInfo, UpdateAiSettingsRequest, UpdateDokploySettingsRequest } from '@eat/shared';
+import type {
+  AiSettingsInfo,
+  ConnectionTestResult,
+  DokploySettingsInfo,
+  TestAiSettingsRequest,
+  TestDokploySettingsRequest,
+  UpdateAiSettingsRequest,
+  UpdateDokploySettingsRequest,
+} from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, Card, Form, Input, Space, Switch, Typography } from 'antd';
+import { Alert, App, Button, Card, Form, Input, Space, Switch, Typography } from 'antd';
+import { useState } from 'react';
 import { api, ApiError } from '../api';
 
 /** 系统设置（仅管理员）：平台 AI 接入 + Dokploy 接入 */
@@ -13,9 +22,24 @@ export function SettingsPage() {
   );
 }
 
+/** 连通性测试结果展示（两张卡片共用） */
+function TestResultAlert({ result }: { result: ConnectionTestResult | null }) {
+  if (!result) return null;
+  return (
+    <Alert
+      style={{ marginTop: 16 }}
+      type={result.ok ? 'success' : 'error'}
+      showIcon
+      message={result.ok ? `${result.message}（耗时 ${result.latencyMs}ms）` : result.message}
+    />
+  );
+}
+
 function DokploySettingsCard() {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
+  const [form] = Form.useForm<UpdateDokploySettingsRequest>();
+  const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
   const settings = useQuery({
     queryKey: ['dokploy-settings'],
     queryFn: () => api<DokploySettingsInfo>('GET', '/api/admin/dokploy-settings'),
@@ -28,6 +52,21 @@ function DokploySettingsCard() {
     },
     onError: (err) => message.error(err instanceof ApiError ? err.message : '保存失败'),
   });
+  const test = useMutation({
+    mutationFn: (v: TestDokploySettingsRequest) => api<ConnectionTestResult>('POST', '/api/admin/dokploy-settings/test', v),
+    onSuccess: (r) => setTestResult(r),
+    onError: (err) => message.error(err instanceof ApiError ? err.message : '测试请求失败'),
+  });
+  const runTest = async () => {
+    let v: UpdateDokploySettingsRequest;
+    try {
+      v = await form.validateFields(['apiUrl', 'apiToken']);
+    } catch {
+      return; // 校验失败，表单已就地提示
+    }
+    setTestResult(null);
+    test.mutate({ apiUrl: v.apiUrl, apiToken: v.apiToken ?? '' });
+  };
   if (!settings.data) return <Card loading />;
   const s = settings.data;
   return (
@@ -36,6 +75,7 @@ function DokploySettingsCard() {
         部署托管挂载 Dokploy：平台通过其 API 触发部署与查询状态。API Token 加密存储。
       </Typography.Paragraph>
       <Form
+        form={form}
         layout="vertical"
         key={s.configured ? 'y' : 'n'}
         initialValues={{ apiUrl: s.apiUrl, apiToken: '', enabled: s.enabled }}
@@ -54,9 +94,15 @@ function DokploySettingsCard() {
         <Form.Item name="enabled" label="启用" valuePropName="checked">
           <Switch />
         </Form.Item>
-        <Button type="primary" htmlType="submit" loading={save.isPending}>
-          保存
-        </Button>
+        <Space>
+          <Button type="primary" htmlType="submit" loading={save.isPending}>
+            保存
+          </Button>
+          <Button onClick={() => void runTest()} loading={test.isPending}>
+            测试连接
+          </Button>
+        </Space>
+        <TestResultAlert result={testResult} />
       </Form>
     </Card>
   );
@@ -65,6 +111,8 @@ function DokploySettingsCard() {
 function AiSettingsCard() {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
+  const [form] = Form.useForm<UpdateAiSettingsRequest>();
+  const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
 
   const settings = useQuery({
     queryKey: ['ai-settings'],
@@ -80,6 +128,22 @@ function AiSettingsCard() {
     onError: (err) => message.error(err instanceof ApiError ? err.message : '保存失败'),
   });
 
+  const test = useMutation({
+    mutationFn: (v: TestAiSettingsRequest) => api<ConnectionTestResult>('POST', '/api/admin/ai-settings/test', v),
+    onSuccess: (r) => setTestResult(r),
+    onError: (err) => message.error(err instanceof ApiError ? err.message : '测试请求失败'),
+  });
+  const runTest = async () => {
+    let v: UpdateAiSettingsRequest;
+    try {
+      v = await form.validateFields(['apiBaseUrl', 'apiKey', 'model']);
+    } catch {
+      return; // 校验失败，表单已就地提示
+    }
+    setTestResult(null);
+    test.mutate({ apiBaseUrl: v.apiBaseUrl, apiKey: v.apiKey ?? '', model: v.model });
+  };
+
   if (!settings.data) return <Card loading />;
   const s = settings.data;
 
@@ -90,6 +154,7 @@ function AiSettingsCard() {
         沉淀时会把求助问答发送给所配置的模型服务。api_key 加密存储，每次调用的 token 用量会记录。
       </Typography.Paragraph>
       <Form
+        form={form}
         layout="vertical"
         key={s.configured ? 'y' : 'n'}
         initialValues={{ apiBaseUrl: s.apiBaseUrl, apiKey: '', model: s.model, enabled: s.enabled }}
@@ -111,9 +176,15 @@ function AiSettingsCard() {
         <Form.Item name="enabled" label="启用" valuePropName="checked">
           <Switch />
         </Form.Item>
-        <Button type="primary" htmlType="submit" loading={save.isPending}>
-          保存
-        </Button>
+        <Space>
+          <Button type="primary" htmlType="submit" loading={save.isPending}>
+            保存
+          </Button>
+          <Button onClick={() => void runTest()} loading={test.isPending}>
+            测试连接
+          </Button>
+        </Space>
+        <TestResultAlert result={testResult} />
       </Form>
     </Card>
   );

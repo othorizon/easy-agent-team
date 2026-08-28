@@ -31,6 +31,14 @@ export const userPublicSchema = z.object({
 });
 export type UserPublic = z.infer<typeof userPublicSchema>;
 
+/** 连通性测试结果（AI 接入 / Dokploy 接入通用）：失败也返回 200，结果在 ok/message 里 */
+export const connectionTestResultSchema = z.object({
+  ok: z.boolean(),
+  message: z.string(),
+  latencyMs: z.number(),
+});
+export type ConnectionTestResult = z.infer<typeof connectionTestResultSchema>;
+
 /** slug：作为 URL 与本地目录名，限小写字母数字与连字符 */
 export const slugSchema = z
   .string()

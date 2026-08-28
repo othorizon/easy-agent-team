@@ -1,10 +1,12 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put } from '@nestjs/common';
 import {
   createProjectSchema,
+  testDokploySettingsSchema,
   triggerDeploySchema,
   updateDokploySettingsSchema,
   updateProjectSchema,
   type CreateProjectRequest,
+  type TestDokploySettingsRequest,
   type TriggerDeployRequest,
   type UpdateDokploySettingsRequest,
   type UpdateProjectRequest,
@@ -32,6 +34,14 @@ export class DeployController {
   @Roles('admin')
   updateSettings(@Body(new ZodValidationPipe(updateDokploySettingsSchema)) body: UpdateDokploySettingsRequest) {
     return this.deploy.updateSettings(body);
+  }
+
+  /** 连通性测试：不落库，失败也返回 200（结果在 ok/message） */
+  @Post('admin/dokploy-settings/test')
+  @Roles('admin')
+  @HttpCode(200)
+  testSettings(@Body(new ZodValidationPipe(testDokploySettingsSchema)) body: TestDokploySettingsRequest) {
+    return this.deploy.testSettings(body);
   }
 
   // ---------- 项目 ----------

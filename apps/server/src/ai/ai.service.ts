@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { eq, sql } from 'drizzle-orm';
-import type { AiSettingsInfo, UpdateAiSettingsRequest } from '@eat/shared';
+import type { AiSettingsInfo, ConnectionTestResult, TestAiSettingsRequest, UpdateAiSettingsRequest } from '@eat/shared';
 import { decryptSecret, encryptSecret } from '../common/crypto';
 import { DB, type Db } from '../db/db.module';
 import { aiCallLogs, aiSettings } from '../db/schema';
@@ -52,6 +52,40 @@ export class AiService {
       await this.db.insert(aiSettings).values({ apiBaseUrl: dto.apiBaseUrl, apiKeyEncrypted, model: dto.model, enabled: dto.enabled });
     }
     return this.getSettings();
+  }
+
+  /**
+   * 连通性测试：用传入的表单值（key 为空回落到已保存的 key）发起与业务一致的
+   * chat/completions 最小调用。不要求 enabled（管理员可先测通再启用），失败不抛错。
+   */
+  async testConnection(dto: TestAiSettingsRequest): Promise<ConnectionTestResult> {
+    const row = await this.getRow();
+    const apiKey = dto.apiKey || (row ? decryptSecret(row.apiKeyEncrypted) : '');
+    if (!apiKey) return { ok: false, message: '未提供 API Key，且没有已保存的 Key 可用', latencyMs: 0 };
+    const baseUrl = dto.apiBaseUrl.replace(/\/+$/, '');
+    const startedAt = Date.now();
+    try {
+      const res = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({ model: dto.model, messages: [{ role: 'user', content: 'ping' }] }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      const latencyMs = Date.now() - startedAt;
+      if (!res.ok) {
+        return { ok: false, message: `模型服务返回 HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`, latencyMs };
+      }
+      const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+      if (!json.choices?.[0]?.message?.content) {
+        return { ok: false, message: '模型服务已连通，但响应中没有内容（请检查模型名称）', latencyMs };
+      }
+      return { ok: true, message: `连接成功，模型 ${dto.model} 响应正常`, latencyMs };
+    } catch (err) {
+      // Node fetch 网络错误只报 "fetch failed"，具体原因（如 ECONNREFUSED）在 cause 里
+      const e = err as Error & { cause?: { message?: string } };
+      const detail = e.cause?.message ? `${e.message}（${e.cause.message}）` : e.message;
+      return { ok: false, message: `连接失败: ${detail}`, latencyMs: Date.now() - startedAt };
+    }
   }
 
   async isAvailable(): Promise<boolean> {

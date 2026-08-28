@@ -10,12 +10,14 @@ import {
 } from '@nestjs/common';
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import type {
+  ConnectionTestResult,
   CreateProjectRequest,
   DeploymentInfo,
   DokploySettingsInfo,
   PrecheckReport,
   ProjectInfo,
   SecretFingerprint,
+  TestDokploySettingsRequest,
   UpdateDokploySettingsRequest,
   UpdateProjectRequest,
 } from '@eat/shared';
@@ -69,6 +71,26 @@ export class DeployService {
       await this.db.insert(dokploySettings).values({ apiUrl: dto.apiUrl, apiTokenEncrypted, enabled: dto.enabled });
     }
     return this.getSettings();
+  }
+
+  /**
+   * 连通性测试：用传入的表单值（token 为空回落到已保存的 token）调用 Dokploy 只读端点。
+   * 不要求 enabled（管理员可先测通再启用），失败不抛错。
+   */
+  async testSettings(dto: TestDokploySettingsRequest): Promise<ConnectionTestResult> {
+    const row = await this.settingsRow();
+    const apiToken = dto.apiToken || (row ? decryptSecret(row.apiTokenEncrypted) : '');
+    if (!apiToken) return { ok: false, message: '未提供 API Token，且没有已保存的 Token 可用', latencyMs: 0 };
+    const startedAt = Date.now();
+    try {
+      await new DokployClient({ apiUrl: dto.apiUrl, apiToken }).testConnection();
+      return { ok: true, message: 'Dokploy 连接成功，token 有效', latencyMs: Date.now() - startedAt };
+    } catch (err) {
+      // Node fetch 网络错误只报 "fetch failed"，具体原因（如 ECONNREFUSED）在 cause 里
+      const e = err as Error & { cause?: { message?: string } };
+      const detail = e.cause?.message ? `${e.message}（${e.cause.message}）` : e.message;
+      return { ok: false, message: `连接失败: ${detail}`, latencyMs: Date.now() - startedAt };
+    }
   }
 
   private async client(): Promise<DokployClient> {

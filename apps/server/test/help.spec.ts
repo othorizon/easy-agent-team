@@ -315,6 +315,27 @@ describe('平台 AI 接入', () => {
     expect(get.body.apiKeyMasked).not.toContain('1234567890');
   });
 
+  it('连通性测试：key 留空回落已保存值，连不上返回 ok=false，仅管理员可用', async () => {
+    expect((await api('POST', '/api/admin/ai-settings/test', { token: helperToken, payload: { apiBaseUrl: aiBaseUrl, apiKey: '', model: 'test-model' } })).status).toBe(403);
+
+    const ok = await api('POST', '/api/admin/ai-settings/test', {
+      token: adminToken,
+      payload: { apiBaseUrl: aiBaseUrl, apiKey: '', model: 'test-model' },
+    });
+    expect(ok.status).toBe(200);
+    expect(ok.body.ok).toBe(true);
+    expect(ok.body.message).toContain('test-model');
+    expect(typeof ok.body.latencyMs).toBe('number');
+
+    // 指向无服务端口：连接被拒，测试端点仍 200，结果在 ok/message
+    const bad = await api('POST', '/api/admin/ai-settings/test', {
+      token: adminToken,
+      payload: { apiBaseUrl: 'http://127.0.0.1:1/v1', apiKey: 'sk-explicit-key', model: 'test-model' },
+    });
+    expect(bad.status).toBe(200);
+    expect(bad.body.ok).toBe(false);
+  });
+
   it('AI 整理沉淀：内容来自模型，公开经验全员可搜', async () => {
     await api('POST', `/api/help-requests/${skillRequestId}/reply`, {
       token: helperToken,

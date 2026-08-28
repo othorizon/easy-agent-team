@@ -3,6 +3,7 @@
  * 端点基于 Dokploy REST API（x-api-key 认证）：
  *   POST {apiUrl}/application.deploy   { applicationId }
  *   GET  {apiUrl}/application.one?applicationId=...  → { applicationStatus }
+ *   GET  {apiUrl}/project.all          （只读，连通性测试用）
  * 真实联调时如有出入，仅需在本文件校准。
  */
 export interface DokployConn {
@@ -21,6 +22,17 @@ export class DokployClient {
 
   private headers(): Record<string, string> {
     return { 'content-type': 'application/json', 'x-api-key': this.conn.apiToken };
+  }
+
+  /** 连通性测试：调用只读端点验证地址与 token，失败抛错（含 HTTP 状态） */
+  async testConnection(): Promise<void> {
+    const res = await fetch(`${this.base}/project.all`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) {
+      throw new Error(`Dokploy 返回 HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    }
   }
 
   async deploy(applicationId: string): Promise<void> {

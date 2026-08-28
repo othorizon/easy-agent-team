@@ -10,6 +10,10 @@ export const updateAiSettingsSchema = z.object({
 });
 export type UpdateAiSettingsRequest = z.infer<typeof updateAiSettingsSchema>;
 
+/** 连通性测试：用表单当前值发起最小对话调用；apiKey 传空表示用已保存的 key */
+export const testAiSettingsSchema = updateAiSettingsSchema.omit({ enabled: true });
+export type TestAiSettingsRequest = z.infer<typeof testAiSettingsSchema>;
+
 export const aiSettingsInfoSchema = z.object({
   apiBaseUrl: z.string(),
   /** 打码显示（sk-****abcd），永不返回明文 */

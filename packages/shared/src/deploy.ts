@@ -13,6 +13,10 @@ export const updateDokploySettingsSchema = z.object({
 });
 export type UpdateDokploySettingsRequest = z.infer<typeof updateDokploySettingsSchema>;
 
+/** 连通性测试：用表单当前值调用 Dokploy 只读端点；apiToken 传空表示用已保存的 token */
+export const testDokploySettingsSchema = updateDokploySettingsSchema.omit({ enabled: true });
+export type TestDokploySettingsRequest = z.infer<typeof testDokploySettingsSchema>;
+
 export const dokploySettingsInfoSchema = z.object({
   apiUrl: z.string(),
   apiTokenMasked: z.string(),
