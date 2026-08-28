@@ -1,7 +1,7 @@
 import { Controller, Get, Header, Res } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import * as fs from 'node:fs';
-import { buildAgentInstallGuide } from '@eat/shared';
+import { buildAgentInstallGuide, buildMcpSetupGuide } from '@eat/shared';
 import { Public } from '../auth/auth.decorators';
 import { loadConfig } from '../config';
 
@@ -87,7 +87,7 @@ echo '  export PATH="$HOME/.eat/bin:$PATH"'
 echo ""
 echo "下一步："
 echo "  1. eat login --server $SERVER    # 浏览器完成设备码授权"
-echo "  2. eat sync                      # 同步团队 Skill 与 MCP 配置"
+echo "  2. eat sync                      # 同步团队能力（Skill 等落地本地）"
 `;
   }
 
@@ -108,12 +108,21 @@ echo "  2. eat sync                      # 同步团队 Skill 与 MCP 配置"
       .send(fs.readFileSync(cliDistPath, 'utf8'));
   }
 
-  /** 给 AI Agent 看的安装指令（控制台安装页提供一键复制，也可直接 curl 本地址） */
+  /** 给 AI Agent 看的安装指令（控制台安装页提供一键复制，也可直接 curl 本地址）。只装 CLI，不含 MCP（决策 20） */
   @Public()
   @Get('install/AGENT.md')
   @Header('content-type', 'text/markdown; charset=utf-8')
   agentGuide(): string {
     const { publicUrl } = loadConfig();
     return buildAgentInstallGuide(publicUrl);
+  }
+
+  /** MCP 配置指引（独立板块）：仅无 shell 环境的 AI 客户端需要 */
+  @Public()
+  @Get('install/MCP.md')
+  @Header('content-type', 'text/markdown; charset=utf-8')
+  mcpGuide(): string {
+    const { publicUrl } = loadConfig();
+    return buildMcpSetupGuide(publicUrl);
   }
 }

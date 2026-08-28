@@ -22,8 +22,9 @@ export function InstallPage() {
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <Card title="🤖 让你的 AI 帮你装（推荐）">
         <Typography.Paragraph type="secondary">
-          复制下面整段指令，粘贴给你的 AI Agent（Claude Code 等），它会完成安装、登录引导和 MCP
-          配置。登录环节会给你一个链接和短码，在浏览器里确认一下就行。
+          复制下面整段指令，粘贴给你的 AI Agent（Claude Code 等），它会完成 CLI 安装、登录引导和能力同步。
+          登录环节会给你一个链接和短码，在浏览器里确认一下就行。有终端环境的 Agent 装好 CLI
+          即可使用平台全部能力，无需配置 MCP。
         </Typography.Paragraph>
         <Button
           type="primary"
@@ -77,15 +78,6 @@ export function InstallPage() {
               ),
             },
             {
-              title: '注册 MCP 到 Claude Code',
-              description: (
-                <>
-                  <Cmd text="claude mcp add --scope user eat -- eat mcp" />
-                  <Typography.Text type="secondary">其他 MCP 客户端：stdio 方式运行 eat mcp，凭证自动复用。</Typography.Text>
-                </>
-              ),
-            },
-            {
               title: '同步团队能力',
               description: (
                 <>
@@ -105,6 +97,25 @@ export function InstallPage() {
           <Typography.Text code>/usr/local/bin</Typography.Text>，幂等写入 shell 配置）；当前终端找不到命令时执行{' '}
           <Typography.Text code>export PATH=&quot;$HOME/.eat/bin:$PATH&quot;</Typography.Text>。卸载：删除{' '}
           <Typography.Text code>~/.eat</Typography.Text> 目录及各处 eat 软链即可。
+        </Typography.Paragraph>
+      </Card>
+
+      <Card title="🔌 MCP 配置（无终端环境的 AI 客户端）">
+        <Typography.Paragraph type="secondary">
+          eat 的全部能力都可以通过 CLI 使用——<strong>Agent 有 shell 环境时装好 CLI 即可，不需要配置 MCP</strong>。
+          只有当 AI 客户端不能执行 shell 命令时，才把 eat 注册为 MCP server 接入平台。
+          前提：本机已完成上面的 CLI 安装与登录；MCP 复用 CLI 凭证（
+          <Typography.Text code>~/.eat/credentials</Typography.Text>），无需再登录。
+        </Typography.Paragraph>
+        <Typography.Paragraph style={{ marginBottom: 4 }}>Claude Code：</Typography.Paragraph>
+        <Cmd text="claude mcp add --scope user eat -- eat mcp" />
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+          若 eat 不在 PATH，把命令换成 <Typography.Text code>~/.eat/bin/eat</Typography.Text> 的完整路径。
+          其他 MCP 客户端：配置一个 stdio server，命令 <Typography.Text code>eat</Typography.Text>、参数{' '}
+          <Typography.Text code>mcp</Typography.Text>。
+        </Typography.Paragraph>
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+          这份指引也可直接获取：<Typography.Text code copyable={{ text: `${origin}/install/MCP.md` }}>{origin}/install/MCP.md</Typography.Text>
         </Typography.Paragraph>
       </Card>
     </Space>

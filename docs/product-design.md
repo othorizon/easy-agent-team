@@ -582,8 +582,8 @@ easy-agent-team/
 
 - **语言与运行时目标**：TypeScript，产物兼容 Node ≥ 18；不使用 Bun/Deno 独有 API。团队成员使用 Claude Code 时本机已有 Node，零额外门槛；
 - **打包**：tsup（底层 esbuild）打包为单文件 JS + shebang，依赖全部内联；
-- **分发（§10 决策 9）**：**不发 npm registry，平台自托管**——平台镜像内置 CLI 单文件产物，提供三个免鉴权端点：`GET /install.sh`（安装脚本：校验 Node ≥ 18，下载产物到 `~/.eat/bin` 并生成 `eat` 启动器，随后按 §10 决策 15 三层叠加配置 PATH）、`GET /install/eat.js`（单文件产物本体）、`GET /install/AGENT.md`（给 AI Agent 的安装指令）。成员一条 `curl -fsSL <平台>/install.sh | sh` 完成安装，版本天然与平台一致，升级 = 重装；
-- **安装页（§10 决策 10）**：控制台 `/install` 页面向所有成员提供「给 Agent 的一键复制指令」（主推路径）与手动分步说明；
+- **分发（§10 决策 9）**：**不发 npm registry，平台自托管**——平台镜像内置 CLI 单文件产物，提供四个免鉴权端点：`GET /install.sh`（安装脚本：校验 Node ≥ 18，下载产物到 `~/.eat/bin` 并生成 `eat` 启动器，随后按 §10 决策 15 三层叠加配置 PATH）、`GET /install/eat.js`（单文件产物本体）、`GET /install/AGENT.md`（给 AI Agent 的安装指令，**只含 CLI 流程，不提及 MCP**，§10 决策 20）、`GET /install/MCP.md`（MCP 配置指引独立板块，仅无 shell 环境的 AI 客户端需要）。成员一条 `curl -fsSL <平台>/install.sh | sh` 完成安装，版本天然与平台一致，升级 = 重装；
+- **安装页（§10 决策 10）**：控制台 `/install` 页面向所有成员提供「给 Agent 的一键复制指令」（主推路径，只装 CLI）与手动分步说明；「MCP 配置」为页面上的独立板块（决策 20），仅面向无 shell 环境的 AI 客户端；
 - **开发期**：可以用 Bun 跑测试与本地开发提速，但 CI 产物始终按 Node 目标构建，避免运行时行为差异；
 - **不选型**：bun 单二进制（目标用户全部有 Node，多平台产物让镜像膨胀数百 MB，收益为零）；Go/Rust 重写会造成与平台的技术栈分裂（CLI 与后端共享 API 类型定义的收益丢失）；Deno 生态与 npm 包（MCP SDK）仍有摩擦。
 
@@ -658,3 +658,4 @@ easy-agent-team/
 | 17 | 求助通知卡片化与通知开关 | 求助/回复通知从 `msg_type=text` 升级为**飞书卡片消息**：含请求 ID、标题、描述/回复摘要（截断）、「查看请求」按钮与「发送给 Agent」代码块（自定义机器人卡片按钮不支持复制到剪贴板，用代码块替代，客户端自带复制）；helper 登记增加**接收求助 / 接收回复**两个独立开关（默认开启），**能力描述可留空**；控制台 webhook 配置区默认折叠。卡片构建在 `packages/shared`（server 与 `scripts/test-feishu-card.mjs` 测试脚本共用）（§3.5.2、§3.10） |
 | 18 | 求助删除与沉淀默认对象 | ① 求助支持删除（控制台 / `eat ask delete` / MCP `delete_help_request`）：仅**求助者本人或管理员**，连带对话记录硬删除；**已沉淀为经验的求助不可删**（经验库引用）。② 沉淀弹窗「沉淀给我自己」**默认不勾选**（API 契约 `grantedToHelper` 默认 false）——helper 已掌握该知识，无需再进本地 sync（§3.5.3、§3.6.1） |
 | 19 | 开放注册 | 管理员可开启**自助注册**（默认关闭），并可限制**允许的邮箱后缀**（多个；留空 = 任意邮箱；服务端规整为小写带 `@` 前缀）。开启后登录页出现注册入口；注册产生 member 账号、邮箱统一小写、**注册即登录**；无审批流（要审批的团队保持关闭、走管理员建号）。设置存单行 `registration_setting` 表，`GET /api/auth/registration` 对未登录公开开关与后缀（§3.1） |
+| 20 | Agent 安装流程与 MCP 定位 | **给 Agent 的安装流程只装 CLI**（安装 → 登录 → sync → 验证），不再提及 MCP——有终端环境的 Agent 用 CLI 即覆盖全部能力。**MCP 是无 shell 环境 AI 客户端的接入方式**，配置方法拆为独立板块：安装页独立卡片 + 免鉴权 `GET /install/MCP.md`（前提为 CLI 已装已登录，MCP 复用 CLI 凭证）。平台指南 Skill 同步改为 CLI 优先表述（§3.8、§7.5） |

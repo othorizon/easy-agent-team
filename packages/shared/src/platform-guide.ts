@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 2;
+export const PLATFORM_GUIDE_VERSION = 3;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -16,7 +16,7 @@ description: 团队 AI 能力平台 easy-agent-team（eat）使用指南。当�
 
 # easy-agent-team（eat）平台使用指南
 
-eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill、MCP 配置、数据库账号、部署、人机求助与经验库都在平台上统一授权与审计。你通过 eat 的 MCP 工具（推荐）或 \`eat\` CLI 访问，身份来自用户 \`eat login\` 后保存在 \`~/.eat/credentials\` 的凭证。
+eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill、MCP 配置、数据库账号、部署、人机求助与经验库都在平台上统一授权与审计。你通过 \`eat\` CLI（推荐，有终端环境即可用）或 eat 的 MCP 工具（无 shell 环境的客户端接入方式）访问，两者能力等价；身份来自用户 \`eat login\` 后保存在 \`~/.eat/credentials\` 的凭证。
 
 ## 核心行为序列
 

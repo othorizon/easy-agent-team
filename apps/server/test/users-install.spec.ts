@@ -235,12 +235,23 @@ describe('CLI 自托管分发', () => {
     expect(r.body).toContain('grep -qF "$MARKER"');
   });
 
-  it('AGENT.md 免鉴权，给 Agent 的完整安装指令', async () => {
+  it('AGENT.md 免鉴权：只含 CLI 安装流程，不提及 MCP（决策 20）', async () => {
     const r = await api('GET', '/install/AGENT.md');
     expect(r.status).toBe(200);
     expect(String(r.headers['content-type'])).toContain('markdown');
     expect(r.body).toContain('curl -fsSL');
-    expect(r.body).toContain('claude mcp add');
+    expect(r.body).toContain('eat login --server');
+    expect(r.body).toContain('eat sync');
+    expect(String(r.body).toLowerCase()).not.toContain('mcp');
+  });
+
+  it('MCP.md 独立板块：面向无 shell 环境的客户端，含注册命令', async () => {
+    const r = await api('GET', '/install/MCP.md');
+    expect(r.status).toBe(200);
+    expect(String(r.headers['content-type'])).toContain('markdown');
+    expect(r.body).toContain('claude mcp add --scope user eat -- eat mcp');
+    expect(r.body).toContain('stdio');
+    expect(r.body).toContain('无需配置 MCP'); // 有 shell 装 CLI 即可的定位写进指引本身
   });
 
   it('eat.js：产物缺失 404；就绪后按原样下发', async () => {
