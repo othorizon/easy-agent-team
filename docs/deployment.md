@@ -27,7 +27,7 @@
 ## 3. 在 Dokploy 上部署
 
 1. **建数据库**：Dokploy → Databases → 创建 PostgreSQL（记下内部连接串），或使用自有实例；
-2. **建应用**：Applications → Create → 来源选本仓库（Git Provider 或 Git URL），构建方式选 **Dockerfile**（仓库根目录已提供）；
+2. **建应用**：Applications → Create → 来源选本仓库（Git Provider 或 Git URL），构建方式选 **Dockerfile**（仓库根目录已提供；国内网络环境把 Dockerfile 路径指定为 `Dockerfile_cn`，依赖安装走 npmmirror 源，基础镜像慢的话按其文件头注释配置 Docker 镜像加速）；
 3. **配置环境变量**：按上表填入（`DATABASE_URL` 用 Dokploy 数据库的内部地址）；
 4. **域名**：Domains 里绑定域名并开启 HTTPS，容器端口填 `3000`；
 5. **部署**：点击 Deploy。容器启动序：迁移 → 种子 → 服务；
@@ -43,12 +43,9 @@
 ## 5. 本地用 Docker 运行（试用/排障）
 
 ```bash
-docker build -t easy-agent-team .
-docker run -d --name eat -p 3000:3000 \
-  -e DATABASE_URL='postgres://user:pass@host:5432/eat' \
-  -e EAT_KEK="$(openssl rand -base64 32)" \
-  -e EAT_PUBLIC_URL='http://localhost:3000' \
-  easy-agent-team
+docker build -t easy-agent-team .          # 国内网络: docker build -f Dockerfile_cn -t easy-agent-team .
+cp .env.example .env                        # 填入 DATABASE_URL / EAT_KEK / EAT_PUBLIC_URL
+docker run -d --name eat -p 3000:3000 --env-file .env easy-agent-team
 ```
 
 注意：随手生成的 `EAT_KEK` 只适合一次性试用——换 KEK 等于丢弃所有已加密数据。
