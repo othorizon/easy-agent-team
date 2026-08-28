@@ -154,7 +154,7 @@ describe('Helper 登记', () => {
 });
 
 describe('求助流程', () => {
-  it('创建求助 → 飞书机器人收到 text 消息且加签验签通过', async () => {
+  it('创建求助 → 飞书机器人收到卡片消息且加签验签通过', async () => {
     const r = await api('POST', '/api/help-requests', {
       token: requesterToken,
       payload: {
@@ -170,10 +170,17 @@ describe('求助流程', () => {
 
     await waitFor(() => webhookHits.length >= 1);
     const payload = JSON.parse(webhookHits[0].body);
-    expect(payload.msg_type).toBe('text');
-    expect(payload.content.text).toContain('求助: 对账单');
-    expect(payload.content.text).toContain('来自：');
-    expect(payload.content.text).toContain(`/help/${requestId}`);
+    // 决策 17：卡片消息，含请求 ID / 标题 / 描述 /「查看请求」按钮 /「发送给 Agent」代码块
+    expect(payload.msg_type).toBe('interactive');
+    expect(payload.card.header.title.content).toContain('新求助');
+    const cardText = JSON.stringify(payload.card);
+    expect(cardText).toContain(requestId);
+    expect(cardText).toContain('对账单里的差异字段是什么意思');
+    expect(cardText).toContain('diff_type 字段的含义');
+    expect(cardText).toContain('查看请求');
+    expect(cardText).toContain(`/help/${requestId}`);
+    expect(cardText).toContain('发送给 Agent');
+    expect(cardText).toContain(`eat ask show ${requestId}`);
     // 飞书加签：sign = base64(HmacSHA256(key = `${timestamp}\n${secret}`, data = 空串))
     const expected = createHmac('sha256', `${payload.timestamp}\n${webhookSecret}`).update('').digest('base64');
     expect(payload.sign).toBe(expected);
@@ -243,6 +250,74 @@ describe('求助流程', () => {
       }
     }
     expect(limited).toBe(true);
+  });
+});
+
+describe('通知开关与卡片（决策 17）', () => {
+  const HELPER_PROFILE = { description: '熟悉支付对账、内部 ERP 系统', available: true };
+  let switchRequestId: string;
+
+  it('能力描述可留空，通知开关默认开启', async () => {
+    const r = await api('PUT', '/api/helpers/me', { token: thirdToken, payload: {} });
+    expect(r.status).toBe(200);
+    expect(r.body.description).toBe('');
+    expect(r.body.notifyHelp).toBe(true);
+    expect(r.body.notifyReply).toBe(true);
+    await api('DELETE', '/api/helpers/me', { token: thirdToken }); // 不留在候选名单
+  });
+
+  it('关闭「接收求助」后创建求助不推送；打开后推送恢复且描述被截断', async () => {
+    const baseline = webhookHits.length;
+    await api('PUT', '/api/helpers/me', {
+      token: helperToken,
+      payload: { ...HELPER_PROFILE, webhookUrl, notifyHelp: false },
+    });
+    const muted = await api('POST', '/api/help-requests', {
+      token: thirdToken,
+      payload: { title: '开关验证：关闭接收求助', description: '此求助不应产生推送', tried: '无', helperUserId: helperId },
+    });
+    expect(muted.status).toBe(201);
+    await new Promise((r) => setTimeout(r, 600));
+    expect(webhookHits.length).toBe(baseline);
+
+    await api('PUT', '/api/helpers/me', {
+      token: helperToken,
+      payload: { ...HELPER_PROFILE, webhookUrl, notifyReply: false },
+    });
+    const longDesc = '这是一段用来验证卡片截断效果的很长描述。'.repeat(10);
+    const r = await api('POST', '/api/help-requests', {
+      token: thirdToken,
+      payload: { title: '开关验证：重新打开接收求助', description: longDesc, tried: '无', helperUserId: helperId },
+    });
+    switchRequestId = r.body.id;
+    await waitFor(() => webhookHits.length >= baseline + 1);
+    const cardText = JSON.stringify(JSON.parse(webhookHits[baseline].body).card);
+    expect(cardText).toContain('…');
+    expect(cardText).not.toContain(longDesc);
+  });
+
+  it('关闭「接收回复」后追问不推送；打开后收到回复卡片', async () => {
+    const baseline = webhookHits.length;
+    // 上一用例已把 helper 的 notifyReply 关掉：求助者追问 → helper 不收推送
+    await api('POST', `/api/help-requests/${switchRequestId}/reply`, {
+      token: thirdToken,
+      payload: { content: '这条追问不应产生推送' },
+    });
+    await new Promise((r) => setTimeout(r, 600));
+    expect(webhookHits.length).toBe(baseline);
+
+    await api('PUT', '/api/helpers/me', { token: helperToken, payload: { ...HELPER_PROFILE, webhookUrl } });
+    await api('POST', `/api/help-requests/${switchRequestId}/reply`, {
+      token: thirdToken,
+      payload: { content: '这条追问应收到回复卡片' },
+    });
+    await waitFor(() => webhookHits.length >= baseline + 1);
+    const payload = JSON.parse(webhookHits[baseline].body);
+    expect(payload.msg_type).toBe('interactive');
+    expect(payload.card.header.title.content).toContain('新回复');
+    const cardText = JSON.stringify(payload.card);
+    expect(cardText).toContain('这条追问应收到回复卡片');
+    expect(cardText).toContain('发送给 Agent');
   });
 });
 

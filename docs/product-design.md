@@ -238,8 +238,8 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 
 **② 可求助者列表（Helper Registry）**
 - 每个用户可**把自己登记**进可求助列表，登记内容：
-  - **能力描述**：一段自然语言，描述自己擅长的领域——**这段描述会被 AI 读取，用于选择向谁求助**；
-  - **飞书机器人 Webhook 地址**（可选）：新求助/新消息以飞书消息推送到指定群（§10 决策 16）；机器人开启「加签」时把飞书的签名密钥一并粘贴进来（加密存储，不回显）；
+  - **能力描述**：一段自然语言，描述自己擅长的领域——**这段描述会被 AI 读取，用于选择向谁求助**；可留空；
+  - **飞书机器人 Webhook 配置**（可选，控制台里默认折叠、展开编辑）：Webhook 地址 + 「加签」密钥（机器人开启签名校验时从飞书粘贴，加密存储、不回显）+ 两个独立开关——**接收求助**（找我的新求助推送到群）与**接收回复**（我参与的求助有新回复时推送到群），默认均开启（§10 决策 16/17）；
   - 接单状态：`可接单` / `勿扰`（临时下线，不出现在 AI 的候选名单里）。
 
 AI 发起求助时可以：指定 skill、指定具体 helper，或者传 `auto` 由 AI 先 `list_helpers` 读描述后自选。
@@ -390,7 +390,7 @@ CLI 与 MCP Server 同一个产物分发（平台自托管下载：`curl -fsSL <
 
 - 平台级出站 webhook：求助创建/回复、权限申请/审批结果、部署完成/失败；
 - 用户级 webhook：helper 登记时配置的告警地址（3.5.2）、个人通知偏好；
-- 出口为**飞书群自定义机器人**格式（§10 决策 16）：`msg_type=text`，内容为事件摘要 + 来源 + 详情链接，不携带任何密钥值；机器人开启「加签」时按飞书规范附 `timestamp` + `sign`（HmacSHA256(key=`${timestamp}\n${secret}`, data=空) 后 base64），签名密钥由用户从飞书粘贴、平台加密存储；按响应体 `code` 判定成败（飞书失败常为 HTTP 200 + 非零 code）。其他 IM/通用端点待有需求再扩展；
+- 出口为**飞书群自定义机器人**格式（§10 决策 16/17）：求助/回复为 `msg_type=interactive` 卡片消息——含请求 ID、标题、描述/回复摘要（截断）、「查看请求」按钮（跳详情页）与「发送给 Agent」代码块（自定义机器人卡片按钮不支持复制到剪贴板，代码块自带复制按钮，整段复制发给 Agent 即可让它通过 MCP/CLI 接手），不携带任何密钥值；机器人开启「加签」时按飞书规范附 `timestamp` + `sign`（HmacSHA256(key=`${timestamp}\n${secret}`, data=空) 后 base64），签名密钥由用户从飞书粘贴、平台加密存储；按响应体 `code` 判定成败（飞书失败常为 HTTP 200 + 非零 code）。卡片构建逻辑在 `packages/shared`，`scripts/test-feishu-card.mjs` 可传入 webhook 实测卡片效果。其他 IM/通用端点待有需求再扩展；
 - 失败重试（指数退避，最多 5 次），控制台可查推送记录。
 
 ---
@@ -471,7 +471,7 @@ erDiagram
 **db_instance**：id, name, engine(mysql|postgres), host, port, admin_credentials_encrypted, note
 **db_assignment**：id, instance_id, user_id, db_name, db_user, purpose, environment_id(生成的环境), status(active|disabled|deleted), created_at
 
-**helper_profile**：user_id, description(AI 会读取), webhook_url, webhook_secret, available(bool)
+**helper_profile**：user_id, description(AI 会读取，可空), webhook_url, webhook_secret, notify_help(bool), notify_reply(bool), available(bool)
 
 **help_request**：id, requester_id, helper_id, skill_id(nullable，经 skill 入口发起时), title, description, context, tried(已尝试内容), status(open|answered|resolved|closed), created_at
 **help_message**：id, request_id, sender_id, content, created_at
@@ -652,4 +652,5 @@ easy-agent-team/
 | 13 | 数据库分配的删除语义 | **仅记录级软删除，平台不做物理 DROP**：删除只标记记录 deleted 并移除凭证环境，实例上的数据库与账号保留，物理清理由管理员在实例上手动执行；控制台二次确认时明确提示。rejected 的记录同样可删（§3.4） |
 | 14 | `eat sync` 安装范围参数 | 类 npx skills 的 global/project 语义：默认/`--global` 落 `~/.agents/skills/` + 软链 `~/.claude/skills/`（决策 12 布局不变）；`--project` 落当前项目 `./.agents/skills/` + **相对**软链 `./.claude/skills/`；`--dir` 仍为自定义目录不建软链；三者互斥（§3.2.3） |
 | 15 | 安装脚本 PATH 落地 | **三层叠加（非递进兜底），全部幂等**：① 软链 `~/.local/bin/eat`（XDG 惯例，无需 sudo）；② `/usr/local/bin` 可写时软链（系统级 PATH，非交互 shell 可见）；③ 幂等写 shell 配置——zsh 写 `~/.zshenv`（非交互也加载，而非 `.zshrc`），bash 写 `~/.bashrc`，登录 shell 写 `~/.bash_profile`（仅存在 `~/.profile` 且无 `~/.bash_profile` 时改写 `~/.profile`，避免屏蔽），marker 注释去重。三层互为冗余覆盖不同 shell 场景，保证 Agent 的非交互子进程也能直接调 `eat`（§7.5） |
-| 16 | 求助 webhook 通知形态 | **只支持飞书群自定义机器人**（替换最初的「通用 JSON + 平台生成 HMAC 密钥」设计）：消息为飞书 `msg_type=text`；「加签」密钥由**用户从飞书粘贴**（可选、加密存储、不回显，留空更新表示保持不变，清空地址一并清除），平台不再生成/展示自己的签名密钥；按响应体 code 判定投递成败。钉钉/企微/通用端点待有需求再扩展（§3.10） |
+| 16 | 求助 webhook 通知形态 | **只支持飞书群自定义机器人**（替换最初的「通用 JSON + 平台生成 HMAC 密钥」设计）：「加签」密钥由**用户从飞书粘贴**（可选、加密存储、不回显，留空更新表示保持不变，清空地址一并清除），平台不再生成/展示自己的签名密钥；按响应体 code 判定投递成败。钉钉/企微/通用端点待有需求再扩展（§3.10）。消息格式后升级为卡片（决策 17） |
+| 17 | 求助通知卡片化与通知开关 | 求助/回复通知从 `msg_type=text` 升级为**飞书卡片消息**：含请求 ID、标题、描述/回复摘要（截断）、「查看请求」按钮与「发送给 Agent」代码块（自定义机器人卡片按钮不支持复制到剪贴板，用代码块替代，客户端自带复制）；helper 登记增加**接收求助 / 接收回复**两个独立开关（默认开启），**能力描述可留空**；控制台 webhook 配置区默认折叠。卡片构建在 `packages/shared`（server 与 `scripts/test-feishu-card.mjs` 测试脚本共用）（§3.5.2、§3.10） |

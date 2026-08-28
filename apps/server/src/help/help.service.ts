@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { and, desc, eq, gt, sql } from 'drizzle-orm';
+import { buildHelpFeishuCard, type HelpFeishuCardInput } from '@eat/shared';
 import type { CreateHelpRequest, HelpRequestDetail, HelpRequestInfo, HelpStatus } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
@@ -74,9 +75,10 @@ export class HelpService {
     };
   }
 
-  private notifyUser(userId: string, event: string, data: Record<string, unknown>, summary: string): void {
-    void this.helpers.webhookOf(userId).then((wh) => {
-      if (wh) this.webhook.notify(event, wh.url, wh.secret, data, summary);
+  /** 飞书卡片通知（决策 17）。按接收方的「接收求助/接收回复」开关过滤 */
+  private notifyUser(userId: string, event: 'help.created' | 'help.replied', card: HelpFeishuCardInput, summary: string): void {
+    void this.helpers.webhookOf(userId, event === 'help.created' ? 'help' : 'reply').then((wh) => {
+      if (wh) this.webhook.notify(event, wh.url, wh.secret, buildHelpFeishuCard(card), summary);
     });
   }
 
@@ -128,10 +130,11 @@ export class HelpService {
       helperId,
       'help.created',
       {
+        kind: 'request',
         requestId: row.id,
         title: dto.title,
-        requester: info.requesterName,
-        skillSlug: info.skillSlug,
+        excerpt: dto.description,
+        from: info.requesterName,
         url: `${loadConfig().publicUrl}/help/${row.id}`,
       },
       `求助: ${dto.title}`,
@@ -196,7 +199,7 @@ export class HelpService {
     this.notifyUser(
       other,
       'help.replied',
-      { requestId: id, title: row.title, from: user.name, url: `${loadConfig().publicUrl}/help/${id}` },
+      { kind: 'reply', requestId: id, title: row.title, excerpt: content, from: user.name, url: `${loadConfig().publicUrl}/help/${id}` },
       `求助回复: ${row.title}`,
     );
     return this.detail(user, id);
