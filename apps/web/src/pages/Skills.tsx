@@ -1,126 +1,221 @@
 import type { PushSkillRequest, SkillInfo } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, Card, Form, Input, Modal, Segmented, Table, Tag, Typography } from 'antd';
+import { Plus } from 'lucide-react';
 import { useState } from 'react';
+import { Controller, useForm } from 'react-hook-form';
 import { Link } from 'react-router-dom';
+import { toast } from 'sonner';
 import { api, ApiError } from '../api';
+import { InlineCode } from '../components/code';
+import { Empty } from '../components/empty';
+import { Field, rules } from '../components/form';
+import { PageHeader } from '../components/page-header';
+import { Segmented } from '../components/segmented';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Card, CardContent } from '../components/ui/card';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { Input, Textarea } from '../components/ui/input';
+import { TableSkeleton } from '../components/ui/skeleton';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 
 export function SkillsPage() {
-  const { message } = App.useApp();
   const queryClient = useQueryClient();
   const [creating, setCreating] = useState(false);
 
   const skills = useQuery({ queryKey: ['skills'], queryFn: () => api<SkillInfo[]>('GET', '/api/skills') });
 
   const toggleSubscribe = useMutation({
-    mutationFn: (s: SkillInfo) =>
-      api(s.subscribed ? 'DELETE' : 'POST', `/api/skills/${s.slug}/subscribe`),
+    mutationFn: (s: SkillInfo) => api(s.subscribed ? 'DELETE' : 'POST', `/api/skills/${s.slug}/subscribe`),
     onSuccess: (_data, s) => {
-      message.success(s.subscribed ? '已退订' : '已订阅，本地运行 eat sync 即可落地');
+      toast.success(s.subscribed ? '已退订' : '已订阅，本地运行 eat sync 即可落地');
       void queryClient.invalidateQueries({ queryKey: ['skills'] });
     },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '操作失败'),
   });
 
   const create = useMutation({
     mutationFn: (v: PushSkillRequest) => api('POST', '/api/skills/push', v),
     onSuccess: () => {
-      message.success('Skill 已创建');
+      toast.success('Skill 已创建');
       setCreating(false);
       void queryClient.invalidateQueries({ queryKey: ['skills'] });
     },
-    onError: (err) => message.error(err instanceof ApiError ? err.message : '创建失败'),
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '创建失败'),
   });
 
   return (
-    <Card
-      title="Skill"
-      extra={
-        <Button type="primary" onClick={() => setCreating(true)}>
-          创建 Skill
-        </Button>
-      }
-    >
-      <Typography.Paragraph type="secondary">
-        订阅后在本地运行 <Typography.Text code>eat sync</Typography.Text> 即落地到{' '}
-        <Typography.Text code>~/.claude/skills</Typography.Text>；本地已有的 skill 目录可用{' '}
-        <Typography.Text code>eat skill push &lt;目录&gt;</Typography.Text> 上传纳管。
-      </Typography.Paragraph>
-      <Table
-        rowKey="id"
-        loading={skills.isLoading}
-        dataSource={skills.data ?? []}
-        pagination={false}
-        columns={[
-          {
-            title: 'Skill',
-            dataIndex: 'slug',
-            render: (slug: string, s) => (
-              <Link to={`/skills/${slug}`}>
-                <Typography.Text code>{slug}</Typography.Text> {s.name}
-              </Link>
-            ),
-          },
-          { title: '触发描述', dataIndex: 'description', ellipsis: true },
-          { title: '作者', dataIndex: 'ownerName', width: 110 },
-          { title: '版本', dataIndex: 'currentVersion', width: 70, render: (v: number) => `v${v}` },
-          {
-            title: '可见性',
-            dataIndex: 'visibility',
-            width: 90,
-            render: (v: string) => (v === 'private' ? <Tag>私有</Tag> : <Tag color="blue">团队</Tag>),
-          },
-          {
-            title: '订阅',
-            width: 100,
-            render: (_: unknown, s: SkillInfo) => (
-              <Button
-                size="small"
-                type={s.subscribed ? 'default' : 'primary'}
-                loading={toggleSubscribe.isPending}
-                onClick={() => toggleSubscribe.mutate(s)}
-              >
-                {s.subscribed ? '退订' : '订阅'}
-              </Button>
-            ),
-          },
-        ]}
+    <div className="space-y-5">
+      <PageHeader
+        title="Skill"
+        description={
+          <>
+            订阅后在本地运行 <InlineCode>eat sync</InlineCode> 即落地到 <InlineCode>~/.claude/skills</InlineCode>
+            ；本地已有的 skill 目录可用 <InlineCode>eat skill push &lt;目录&gt;</InlineCode> 上传纳管。
+          </>
+        }
+        actions={
+          <Button onClick={() => setCreating(true)}>
+            <Plus />
+            创建 Skill
+          </Button>
+        }
       />
-      <Modal title="创建 Skill" open={creating} onCancel={() => setCreating(false)} footer={null} width={640} destroyOnHidden>
-        <Form
-          layout="vertical"
-          onFinish={(v: PushSkillRequest & { private?: boolean }) =>
-            create.mutate({ ...v, files: [], visibility: v.private ? 'private' : 'team' })
-          }
+      <Card>
+        <CardContent>
+          {skills.isLoading ? (
+            <TableSkeleton />
+          ) : (skills.data ?? []).length === 0 ? (
+            <Empty text="还没有 Skill" />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Skill</TableHead>
+                  <TableHead className="hidden md:table-cell">触发描述</TableHead>
+                  <TableHead className="hidden w-24 lg:table-cell">作者</TableHead>
+                  <TableHead className="hidden w-16 sm:table-cell">版本</TableHead>
+                  <TableHead className="hidden w-20 sm:table-cell">可见性</TableHead>
+                  <TableHead className="w-20">订阅</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(skills.data ?? []).map((s) => (
+                  <TableRow key={s.id}>
+                    <TableCell>
+                      <Link to={`/skills/${s.slug}`} className="group inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                        <InlineCode className="text-primary group-hover:underline">{s.slug}</InlineCode>
+                        <span className="font-medium">{s.name}</span>
+                      </Link>
+                      <div className="mt-0.5 truncate text-xs text-muted-foreground md:hidden">{s.description}</div>
+                    </TableCell>
+                    <TableCell className="hidden max-w-md truncate text-muted-foreground md:table-cell">
+                      {s.description}
+                    </TableCell>
+                    <TableCell className="hidden text-muted-foreground lg:table-cell">{s.ownerName}</TableCell>
+                    <TableCell className="hidden tabular-nums text-muted-foreground sm:table-cell">
+                      v{s.currentVersion}
+                    </TableCell>
+                    <TableCell className="hidden sm:table-cell">
+                      {s.visibility === 'private' ? <Badge variant="outline">私有</Badge> : <Badge>团队</Badge>}
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        size="sm"
+                        variant={s.subscribed ? 'outline' : 'default'}
+                        loading={toggleSubscribe.isPending && toggleSubscribe.variables?.id === s.id}
+                        onClick={() => toggleSubscribe.mutate(s)}
+                      >
+                        {s.subscribed ? '退订' : '订阅'}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {creating && (
+        <CreateSkillDialog
+          pending={create.isPending}
+          onClose={() => setCreating(false)}
+          onSubmit={(v) => create.mutate(v)}
+        />
+      )}
+    </div>
+  );
+}
+
+interface CreateFormValues {
+  slug: string;
+  name: string;
+  description: string;
+  content: string;
+  private: boolean;
+}
+
+function CreateSkillDialog({
+  pending,
+  onClose,
+  onSubmit,
+}: {
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: (v: PushSkillRequest) => void;
+}) {
+  const { register, handleSubmit, control, formState: { errors } } = useForm<CreateFormValues>({
+    defaultValues: { slug: '', name: '', description: '', content: '', private: false },
+  });
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>创建 Skill</DialogTitle>
+        </DialogHeader>
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={handleSubmit((v) =>
+            onSubmit({
+              slug: v.slug,
+              name: v.name,
+              description: v.description,
+              content: v.content,
+              files: [],
+              changelog: '',
+              visibility: v.private ? 'private' : 'team',
+            }),
+          )}
         >
-          <Form.Item
-            name="slug"
-            label="标识（slug，将作为本地目录名）"
-            rules={[{ required: true }, { pattern: /^[a-z0-9][a-z0-9-]*$/, message: '仅小写字母、数字、连字符' }]}
-          >
-            <Input placeholder="weekly-report" />
-          </Form.Item>
-          <Form.Item name="name" label="名称" rules={[{ required: true }]}>
-            <Input placeholder="运营周报生成" />
-          </Form.Item>
-          <Form.Item name="description" label="触发描述（AI 靠它判断何时使用这个 skill）" initialValue="">
-            <Input.TextArea rows={2} placeholder="根据运营数据生成周报，适用于每周一汇报" />
-          </Form.Item>
-          <Form.Item name="content" label="SKILL.md 正文" rules={[{ required: true }]}>
-            <Input.TextArea rows={10} style={{ fontFamily: 'monospace' }} placeholder={'# 周报生成\n\n步骤……'} />
-          </Form.Item>
-          <Form.Item name="private" label="可见性" initialValue={false}>
-            <Segmented
-              options={[
-                { label: '团队可见', value: false },
-                { label: '私有', value: true },
-              ]}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="标识（slug）" htmlFor="skill-slug" required error={errors.slug?.message} hint="将作为本地目录名">
+              <Input
+                id="skill-slug"
+                placeholder="weekly-report"
+                className="font-mono"
+                aria-invalid={!!errors.slug}
+                {...register('slug', { required: '请输入标识', pattern: rules.slug })}
+              />
+            </Field>
+            <Field label="名称" htmlFor="skill-name" required error={errors.name?.message}>
+              <Input id="skill-name" placeholder="运营周报生成" aria-invalid={!!errors.name} {...register('name', { required: '请输入名称' })} />
+            </Field>
+          </div>
+          <Field label="触发描述" htmlFor="skill-desc" hint="AI 靠它判断何时使用这个 skill">
+            <Textarea id="skill-desc" rows={2} placeholder="根据运营数据生成周报，适用于每周一汇报" {...register('description')} />
+          </Field>
+          <Field label="SKILL.md 正文" htmlFor="skill-content" required error={errors.content?.message}>
+            <Textarea
+              id="skill-content"
+              rows={10}
+              className="font-mono text-[13px]"
+              placeholder={'# 周报生成\n\n步骤……'}
+              aria-invalid={!!errors.content}
+              {...register('content', { required: '请输入正文' })}
             />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" loading={create.isPending} block>
+          </Field>
+          <Field label="可见性">
+            <Controller
+              control={control}
+              name="private"
+              render={({ field }) => (
+                <Segmented
+                  value={field.value}
+                  onChange={field.onChange}
+                  options={[
+                    { label: '团队可见', value: false },
+                    { label: '私有', value: true },
+                  ]}
+                />
+              )}
+            />
+          </Field>
+          <Button type="submit" loading={pending} className="w-full">
             创建（v1）
           </Button>
-        </Form>
-      </Modal>
-    </Card>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

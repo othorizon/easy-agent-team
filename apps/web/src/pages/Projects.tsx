@@ -1,13 +1,28 @@
 import type { CreateProjectRequest, DeploymentInfo, ProjectInfo } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, Card, Form, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
+import { Plus, X } from 'lucide-react';
 import { useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
+import { InlineCode } from '../components/code';
+import { Combobox } from '../components/combobox';
+import { Empty } from '../components/empty';
+import { Field, rules } from '../components/form';
+import { PageHeader } from '../components/page-header';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Card, CardContent } from '../components/ui/card';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { Input, Textarea } from '../components/ui/input';
+import { TableSkeleton } from '../components/ui/skeleton';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { formatDateTime } from '../lib/utils';
 
-const STATUS_TAG: Record<string, JSX.Element> = {
-  deploying: <Tag color="blue">部署中</Tag>,
-  success: <Tag color="green">成功</Tag>,
-  failed: <Tag color="red">失败</Tag>,
+const STATUS_BADGE: Record<string, JSX.Element> = {
+  deploying: <Badge>部署中</Badge>,
+  success: <Badge variant="success">成功</Badge>,
+  failed: <Badge variant="destructive">失败</Badge>,
 };
 
 interface UserRow {
@@ -17,18 +32,21 @@ interface UserRow {
 }
 
 export function ProjectsPage() {
-  const { message } = App.useApp();
   const queryClient = useQueryClient();
   const me = getStoredUser();
   const [creating, setCreating] = useState(false);
-  const [viewing, setViewing] = useState<ProjectInfo | null>(null);
+  const [viewingSlug, setViewingSlug] = useState<string | null>(null);
 
   const projects = useQuery({ queryKey: ['projects'], queryFn: () => api<ProjectInfo[]>('GET', '/api/projects') });
   const users = useQuery({ queryKey: ['users'], queryFn: () => api<UserRow[]>('GET', '/api/users') });
+
+  // 弹窗数据从最新列表里取，成员变更后自动刷新
+  const viewing = viewingSlug ? (projects.data ?? []).find((p) => p.slug === viewingSlug) ?? null : null;
+
   const deployments = useQuery({
-    queryKey: ['deployments', viewing?.slug],
-    queryFn: () => api<DeploymentInfo[]>('GET', `/api/projects/${viewing!.slug}/deployments`),
-    enabled: viewing !== null,
+    queryKey: ['deployments', viewingSlug],
+    queryFn: () => api<DeploymentInfo[]>('GET', `/api/projects/${viewingSlug}/deployments`),
+    enabled: viewingSlug !== null,
     refetchInterval: 10_000,
   });
 
@@ -37,153 +55,248 @@ export function ProjectsPage() {
   const create = useMutation({
     mutationFn: (v: CreateProjectRequest) => api('POST', '/api/projects', v),
     onSuccess: () => {
-      message.success('项目已创建');
+      toast.success('项目已创建');
       setCreating(false);
       invalidate();
     },
-    onError: (err) => message.error(err instanceof ApiError ? err.message : '创建失败'),
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '创建失败'),
   });
 
   const addMember = useMutation({
     mutationFn: (v: { slug: string; userId: string }) => api('POST', `/api/projects/${v.slug}/members`, { userId: v.userId }),
     onSuccess: () => {
-      message.success('已添加成员');
+      toast.success('已添加成员');
       invalidate();
     },
-    onError: (err) => message.error(err instanceof ApiError ? err.message : '添加失败'),
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '添加失败'),
   });
 
   const removeMember = useMutation({
     mutationFn: (v: { slug: string; userId: string }) => api('DELETE', `/api/projects/${v.slug}/members/${v.userId}`),
     onSuccess: () => {
-      message.success('已移除');
+      toast.success('已移除');
       invalidate();
     },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '移除失败'),
   });
 
   const canManage = (p: ProjectInfo) => me?.role === 'admin' || p.ownerId === me?.id;
 
   return (
-    <Card title="部署项目" extra={<Button type="primary" onClick={() => setCreating(true)}>创建项目</Button>}>
-      <Typography.Paragraph type="secondary">
-        项目绑定 Dokploy 上的应用。部署从本地发起：项目目录里运行{' '}
-        <Typography.Text code>eat deploy {'<slug>'}</Typography.Text>
-        ——CLI 会先做本地密钥扫描（含平台密钥指纹匹配），通过后才触发 Dokploy 部署；AI 也可经 MCP 的 trigger_deploy 自助部署。
-      </Typography.Paragraph>
-      <Table
-        rowKey="id"
-        loading={projects.isLoading}
-        dataSource={projects.data ?? []}
-        pagination={false}
-        locale={{ emptyText: '暂无项目' }}
-        columns={[
-          {
-            title: '项目',
-            dataIndex: 'slug',
-            render: (s: string, p) => (
-              <a onClick={() => setViewing(p)}>
-                <Typography.Text code>{s}</Typography.Text> {p.name}
-              </a>
-            ),
-          },
-          { title: 'Dokploy 应用', dataIndex: 'dokployApplicationId', render: (v: string) => <Typography.Text code>{v}</Typography.Text> },
-          { title: 'Owner', dataIndex: 'ownerName', width: 100 },
-          {
-            title: '成员',
-            render: (_: unknown, p: ProjectInfo) => (p.members.length > 0 ? p.members.map((m) => m.name).join('、') : '—'),
-          },
-          {
-            title: '我可部署',
-            dataIndex: 'canDeploy',
-            width: 90,
-            render: (v: boolean) => (v ? <Tag color="green">是</Tag> : <Tag>否</Tag>),
-          },
-        ]}
+    <div className="space-y-5">
+      <PageHeader
+        title="部署项目"
+        description={
+          <>
+            项目绑定 Dokploy 上的应用。部署从本地发起：项目目录里运行 <InlineCode>eat deploy &lt;slug&gt;</InlineCode>
+            ——CLI 会先做本地密钥扫描（含平台密钥指纹匹配），通过后才触发 Dokploy 部署；AI 也可经 MCP 的 trigger_deploy 自助部署。
+          </>
+        }
+        actions={
+          <Button onClick={() => setCreating(true)}>
+            <Plus />
+            创建项目
+          </Button>
+        }
       />
+      <Card>
+        <CardContent>
+          {projects.isLoading ? (
+            <TableSkeleton />
+          ) : (projects.data ?? []).length === 0 ? (
+            <Empty text="暂无项目" />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>项目</TableHead>
+                  <TableHead className="hidden md:table-cell">Dokploy 应用</TableHead>
+                  <TableHead className="hidden w-24 sm:table-cell">Owner</TableHead>
+                  <TableHead className="hidden lg:table-cell">成员</TableHead>
+                  <TableHead className="w-20">我可部署</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(projects.data ?? []).map((p) => (
+                  <TableRow key={p.id}>
+                    <TableCell>
+                      <button
+                        type="button"
+                        className="group inline-flex cursor-pointer flex-wrap items-center gap-x-2 gap-y-0.5 text-left"
+                        onClick={() => setViewingSlug(p.slug)}
+                      >
+                        <InlineCode className="text-primary group-hover:underline">{p.slug}</InlineCode>
+                        <span className="font-medium">{p.name}</span>
+                      </button>
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell">
+                      <InlineCode>{p.dokployApplicationId}</InlineCode>
+                    </TableCell>
+                    <TableCell className="hidden text-muted-foreground sm:table-cell">{p.ownerName}</TableCell>
+                    <TableCell className="hidden max-w-xs truncate text-muted-foreground lg:table-cell">
+                      {p.members.length > 0 ? p.members.map((m) => m.name).join('、') : '—'}
+                    </TableCell>
+                    <TableCell>
+                      {p.canDeploy ? <Badge variant="success">是</Badge> : <Badge variant="outline">否</Badge>}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
 
-      <Modal title="创建项目" open={creating} onCancel={() => setCreating(false)} footer={null} destroyOnHidden>
-        <Form layout="vertical" onFinish={(v: CreateProjectRequest) => create.mutate(v)}>
-          <Form.Item name="slug" label="标识（slug）" rules={[{ required: true }, { pattern: /^[a-z0-9][a-z0-9-]*$/, message: '仅小写字母、数字、连字符' }]}>
-            <Input placeholder="crm-tool" />
-          </Form.Item>
-          <Form.Item name="name" label="名称" rules={[{ required: true }]}>
-            <Input placeholder="CRM 小工具" />
-          </Form.Item>
-          <Form.Item name="dokployApplicationId" label="Dokploy Application ID" rules={[{ required: true }]}>
-            <Input placeholder="在 Dokploy 控制台的应用详情里查看" style={{ fontFamily: 'monospace' }} />
-          </Form.Item>
-          <Form.Item name="repoUrl" label="仓库地址（可选）" initialValue="">
-            <Input placeholder="https://git.example.com/crm" />
-          </Form.Item>
-          <Form.Item name="description" label="说明" initialValue="">
-            <Input.TextArea rows={2} />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" loading={create.isPending} block>创建</Button>
-        </Form>
-      </Modal>
+      {creating && (
+        <CreateProjectDialog pending={create.isPending} onClose={() => setCreating(false)} onSubmit={(v) => create.mutate(v)} />
+      )}
 
-      <Modal
-        title={viewing && <>项目 <Typography.Text code>{viewing.slug}</Typography.Text></>}
-        open={viewing !== null}
-        onCancel={() => setViewing(null)}
-        footer={null}
-        width={720}
-        destroyOnHidden
-      >
-        {viewing && (
-          <Space direction="vertical" size="large" style={{ width: '100%' }}>
-            {canManage(viewing) && (
-              <div>
-                <Typography.Text strong>成员管理</Typography.Text>
-                <div style={{ marginTop: 8 }}>
-                  {viewing.members.map((m) => (
-                    <Tag key={m.userId} closable onClose={() => removeMember.mutate({ slug: viewing.slug, userId: m.userId })}>
-                      {m.name}
-                    </Tag>
-                  ))}
-                  <Select
-                    size="small"
-                    style={{ width: 220 }}
-                    placeholder="添加成员…"
-                    value={null}
-                    showSearch
-                    optionFilterProp="label"
-                    options={(users.data ?? [])
-                      .filter((u) => u.id !== viewing.ownerId && !viewing.members.some((m) => m.userId === u.id))
-                      .map((u) => ({ value: u.id, label: `${u.name} <${u.email}>` }))}
-                    onSelect={(userId) => {
-                      if (typeof userId === 'string') addMember.mutate({ slug: viewing.slug, userId });
-                    }}
-                  />
+      {viewing && (
+        <Dialog open onOpenChange={(open) => !open && setViewingSlug(null)}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle className="flex flex-wrap items-center gap-2">
+                项目 <InlineCode>{viewing.slug}</InlineCode> {viewing.name}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="flex flex-col gap-5">
+              {canManage(viewing) && (
+                <div>
+                  <h3 className="mb-2 text-sm font-semibold">成员管理</h3>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {viewing.members.map((m) => (
+                      <Badge key={m.userId} variant="secondary" className="gap-1 pr-1">
+                        {m.name}
+                        <button
+                          type="button"
+                          aria-label={`移除 ${m.name}`}
+                          className="rounded-full p-0.5 transition-colors hover:bg-foreground/10 cursor-pointer"
+                          onClick={() => removeMember.mutate({ slug: viewing.slug, userId: m.userId })}
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                    <div className="w-52">
+                      <Combobox
+                        groups={[
+                          {
+                            options: (users.data ?? [])
+                              .filter((u) => u.id !== viewing.ownerId && !viewing.members.some((m) => m.userId === u.id))
+                              .map((u) => ({ value: u.id, label: u.name, hint: u.email })),
+                          },
+                        ]}
+                        value={null}
+                        onChange={(userId) => addMember.mutate({ slug: viewing.slug, userId })}
+                        placeholder="添加成员…"
+                        searchPlaceholder="搜索姓名或邮箱…"
+                        className="h-7 text-xs"
+                      />
+                    </div>
+                  </div>
                 </div>
+              )}
+              <div>
+                <h3 className="mb-2 text-sm font-semibold">部署历史</h3>
+                {deployments.isLoading ? (
+                  <TableSkeleton rows={2} />
+                ) : (deployments.data ?? []).length === 0 ? (
+                  <Empty text="暂无部署。项目目录运行 eat deploy 发起。" className="py-6" />
+                ) : (
+                  <Table className="min-w-[560px]">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-36">时间</TableHead>
+                        <TableHead className="w-20">状态</TableHead>
+                        <TableHead className="w-24">触发人</TableHead>
+                        <TableHead>检查</TableHead>
+                        <TableHead>备注</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(deployments.data ?? []).map((d) => (
+                        <TableRow key={d.id}>
+                          <TableCell className="text-muted-foreground">{formatDateTime(d.createdAt)}</TableCell>
+                          <TableCell>{STATUS_BADGE[d.status]}</TableCell>
+                          <TableCell className="text-muted-foreground">{d.triggeredByName}</TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {d.report ? `扫描 ${d.report.scannedFiles} 文件 / ${d.report.findings.length} 问题` : '—'}
+                          </TableCell>
+                          <TableCell className="max-w-48 truncate text-muted-foreground" title={d.error ?? undefined}>
+                            {d.error ?? '—'}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
               </div>
-            )}
-            <div>
-              <Typography.Text strong>部署历史</Typography.Text>
-              <Table
-                rowKey="id"
-                size="small"
-                style={{ marginTop: 8 }}
-                loading={deployments.isLoading}
-                dataSource={deployments.data ?? []}
-                pagination={false}
-                locale={{ emptyText: '暂无部署。项目目录运行 eat deploy 发起。' }}
-                columns={[
-                  { title: '时间', dataIndex: 'createdAt', width: 150, render: (v: string) => v.slice(0, 16).replace('T', ' ') },
-                  { title: '状态', dataIndex: 'status', width: 90, render: (s: string) => STATUS_TAG[s] },
-                  { title: '触发人', dataIndex: 'triggeredByName', width: 100 },
-                  {
-                    title: '检查',
-                    render: (_: unknown, d: DeploymentInfo) =>
-                      d.report ? `扫描 ${d.report.scannedFiles} 文件 / ${d.report.findings.length} 问题` : '—',
-                  },
-                  { title: '备注', dataIndex: 'error', ellipsis: true, render: (v: string | null) => v ?? '—' },
-                ]}
-              />
             </div>
-          </Space>
-        )}
-      </Modal>
-    </Card>
+          </DialogContent>
+        </Dialog>
+      )}
+    </div>
+  );
+}
+
+function CreateProjectDialog({
+  pending,
+  onClose,
+  onSubmit,
+}: {
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: (v: CreateProjectRequest) => void;
+}) {
+  const { register, handleSubmit, formState: { errors } } = useForm<CreateProjectRequest>({
+    defaultValues: { slug: '', name: '', dokployApplicationId: '', repoUrl: '', description: '' },
+  });
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>创建项目</DialogTitle>
+        </DialogHeader>
+        <form className="flex flex-col gap-4" onSubmit={handleSubmit(onSubmit)}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="标识（slug）" htmlFor="proj-slug" required error={errors.slug?.message}>
+              <Input
+                id="proj-slug"
+                placeholder="crm-tool"
+                className="font-mono"
+                aria-invalid={!!errors.slug}
+                {...register('slug', { required: '请输入标识', pattern: rules.slug })}
+              />
+            </Field>
+            <Field label="名称" htmlFor="proj-name" required error={errors.name?.message}>
+              <Input id="proj-name" placeholder="CRM 小工具" aria-invalid={!!errors.name} {...register('name', { required: '请输入名称' })} />
+            </Field>
+          </div>
+          <Field
+            label="Dokploy Application ID"
+            htmlFor="proj-app"
+            required
+            error={errors.dokployApplicationId?.message}
+            hint="在 Dokploy 控制台的应用详情里查看"
+          >
+            <Input
+              id="proj-app"
+              className="font-mono"
+              aria-invalid={!!errors.dokployApplicationId}
+              {...register('dokployApplicationId', { required: '请输入 Application ID' })}
+            />
+          </Field>
+          <Field label="仓库地址" htmlFor="proj-repo" hint="可选">
+            <Input id="proj-repo" placeholder="https://git.example.com/crm" {...register('repoUrl')} />
+          </Field>
+          <Field label="说明" htmlFor="proj-desc">
+            <Textarea id="proj-desc" rows={2} {...register('description')} />
+          </Field>
+          <Button type="submit" loading={pending} className="w-full">
+            创建
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

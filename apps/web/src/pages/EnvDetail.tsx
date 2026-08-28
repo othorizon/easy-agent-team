@@ -1,25 +1,27 @@
 import type { GrantInfo, UpsertVariableRequest, VariableMeta } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  App,
-  Button,
-  Card,
-  DatePicker,
-  Form,
-  Input,
-  Modal,
-  Popconfirm,
-  Select,
-  Space,
-  Switch,
-  Table,
-  Tag,
-  Typography,
-} from 'antd';
-import type { Dayjs } from 'dayjs';
+import { ArrowLeft, Plus } from 'lucide-react';
 import { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Controller, useForm } from 'react-hook-form';
+import { Link, useParams } from 'react-router-dom';
+import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
+import { CopyButton, InlineCode } from '../components/code';
+import { Combobox } from '../components/combobox';
+import { Confirm } from '../components/confirm';
+import { Empty } from '../components/empty';
+import { Field, rules } from '../components/form';
+import { PageHeader } from '../components/page-header';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Card, CardContent } from '../components/ui/card';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { Input, Textarea } from '../components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { TableSkeleton } from '../components/ui/skeleton';
+import { Switch } from '../components/ui/switch';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { formatDateTime } from '../lib/utils';
 
 interface UserRow {
   id: string;
@@ -29,7 +31,6 @@ interface UserRow {
 
 export function EnvDetailPage() {
   const { slug = '' } = useParams();
-  const { message } = App.useApp();
   const queryClient = useQueryClient();
   const me = getStoredUser();
   const [editing, setEditing] = useState<VariableMeta | 'new' | null>(null);
@@ -49,8 +50,14 @@ export function EnvDetailPage() {
     queryKey: ['users'],
     queryFn: () => api<UserRow[]>('GET', '/api/users'),
   });
+  // 环境级授权需要环境 id：从环境列表缓存里找
+  const envs = useQuery({
+    queryKey: ['envs'],
+    queryFn: () => api<Array<{ id: string; slug: string }>>('GET', '/api/envs'),
+  });
 
   const canManage = !grants.isError;
+  const envId = envs.data?.find((e) => e.slug === slug)?.id;
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['vars', slug] });
@@ -60,229 +67,373 @@ export function EnvDetailPage() {
   const upsert = useMutation({
     mutationFn: (v: UpsertVariableRequest) => api('POST', `/api/envs/${slug}/variables`, v),
     onSuccess: () => {
-      message.success('已保存');
+      toast.success('已保存');
       setEditing(null);
       invalidate();
     },
-    onError: (err) => message.error(err instanceof ApiError ? err.message : '保存失败'),
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '保存失败'),
   });
 
   const removeVar = useMutation({
     mutationFn: (key: string) => api('DELETE', `/api/envs/${slug}/variables/${key}`),
     onSuccess: () => {
-      message.success('已删除');
+      toast.success('已删除');
       invalidate();
     },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '删除失败'),
   });
 
   const createGrant = useMutation({
-    mutationFn: (v: { userId: string; variableId?: string; expiresAt?: Dayjs }) =>
+    mutationFn: (v: { userId: string; variableId?: string; expiresAt?: string }) =>
       api('POST', `/api/envs/${slug}/grants`, {
         userId: v.userId,
         variableId: v.variableId || undefined,
-        ...(v.variableId ? {} : { environmentId: grantsEnvId() }),
-        expiresAt: v.expiresAt?.toISOString(),
+        ...(v.variableId ? {} : { environmentId: envId }),
+        expiresAt: v.expiresAt,
       }),
     onSuccess: () => {
-      message.success('已授权');
+      toast.success('已授权');
       setGranting(false);
       invalidate();
     },
-    onError: (err) => message.error(err instanceof ApiError ? err.message : '授权失败'),
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '授权失败'),
   });
-
-  // 环境级授权需要环境 id：从授权列表或另查；grants 里未必有，简单再查一次环境列表缓存
-  const envs = useQuery({
-    queryKey: ['envs'],
-    queryFn: () => api<Array<{ id: string; slug: string }>>('GET', '/api/envs'),
-  });
-  function grantsEnvId(): string | undefined {
-    return envs.data?.find((e) => e.slug === slug)?.id;
-  }
 
   const revokeGrant = useMutation({
     mutationFn: (id: string) => api('DELETE', `/api/grants/${id}`),
     onSuccess: () => {
-      message.success('已撤销');
+      toast.success('已撤销');
       invalidate();
     },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '撤销失败'),
   });
 
   return (
-    <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <Card
-        title={
-          <>
-            环境 <Typography.Text code>{slug}</Typography.Text>
-          </>
-        }
-        extra={
-          canManage && (
-            <Button type="primary" onClick={() => setEditing('new')}>
-              新增变量
-            </Button>
-          )
-        }
-      >
-        <Table
-          rowKey="id"
-          loading={variables.isLoading}
-          dataSource={variables.data ?? []}
-          pagination={false}
-          columns={[
-            {
-              title: 'Key',
-              dataIndex: 'key',
-              render: (k: string) => <Typography.Text code copyable>{k}</Typography.Text>,
-            },
-            { title: '备注', dataIndex: 'description', ellipsis: true },
-            {
-              title: '权限',
-              dataIndex: 'hasAccess',
-              width: 100,
-              render: (has: boolean) => (has ? <Tag color="green">可读取</Tag> : <Tag>无权限</Tag>),
-            },
-            {
-              title: '无权限可见',
-              dataIndex: 'visibleWithoutPermission',
-              width: 110,
-              render: (v: boolean) => (v ? '是' : '否'),
-            },
-            { title: '版本', dataIndex: 'version', width: 70 },
-            ...(canManage
-              ? [
-                  {
-                    title: '操作',
-                    width: 140,
-                    render: (_: unknown, row: VariableMeta) => (
-                      <Space>
-                        <Button size="small" onClick={() => setEditing(row)}>
-                          更新
-                        </Button>
-                        <Popconfirm title={`删除 ${row.key}？`} onConfirm={() => removeVar.mutate(row.key)}>
-                          <Button size="small" danger>
-                            删除
-                          </Button>
-                        </Popconfirm>
-                      </Space>
-                    ),
-                  },
-                ]
-              : []),
-          ]}
+    <div className="space-y-5">
+      <div>
+        <Link
+          to="/"
+          className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ArrowLeft className="size-3.5" />
+          环境变量
+        </Link>
+        <PageHeader
+          title={
+            <span className="inline-flex flex-wrap items-center gap-2">
+              环境 <InlineCode className="text-lg">{slug}</InlineCode>
+            </span>
+          }
+          actions={
+            canManage && (
+              <Button onClick={() => setEditing('new')}>
+                <Plus />
+                新增变量
+              </Button>
+            )
+          }
         />
+      </div>
+
+      <Card>
+        <CardContent>
+          {variables.isLoading ? (
+            <TableSkeleton />
+          ) : (variables.data ?? []).length === 0 ? (
+            <Empty text="这个环境还没有变量" />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Key</TableHead>
+                  <TableHead className="hidden md:table-cell">备注</TableHead>
+                  <TableHead className="w-24">权限</TableHead>
+                  <TableHead className="hidden w-28 lg:table-cell">无权限可见</TableHead>
+                  <TableHead className="hidden w-16 sm:table-cell">版本</TableHead>
+                  {canManage && <TableHead className="w-36">操作</TableHead>}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(variables.data ?? []).map((row) => (
+                  <TableRow key={row.id}>
+                    <TableCell>
+                      <span className="inline-flex items-center gap-1">
+                        <InlineCode>{row.key}</InlineCode>
+                        <CopyButton text={row.key} />
+                      </span>
+                      <div className="mt-0.5 truncate text-xs text-muted-foreground md:hidden">{row.description}</div>
+                    </TableCell>
+                    <TableCell className="hidden max-w-sm truncate text-muted-foreground md:table-cell">
+                      {row.description}
+                    </TableCell>
+                    <TableCell>
+                      {row.hasAccess ? <Badge variant="success">可读取</Badge> : <Badge variant="outline">无权限</Badge>}
+                    </TableCell>
+                    <TableCell className="hidden text-muted-foreground lg:table-cell">
+                      {row.visibleWithoutPermission ? '是' : '否'}
+                    </TableCell>
+                    <TableCell className="hidden tabular-nums text-muted-foreground sm:table-cell">
+                      v{row.version}
+                    </TableCell>
+                    {canManage && (
+                      <TableCell>
+                        <div className="flex items-center gap-1.5">
+                          <Button size="sm" variant="outline" onClick={() => setEditing(row)}>
+                            更新
+                          </Button>
+                          <Confirm
+                            title={`删除 ${row.key}？`}
+                            description="删除后已授权成员将无法再读取该变量。"
+                            confirmText="删除"
+                            onConfirm={() => removeVar.mutate(row.key)}
+                          >
+                            <Button size="sm" variant="outline-destructive">
+                              删除
+                            </Button>
+                          </Confirm>
+                        </div>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
       </Card>
 
       {canManage && (
-        <Card
-          title="读取授权"
-          extra={<Button onClick={() => setGranting(true)}>新增授权</Button>}
-        >
-          <Table
-            rowKey="id"
-            loading={grants.isLoading}
-            dataSource={grants.data ?? []}
-            pagination={false}
-            locale={{ emptyText: '暂无授权。成员发起权限申请后也可在「权限申请」页审批。' }}
-            columns={[
-              { title: '用户', dataIndex: 'userName' },
-              {
-                title: '范围',
-                render: (_: unknown, g: GrantInfo) =>
-                  g.variableKey ? <Typography.Text code>{g.variableKey}</Typography.Text> : <Tag color="blue">整个环境</Tag>,
-              },
-              {
-                title: '有效期',
-                dataIndex: 'expiresAt',
-                render: (v: string | null) => (v ? v.slice(0, 16).replace('T', ' ') : '永久'),
-              },
-              {
-                title: '操作',
-                width: 90,
-                render: (_: unknown, g: GrantInfo) => (
-                  <Popconfirm title="撤销该授权？" onConfirm={() => revokeGrant.mutate(g.id)}>
-                    <Button size="small" danger>
-                      撤销
-                    </Button>
-                  </Popconfirm>
-                ),
-              },
-            ]}
-          />
+        <Card>
+          <CardContent>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold">读取授权</h2>
+              <Button variant="outline" size="sm" onClick={() => setGranting(true)}>
+                <Plus />
+                新增授权
+              </Button>
+            </div>
+            {grants.isLoading ? (
+              <TableSkeleton rows={2} />
+            ) : (grants.data ?? []).length === 0 ? (
+              <Empty text="暂无授权。成员发起权限申请后也可在「权限申请」页审批。" className="py-6" />
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>用户</TableHead>
+                    <TableHead>范围</TableHead>
+                    <TableHead className="hidden sm:table-cell">有效期</TableHead>
+                    <TableHead className="w-20">操作</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(grants.data ?? []).map((g) => (
+                    <TableRow key={g.id}>
+                      <TableCell className="font-medium">{g.userName}</TableCell>
+                      <TableCell>
+                        {g.variableKey ? <InlineCode>{g.variableKey}</InlineCode> : <Badge>整个环境</Badge>}
+                        <div className="mt-0.5 text-xs text-muted-foreground sm:hidden">
+                          {g.expiresAt ? `至 ${formatDateTime(g.expiresAt)}` : '永久'}
+                        </div>
+                      </TableCell>
+                      <TableCell className="hidden text-muted-foreground sm:table-cell">
+                        {g.expiresAt ? formatDateTime(g.expiresAt) : '永久'}
+                      </TableCell>
+                      <TableCell>
+                        <Confirm title="撤销该授权？" confirmText="撤销" onConfirm={() => revokeGrant.mutate(g.id)}>
+                          <Button size="sm" variant="outline-destructive">
+                            撤销
+                          </Button>
+                        </Confirm>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
         </Card>
       )}
 
-      <Modal
-        title={editing === 'new' ? '新增变量' : `更新 ${editing?.key}`}
-        open={editing !== null}
-        onCancel={() => setEditing(null)}
-        footer={null}
-        destroyOnHidden
-      >
-        <Form
-          layout="vertical"
-          initialValues={
-            editing && editing !== 'new'
-              ? { key: editing.key, description: editing.description, visibleWithoutPermission: editing.visibleWithoutPermission }
-              : { visibleWithoutPermission: true }
-          }
-          onFinish={(v: UpsertVariableRequest) => upsert.mutate(v)}
-        >
-          <Form.Item
-            name="key"
-            label="Key"
-            rules={[{ required: true }, { pattern: /^[A-Za-z_][A-Za-z0-9_]*$/, message: '字母、数字、下划线，不能以数字开头' }]}
+      {editing !== null && (
+        <VariableDialog
+          editing={editing}
+          pending={upsert.isPending}
+          onClose={() => setEditing(null)}
+          onSubmit={(v) => upsert.mutate(v)}
+        />
+      )}
+      {granting && (
+        <GrantDialog
+          users={(users.data ?? []).filter((u) => u.id !== me?.id)}
+          variables={variables.data ?? []}
+          pending={createGrant.isPending}
+          onClose={() => setGranting(false)}
+          onSubmit={(v) => createGrant.mutate(v)}
+        />
+      )}
+    </div>
+  );
+}
+
+interface VariableFormValues {
+  key: string;
+  value: string;
+  description: string;
+  visibleWithoutPermission: boolean;
+}
+
+function VariableDialog({
+  editing,
+  pending,
+  onClose,
+  onSubmit,
+}: {
+  editing: VariableMeta | 'new';
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: (v: UpsertVariableRequest) => void;
+}) {
+  const isNew = editing === 'new';
+  const { register, handleSubmit, control, formState: { errors } } = useForm<VariableFormValues>({
+    defaultValues: isNew
+      ? { key: '', value: '', description: '', visibleWithoutPermission: true }
+      : {
+          key: editing.key,
+          value: '',
+          description: editing.description,
+          visibleWithoutPermission: editing.visibleWithoutPermission,
+        },
+  });
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{isNew ? '新增变量' : `更新 ${editing.key}`}</DialogTitle>
+        </DialogHeader>
+        <form className="flex flex-col gap-4" onSubmit={handleSubmit(onSubmit)}>
+          <Field label="Key" htmlFor="var-key" required error={errors.key?.message}>
+            <Input
+              id="var-key"
+              placeholder="INTERNAL_API_TOKEN"
+              className="font-mono"
+              disabled={!isNew}
+              aria-invalid={!!errors.key}
+              {...register('key', { required: '请输入 Key', pattern: rules.envKey })}
+            />
+          </Field>
+          <Field
+            label={isNew ? '值' : '新值'}
+            htmlFor="var-value"
+            required
+            error={errors.value?.message}
+            hint={isNew ? '值会加密存储，读取受审计' : '更新会使旧值失效并递增版本'}
           >
-            <Input placeholder="INTERNAL_API_TOKEN" disabled={editing !== 'new'} style={{ fontFamily: 'monospace' }} />
-          </Form.Item>
-          <Form.Item name="value" label={editing === 'new' ? '值' : '新值（更新会使旧值失效并递增版本）'} rules={[{ required: true }]}>
-            <Input.Password placeholder="值会加密存储，读取受审计" />
-          </Form.Item>
-          <Form.Item name="description" label="备注（AI 会读取，请写清楚这个变量的作用）" initialValue="">
-            <Input.TextArea rows={2} placeholder="内部网关的调用令牌，用于 xxx 服务" />
-          </Form.Item>
-          <Form.Item
-            name="visibleWithoutPermission"
-            label="无权限时是否可见（关闭后，未授权成员在清单中也看不到该变量）"
-            valuePropName="checked"
-          >
-            <Switch />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" loading={upsert.isPending} block>
+            <Input
+              id="var-value"
+              type="password"
+              autoComplete="new-password"
+              aria-invalid={!!errors.value}
+              {...register('value', { required: '请输入值' })}
+            />
+          </Field>
+          <Field label="备注" htmlFor="var-desc" hint="AI 会读取，请写清楚这个变量的作用">
+            <Textarea id="var-desc" rows={2} placeholder="内部网关的调用令牌，用于 xxx 服务" {...register('description')} />
+          </Field>
+          <Field label="无权限时是否可见" hint="关闭后，未授权成员在清单中也看不到该变量">
+            <Controller
+              control={control}
+              name="visibleWithoutPermission"
+              render={({ field }) => <Switch checked={field.value} onCheckedChange={field.onChange} />}
+            />
+          </Field>
+          <Button type="submit" loading={pending} className="w-full">
             保存
           </Button>
-        </Form>
-      </Modal>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
-      <Modal title="新增读取授权" open={granting} onCancel={() => setGranting(false)} footer={null} destroyOnHidden>
-        <Form
-          layout="vertical"
-          onFinish={(v: { userId: string; variableId?: string; expiresAt?: Dayjs }) => createGrant.mutate(v)}
+function GrantDialog({
+  users,
+  variables,
+  pending,
+  onClose,
+  onSubmit,
+}: {
+  users: UserRow[];
+  variables: VariableMeta[];
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: (v: { userId: string; variableId?: string; expiresAt?: string }) => void;
+}) {
+  const [userId, setUserId] = useState<string | null>(null);
+  const [variableId, setVariableId] = useState<string>('');
+  const [expiresAt, setExpiresAt] = useState('');
+  const [userError, setUserError] = useState(false);
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>新增读取授权</DialogTitle>
+        </DialogHeader>
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!userId) {
+              setUserError(true);
+              return;
+            }
+            onSubmit({
+              userId,
+              variableId: variableId || undefined,
+              expiresAt: expiresAt ? new Date(expiresAt).toISOString() : undefined,
+            });
+          }}
         >
-          <Form.Item name="userId" label="授权给" rules={[{ required: true }]}>
-            <Select
-              showSearch
-              optionFilterProp="label"
-              options={(users.data ?? [])
-                .filter((u) => u.id !== me?.id)
-                .map((u) => ({ value: u.id, label: `${u.name} <${u.email}>` }))}
+          <Field label="授权给" required error={userError ? '请选择用户' : undefined}>
+            <Combobox
+              groups={[{ options: users.map((u) => ({ value: u.id, label: u.name, hint: u.email })) }]}
+              value={userId}
+              onChange={(v) => {
+                setUserId(v);
+                setUserError(false);
+              }}
+              placeholder="选择用户…"
+              searchPlaceholder="搜索姓名或邮箱…"
             />
-          </Form.Item>
-          <Form.Item name="variableId" label="范围（不选则授权整个环境）">
-            <Select
-              allowClear
-              placeholder="整个环境"
-              options={(variables.data ?? []).map((v) => ({ value: v.id, label: v.key }))}
+          </Field>
+          <Field label="范围" hint="不选则授权整个环境">
+            <Select value={variableId || 'ALL'} onValueChange={(v) => setVariableId(v === 'ALL' ? '' : v)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ALL">整个环境</SelectItem>
+                {variables.map((v) => (
+                  <SelectItem key={v.id} value={v.id}>
+                    {v.key}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label="有效期" htmlFor="grant-expire" hint="不填为永久">
+            <Input
+              id="grant-expire"
+              type="datetime-local"
+              value={expiresAt}
+              onChange={(e) => setExpiresAt(e.target.value)}
             />
-          </Form.Item>
-          <Form.Item name="expiresAt" label="有效期（不填为永久）">
-            <DatePicker showTime style={{ width: '100%' }} />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" loading={createGrant.isPending} block>
+          </Field>
+          <Button type="submit" loading={pending} className="w-full">
             授权
           </Button>
-        </Form>
-      </Modal>
-    </Space>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

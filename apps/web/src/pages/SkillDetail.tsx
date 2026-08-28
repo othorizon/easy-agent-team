@@ -1,28 +1,29 @@
 import type { SkillDetail, SkillVersionInfo, UpdateSkillRequest } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  App,
-  Button,
-  Card,
-  Descriptions,
-  Form,
-  Input,
-  Modal,
-  Popconfirm,
-  Segmented,
-  Space,
-  Switch,
-  Table,
-  Tag,
-  Typography,
-} from 'antd';
+import { ArrowLeft } from 'lucide-react';
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Controller, useForm } from 'react-hook-form';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
+import { CodeBlock, InlineCode } from '../components/code';
+import { Confirm } from '../components/confirm';
+import { Empty } from '../components/empty';
+import { Field } from '../components/form';
+import { PageLoading } from '../components/page-loading';
+import { Segmented } from '../components/segmented';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Card, CardContent } from '../components/ui/card';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { Input, Textarea } from '../components/ui/input';
+import { TableSkeleton } from '../components/ui/skeleton';
+import { Switch } from '../components/ui/switch';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { formatDateTime } from '../lib/utils';
 
 export function SkillDetailPage() {
   const { slug = '' } = useParams();
-  const { message } = App.useApp();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const me = getStoredUser();
@@ -47,147 +48,239 @@ export function SkillDetailPage() {
   const update = useMutation({
     mutationFn: (v: UpdateSkillRequest) => api('PATCH', `/api/skills/${slug}`, v),
     onSuccess: () => {
-      message.success('已保存');
+      toast.success('已保存');
       setEditing(false);
       invalidate();
     },
-    onError: (err) => message.error(err instanceof ApiError ? err.message : '保存失败'),
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '保存失败'),
   });
 
   const toggleSubscribe = useMutation({
     mutationFn: () => api(skill.data?.subscribed ? 'DELETE' : 'POST', `/api/skills/${slug}/subscribe`),
     onSuccess: () => invalidate(),
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '操作失败'),
   });
 
   const remove = useMutation({
     mutationFn: () => api('DELETE', `/api/skills/${slug}`),
     onSuccess: () => {
-      message.success('已删除');
+      toast.success('已删除');
       navigate('/skills');
     },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '删除失败'),
   });
 
-  if (!skill.data) return <Card loading />;
+  if (!skill.data) return <PageLoading />;
   const s = skill.data;
 
   return (
-    <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <Card
-        title={
-          <>
-            <Typography.Text code>{s.slug}</Typography.Text> {s.name}{' '}
-            {s.visibility === 'private' ? <Tag>私有</Tag> : <Tag color="blue">团队可见</Tag>}
-            {s.allowHelp && <Tag color="orange">允许求助</Tag>}
-            {s.source === 'experience' && <Tag color="purple">经验沉淀</Tag>}
-          </>
-        }
-        extra={
-          <Space>
-            <Button loading={toggleSubscribe.isPending} onClick={() => toggleSubscribe.mutate()}>
+    <div className="space-y-5">
+      <div>
+        <Link
+          to="/skills"
+          className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ArrowLeft className="size-3.5" />
+          Skill
+        </Link>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="flex flex-wrap items-center gap-2 text-xl font-semibold tracking-tight">
+              <InlineCode className="text-lg">{s.slug}</InlineCode>
+              {s.name}
+            </h1>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {s.visibility === 'private' ? <Badge variant="outline">私有</Badge> : <Badge>团队可见</Badge>}
+              {s.allowHelp && <Badge variant="warning">允许求助</Badge>}
+              {s.source === 'experience' && <Badge variant="secondary">经验沉淀</Badge>}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant={s.subscribed ? 'outline' : 'default'}
+              loading={toggleSubscribe.isPending}
+              onClick={() => toggleSubscribe.mutate()}
+            >
               {s.subscribed ? '退订' : '订阅'}
             </Button>
-            {canManage && <Button onClick={() => setEditing(true)}>编辑元信息</Button>}
             {canManage && (
-              <Popconfirm title="删除后订阅者本地的副本会在下次 sync 时移除，确认删除？" onConfirm={() => remove.mutate()}>
-                <Button danger>删除</Button>
-              </Popconfirm>
+              <Button variant="outline" onClick={() => setEditing(true)}>
+                编辑元信息
+              </Button>
             )}
-          </Space>
-        }
-      >
-        <Descriptions size="small" column={2}>
-          <Descriptions.Item label="作者">{s.ownerName}</Descriptions.Item>
-          <Descriptions.Item label="当前版本">v{s.currentVersion}</Descriptions.Item>
-          <Descriptions.Item label="触发描述" span={2}>
-            {s.description || '（未填写）'}
-          </Descriptions.Item>
-          {s.files.length > 0 && (
-            <Descriptions.Item label="附属文件" span={2}>
-              {s.files.map((f) => (
-                <Tag key={f.path} style={{ fontFamily: 'monospace' }}>
-                  {f.path}
-                  {f.executable ? ' ⚙' : ''}
-                </Tag>
-              ))}
-            </Descriptions.Item>
+            {canManage && (
+              <Confirm
+                title="确认删除该 Skill？"
+                description="删除后订阅者本地的副本会在下次 sync 时移除。"
+                confirmText="删除"
+                onConfirm={() => remove.mutate()}
+              >
+                <Button variant="outline-destructive" loading={remove.isPending}>
+                  删除
+                </Button>
+              </Confirm>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <Card>
+        <CardContent>
+          <dl className="grid grid-cols-1 gap-x-8 gap-y-3 text-sm sm:grid-cols-2">
+            <div className="flex gap-3">
+              <dt className="w-20 shrink-0 text-muted-foreground">作者</dt>
+              <dd>{s.ownerName}</dd>
+            </div>
+            <div className="flex gap-3">
+              <dt className="w-20 shrink-0 text-muted-foreground">当前版本</dt>
+              <dd className="tabular-nums">v{s.currentVersion}</dd>
+            </div>
+            <div className="flex gap-3 sm:col-span-2">
+              <dt className="w-20 shrink-0 text-muted-foreground">触发描述</dt>
+              <dd className="leading-relaxed">{s.description || '（未填写）'}</dd>
+            </div>
+            {s.files.length > 0 && (
+              <div className="flex gap-3 sm:col-span-2">
+                <dt className="w-20 shrink-0 text-muted-foreground">附属文件</dt>
+                <dd className="flex flex-wrap gap-1.5">
+                  {s.files.map((f) => (
+                    <InlineCode key={f.path}>
+                      {f.path}
+                      {f.executable ? ' ⚙' : ''}
+                    </InlineCode>
+                  ))}
+                </dd>
+              </div>
+            )}
+          </dl>
+          <h2 className="mt-5 mb-2 text-sm font-semibold">SKILL.md</h2>
+          <CodeBlock>{s.content}</CodeBlock>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent>
+          <h2 className="mb-3 text-sm font-semibold">版本历史</h2>
+          {versions.isLoading ? (
+            <TableSkeleton rows={2} />
+          ) : (versions.data ?? []).length === 0 ? (
+            <Empty text="暂无版本记录" className="py-6" />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-16">版本</TableHead>
+                  <TableHead>说明</TableHead>
+                  <TableHead className="hidden w-28 sm:table-cell">提交人</TableHead>
+                  <TableHead className="hidden w-40 md:table-cell">时间</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(versions.data ?? []).map((v) => (
+                  <TableRow key={v.version}>
+                    <TableCell className="tabular-nums">v{v.version}</TableCell>
+                    <TableCell className="text-muted-foreground">{v.changelog || '—'}</TableCell>
+                    <TableCell className="hidden text-muted-foreground sm:table-cell">{v.createdBy}</TableCell>
+                    <TableCell className="hidden text-muted-foreground md:table-cell">
+                      {formatDateTime(v.createdAt)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           )}
-        </Descriptions>
-        <Typography.Title level={5} style={{ marginTop: 16 }}>
-          SKILL.md
-        </Typography.Title>
-        <pre
-          style={{
-            background: '#f6f6f6',
-            padding: 16,
-            borderRadius: 8,
-            overflowX: 'auto',
-            maxHeight: 480,
-            whiteSpace: 'pre-wrap',
-          }}
-        >
-          {s.content}
-        </pre>
+        </CardContent>
       </Card>
 
-      <Card title="版本历史">
-        <Table
-          rowKey="version"
-          loading={versions.isLoading}
-          dataSource={versions.data ?? []}
-          pagination={false}
-          columns={[
-            { title: '版本', dataIndex: 'version', width: 80, render: (v: number) => `v${v}` },
-            { title: '说明', dataIndex: 'changelog', render: (v: string) => v || '—' },
-            { title: '提交人', dataIndex: 'createdBy', width: 110 },
-            { title: '时间', dataIndex: 'createdAt', width: 160, render: (v: string) => v.slice(0, 16).replace('T', ' ') },
-          ]}
+      {editing && (
+        <EditSkillDialog
+          skill={s}
+          pending={update.isPending}
+          onClose={() => setEditing(false)}
+          onSubmit={(v) => update.mutate(v)}
         />
-      </Card>
+      )}
+    </div>
+  );
+}
 
-      <Modal title="编辑元信息" open={editing} onCancel={() => setEditing(false)} footer={null} destroyOnHidden>
-        <Form
-          layout="vertical"
-          initialValues={{
-            name: s.name,
-            description: s.description,
-            private: s.visibility === 'private',
-            allowHelp: s.allowHelp,
-          }}
-          onFinish={(v: { name: string; description: string; private: boolean; allowHelp: boolean }) =>
-            update.mutate({
+interface EditFormValues {
+  name: string;
+  description: string;
+  private: boolean;
+  allowHelp: boolean;
+}
+
+function EditSkillDialog({
+  skill,
+  pending,
+  onClose,
+  onSubmit,
+}: {
+  skill: SkillDetail;
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: (v: UpdateSkillRequest) => void;
+}) {
+  const { register, handleSubmit, control, formState: { errors } } = useForm<EditFormValues>({
+    defaultValues: {
+      name: skill.name,
+      description: skill.description,
+      private: skill.visibility === 'private',
+      allowHelp: skill.allowHelp,
+    },
+  });
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>编辑元信息</DialogTitle>
+        </DialogHeader>
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={handleSubmit((v) =>
+            onSubmit({
               name: v.name,
               description: v.description,
               visibility: v.private ? 'private' : 'team',
               allowHelp: v.allowHelp,
-            })
-          }
+            }),
+          )}
         >
-          <Form.Item name="name" label="名称" rules={[{ required: true }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="description" label="触发描述">
-            <Input.TextArea rows={2} />
-          </Form.Item>
-          <Form.Item name="private" label="可见性">
-            <Segmented
-              options={[
-                { label: '团队可见', value: false },
-                { label: '私有', value: true },
-              ]}
+          <Field label="名称" htmlFor="edit-name" required error={errors.name?.message}>
+            <Input id="edit-name" aria-invalid={!!errors.name} {...register('name', { required: '请输入名称' })} />
+          </Field>
+          <Field label="触发描述" htmlFor="edit-desc">
+            <Textarea id="edit-desc" rows={2} {...register('description')} />
+          </Field>
+          <Field label="可见性">
+            <Controller
+              control={control}
+              name="private"
+              render={({ field }) => (
+                <Segmented
+                  value={field.value}
+                  onChange={field.onChange}
+                  options={[
+                    { label: '团队可见', value: false },
+                    { label: '私有', value: true },
+                  ]}
+                />
+              )}
             />
-          </Form.Item>
-          <Form.Item
-            name="allowHelp"
-            label="允许求助（开启后，使用者的 AI 可以就这个 skill 向你发起求助——求助功能随 P1 上线）"
-            valuePropName="checked"
-          >
-            <Switch />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" loading={update.isPending} block>
+          </Field>
+          <Field label="允许求助" hint="开启后，使用者的 AI 可以就这个 skill 向你发起求助">
+            <Controller
+              control={control}
+              name="allowHelp"
+              render={({ field }) => <Switch checked={field.value} onCheckedChange={field.onChange} />}
+            />
+          </Field>
+          <Button type="submit" loading={pending} className="w-full">
             保存
           </Button>
-        </Form>
-      </Modal>
-    </Space>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
