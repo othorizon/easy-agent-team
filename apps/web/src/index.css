@@ -1,32 +1,32 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
-/* ---- 设计令牌（shadcn 风格，蓝紫主色 + zinc 中性色） ---- */
+/* ---- 设计令牌（shadcn Neutral 主题；success/warning 为补充语义色） ---- */
 :root {
-  --background: oklch(0.985 0.002 247);
-  --foreground: oklch(0.21 0.02 262);
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.21 0.02 262);
+  --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.21 0.02 262);
-  --primary: oklch(0.51 0.2 268);
-  --primary-foreground: oklch(0.98 0.005 268);
-  --secondary: oklch(0.955 0.006 255);
-  --secondary-foreground: oklch(0.3 0.03 262);
-  --muted: oklch(0.96 0.005 255);
-  --muted-foreground: oklch(0.52 0.02 260);
-  --accent: oklch(0.945 0.012 262);
-  --accent-foreground: oklch(0.28 0.04 264);
-  --destructive: oklch(0.55 0.2 25);
-  --destructive-foreground: oklch(0.98 0.005 25);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
   --success: oklch(0.55 0.14 152);
   --success-foreground: oklch(0.98 0.01 152);
   --warning: oklch(0.62 0.15 65);
   --warning-foreground: oklch(0.99 0.01 65);
-  --border: oklch(0.91 0.006 255);
-  --input: oklch(0.88 0.008 255);
-  --ring: oklch(0.51 0.2 268);
-  --sidebar: oklch(0.985 0.004 255);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --sidebar: oklch(0.985 0 0);
   --radius: 0.55rem;
 }
 
@@ -80,6 +80,6 @@
     -webkit-font-smoothing: antialiased;
   }
   ::selection {
-    background-color: oklch(0.51 0.2 268 / 0.18);
+    background-color: oklch(0.205 0 0 / 0.13);
   }
 }
