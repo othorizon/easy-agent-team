@@ -100,3 +100,9 @@ export async function askResolve(id: string): Promise<void> {
   await api.request('POST', `/api/help-requests/${await resolveId(api, id)}/resolve`, {});
   console.log('已标记解决。被求助者可以在控制台把它沉淀为经验。');
 }
+
+export async function askDelete(id: string): Promise<void> {
+  const api = Api.fromSaved();
+  await api.request('DELETE', `/api/help-requests/${await resolveId(api, id)}`);
+  console.log('已删除（求助与对话记录不可恢复）。');
+}

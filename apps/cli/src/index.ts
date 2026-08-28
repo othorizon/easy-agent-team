@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { ApiError } from './client.js';
 import { login, logout, whoami } from './commands/auth.js';
 import { envList, envPull, envRequest, envRequests } from './commands/env.js';
-import { askCreate, askList, askReply, askResolve, askShow, askTargets } from './commands/ask.js';
+import { askCreate, askDelete, askList, askReply, askResolve, askShow, askTargets } from './commands/ask.js';
 import { dbInstances, dbList, dbRequest } from './commands/db.js';
 import { deployList, deployRun, deployStatus, projectsList, scanOnly } from './commands/deploy.js';
 import { skillList, skillPush, skillSubscribe, skillUnsubscribe } from './commands/skill.js';
@@ -74,6 +74,7 @@ ask
   .requiredOption('--message <message>', '内容')
   .action(askReply);
 ask.command('resolve <id>').description('标记已解决').action(askResolve);
+ask.command('delete <id>').description('删除求助（仅求助者/管理员；已沉淀为经验的不可删）').action(askDelete);
 
 program
   .command('sync')

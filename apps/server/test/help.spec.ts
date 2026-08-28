@@ -428,6 +428,10 @@ describe('平台 AI 接入', () => {
     });
     expect(r.status).toBe(201);
     expect(r.body.aiUsed).toBe(true);
+    // 默认不沉淀给自己（未传 grantedToHelper）：helper 的作者订阅被移除，不进其本地 sync
+    expect(r.body.grantedToHelper).toBe(false);
+    const helperBundle = await api('GET', '/api/skills/sync-bundle', { token: helperToken });
+    expect(helperBundle.body.map((s: { slug: string }) => s.slug)).not.toContain('exp-chongxiao');
     const skill = await api('GET', '/api/skills/exp-chongxiao', { token: thirdToken });
     expect(skill.status).toBe(200);
     expect(skill.body.content).toBe(
@@ -435,5 +439,34 @@ describe('平台 AI 接入', () => {
     );
     const search = await api('GET', '/api/experiences?q=对账差异排查', { token: thirdToken });
     expect(search.body.map((e: { skillSlug: string }) => e.skillSlug)).toContain('exp-chongxiao');
+  });
+});
+
+describe('求助删除', () => {
+  it('仅求助者可删（被求助者 403、无关者 404）；删除连带对话记录', async () => {
+    const r = await api('POST', '/api/help-requests', {
+      token: thirdToken,
+      payload: { title: '误发的求助', description: '发错人了', tried: '无', helperUserId: helperId },
+    });
+    expect(r.status).toBe(201);
+    const delId = r.body.id;
+    await api('POST', `/api/help-requests/${delId}/reply`, { token: helperToken, payload: { content: '收到' } });
+
+    expect((await api('DELETE', `/api/help-requests/${delId}`, { token: helperToken })).status).toBe(403);
+    expect((await api('DELETE', `/api/help-requests/${delId}`, { token: requesterToken })).status).toBe(404);
+
+    expect((await api('DELETE', `/api/help-requests/${delId}`, { token: thirdToken })).status).toBe(200);
+    expect((await api('GET', `/api/help-requests/${delId}`, { token: thirdToken })).status).toBe(404);
+  });
+
+  it('管理员可删任意求助；已沉淀为经验的求助不可删', async () => {
+    const r = await api('POST', '/api/help-requests', {
+      token: thirdToken,
+      payload: { title: '待管理员清理', description: 'x', tried: 'x', helperUserId: helperId },
+    });
+    expect((await api('DELETE', `/api/help-requests/${r.body.id}`, { token: adminToken })).status).toBe(200);
+
+    expect((await api('DELETE', `/api/help-requests/${requestId}`, { token: requesterToken })).status).toBe(409);
+    expect((await api('DELETE', `/api/help-requests/${requestId}`, { token: adminToken })).status).toBe(409);
   });
 });

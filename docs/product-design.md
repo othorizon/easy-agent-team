@@ -261,7 +261,8 @@ stateDiagram-v2
 - 支持**多轮对话**：请求下是一串消息，双方都可追加；
 - 创建与每次回复都会：落库 + 推送对方的 webhook + 站内通知；
 - **可见性：默认仅求助者、被求助者与管理员可见**（管理员可见用于日常管理与合规审查；对其他普通成员不可见）；
-- AI 侧通过 `get_help_request(id)` 读取最新回复；CLI 也可 `eat ask show <id>`。
+- AI 侧通过 `get_help_request(id)` 读取最新回复；CLI 也可 `eat ask show <id>`；
+- **删除**：求助者本人或管理员可删除求助（连带对话记录，不可恢复），控制台 / `eat ask delete` / MCP `delete_help_request` 均可操作；**已沉淀为经验的求助不可删除**（经验库引用该求助）。
 
 ### 3.5.4 防骚扰
 
@@ -276,7 +277,7 @@ stateDiagram-v2
 ### 3.6.1 沉淀规则
 
 - 一个 `resolved` 的求助可以被**沉淀为经验（Experience）**；
-- 沉淀时可配置：
+- 沉淀时可配置（**默认：不公开、沉淀给求助者、不沉淀给自己**——helper 已掌握该知识，通常无需再进本地 sync）：
   - **是否公开**：公开 → 进入团队经验库，人人可见可订阅；不公开 → **仅求助双方可见**；
   - **沉淀给谁**：`沉淀给求助者` / `沉淀给被求助者` / 两者（多选）；
 - **编辑权限：仅被求助者（回答者）可修改经验内容，求助者无权修改**——保证知识出自懂的人之手；
@@ -355,7 +356,7 @@ CLI 与 MCP Server 同一个产物分发（平台自托管下载：`curl -fsSL <
 | `eat env list [env]` | 列出可见环境与变量清单（key + 备注 + 权限状态） |
 | `eat env pull <env> [--format dotenv]` | 拉取有权限的变量值，写入 `.env` 或输出 |
 | `eat env request <env>/<KEY> --reason "..."` | 发起权限申请 |
-| `eat ask create / show / list / reply` | 发起求助、查看回复、追问 |
+| `eat ask create / show / list / reply / delete` | 发起求助、查看回复、追问、删除（仅求助者/管理员） |
 | `eat deploy [project]` / `eat deploy logs` | 触发部署、看日志 |
 | `eat db list` | 查看自己名下的数据库账号（引导用 env pull 取凭证） |
 
@@ -370,7 +371,7 @@ CLI 与 MCP Server 同一个产物分发（平台自托管下载：`curl -fsSL <
 | `search_experiences` | 搜索经验库（求助前先搜） |
 | `list_helpers` | 列出可求助者及其能力描述（含允许求助的 Skill 作者） |
 | `create_help_request` | 发起求助（指定 skill / helper / auto） |
-| `get_help_request` / `reply_help_request` | 读取回复、追问 |
+| `get_help_request` / `reply_help_request` / `delete_help_request` | 读取回复、追问、删除误发起的求助 |
 | `trigger_deploy` / `get_deploy_status` / `get_deploy_logs` | 部署三件套 |
 
 💡 设计说明：平台内置一个「平台使用指南」基础 Skill（`eat-platform-guide`，§10 决策 11），教 AI 正确的行为序列（先搜经验 → 再求助；先 list → 再 pull → 无权限则申请），这比在每个工具描述里堆规则更有效。实现为**内置虚拟 Skill**：内容随平台代码维护（`packages/shared/src/platform-guide.ts`，改内容须递增版本号），`sync-bundle` 对所有登录用户始终注入首位（`relation=builtin`），不落数据库、不可退订，slug 为保留名不可被 push 占用；登录后首次 `eat sync` 即落地，之后随平台升级自动更新。安装到登录之间的窗口由免鉴权的 `/install/AGENT.md` 兜底。
@@ -654,3 +655,4 @@ easy-agent-team/
 | 15 | 安装脚本 PATH 落地 | **三层叠加（非递进兜底），全部幂等**：① 软链 `~/.local/bin/eat`（XDG 惯例，无需 sudo）；② `/usr/local/bin` 可写时软链（系统级 PATH，非交互 shell 可见）；③ 幂等写 shell 配置——zsh 写 `~/.zshenv`（非交互也加载，而非 `.zshrc`），bash 写 `~/.bashrc`，登录 shell 写 `~/.bash_profile`（仅存在 `~/.profile` 且无 `~/.bash_profile` 时改写 `~/.profile`，避免屏蔽），marker 注释去重。三层互为冗余覆盖不同 shell 场景，保证 Agent 的非交互子进程也能直接调 `eat`（§7.5） |
 | 16 | 求助 webhook 通知形态 | **只支持飞书群自定义机器人**（替换最初的「通用 JSON + 平台生成 HMAC 密钥」设计）：「加签」密钥由**用户从飞书粘贴**（可选、加密存储、不回显，留空更新表示保持不变，清空地址一并清除），平台不再生成/展示自己的签名密钥；按响应体 code 判定投递成败。钉钉/企微/通用端点待有需求再扩展（§3.10）。消息格式后升级为卡片（决策 17） |
 | 17 | 求助通知卡片化与通知开关 | 求助/回复通知从 `msg_type=text` 升级为**飞书卡片消息**：含请求 ID、标题、描述/回复摘要（截断）、「查看请求」按钮与「发送给 Agent」代码块（自定义机器人卡片按钮不支持复制到剪贴板，用代码块替代，客户端自带复制）；helper 登记增加**接收求助 / 接收回复**两个独立开关（默认开启），**能力描述可留空**；控制台 webhook 配置区默认折叠。卡片构建在 `packages/shared`（server 与 `scripts/test-feishu-card.mjs` 测试脚本共用）（§3.5.2、§3.10） |
+| 18 | 求助删除与沉淀默认对象 | ① 求助支持删除（控制台 / `eat ask delete` / MCP `delete_help_request`）：仅**求助者本人或管理员**，连带对话记录硬删除；**已沉淀为经验的求助不可删**（经验库引用）。② 沉淀弹窗「沉淀给我自己」**默认不勾选**（API 契约 `grantedToHelper` 默认 false）——helper 已掌握该知识，无需再进本地 sync（§3.5.3、§3.6.1） |

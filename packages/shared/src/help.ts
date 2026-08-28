@@ -108,7 +108,8 @@ export const distillRequestSchema = z.object({
   /** 公开：进入团队经验库；不公开：仅求助双方可见 */
   public: z.boolean(),
   grantedToRequester: z.boolean().default(true),
-  grantedToHelper: z.boolean().default(true),
+  /** 默认不沉淀给自己：helper 已掌握该知识，通常无需再进本地 sync */
+  grantedToHelper: z.boolean().default(false),
   /** 经验 skill 的 slug（缺省自动生成 exp-xxx） */
   slug: slugSchema.optional(),
   name: z.string().min(1).max(100).optional(),

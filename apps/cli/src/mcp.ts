@@ -117,6 +117,18 @@ const TOOLS = [
     },
   },
   {
+    name: 'delete_help_request',
+    description:
+      '删除求助及其对话记录（不可恢复）。仅求助者本人（或管理员）可删；已沉淀为经验的求助不可删除。用于清理误发起或重复的求助——正常结束的求助用 resolve 标记解决即可，不要删。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        requestId: { type: 'string', description: '求助 ID' },
+      },
+      required: ['requestId'],
+    },
+  },
+  {
     name: 'list_projects',
     description: '列出部署项目与当前用户是否可部署（canDeploy）。部署前先确认项目 slug。',
     inputSchema: { type: 'object', properties: {} },
@@ -229,6 +241,9 @@ export async function startMcpServer(): Promise<void> {
               content: args.content,
             }),
           );
+        }
+        case 'delete_help_request': {
+          return jsonResult(await api.request('DELETE', `/api/help-requests/${args.requestId as string}`));
         }
         case 'list_projects': {
           return jsonResult(await api.request('GET', '/api/projects'));

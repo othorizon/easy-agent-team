@@ -1,8 +1,8 @@
 import type { DistillRequest, HelpRequestDetail } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, Card, Form, Input, Modal, Space, Switch, Tag, Typography } from 'antd';
+import { App, Button, Card, Form, Input, Modal, Popconfirm, Space, Switch, Tag, Typography } from 'antd';
 import { useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api, ApiError, getStoredUser } from '../api';
 import { HELP_STATUS_TAG } from './Help';
 
@@ -10,6 +10,7 @@ export function HelpDetailPage() {
   const { id = '' } = useParams();
   const { message } = App.useApp();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const me = getStoredUser();
   const [distilling, setDistilling] = useState(false);
 
@@ -32,6 +33,16 @@ export function HelpDetailPage() {
       message.success('已标记解决');
       invalidate();
     },
+  });
+  const remove = useMutation({
+    mutationFn: () => api('DELETE', `/api/help-requests/${id}`),
+    onSuccess: () => {
+      message.success('已删除');
+      void queryClient.invalidateQueries({ queryKey: ['help-mine'] });
+      void queryClient.invalidateQueries({ queryKey: ['help-inbox'] });
+      navigate('/help');
+    },
+    onError: (err) => message.error(err instanceof ApiError ? err.message : '删除失败'),
   });
   const distill = useMutation({
     mutationFn: (v: DistillRequest) => api('POST', `/api/help-requests/${id}/distill`, v),
@@ -69,6 +80,18 @@ export function HelpDetailPage() {
               <Button type="primary" onClick={() => setDistilling(true)}>
                 沉淀为经验
               </Button>
+            )}
+            {(isRequester || me?.role === 'admin') && !r.experienceSkillSlug && (
+              <Popconfirm
+                title="删除这条求助？"
+                description="对话记录将一并删除，不可恢复"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => remove.mutate()}
+              >
+                <Button danger loading={remove.isPending}>
+                  删除
+                </Button>
+              </Popconfirm>
             )}
           </Space>
         }
@@ -134,7 +157,7 @@ export function HelpDetailPage() {
         </Typography.Paragraph>
         <Form
           layout="vertical"
-          initialValues={{ public: false, grantedToRequester: true, grantedToHelper: true, useAi: true }}
+          initialValues={{ public: false, grantedToRequester: true, grantedToHelper: false, useAi: true }}
           onFinish={(v: DistillRequest) => distill.mutate(v)}
         >
           <Form.Item name="public" label="公开到团队经验库（否则仅求助双方可见）" valuePropName="checked">

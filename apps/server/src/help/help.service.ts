@@ -220,6 +220,30 @@ export class HelpService {
     return this.toInfo(await this.getRow(id));
   }
 
+  /** 删除求助：求助者或管理员；已沉淀为经验的不可删（经验库引用该求助） */
+  async remove(user: AuthUser, id: string): Promise<{ ok: true }> {
+    const row = await this.getRow(id);
+    this.assertVisible(row, user);
+    if (row.requesterId !== user.id && user.role !== 'admin') {
+      throw new ForbiddenException({ error: 'FORBIDDEN', message: '仅求助者或管理员可删除' });
+    }
+    const exp = (
+      await this.db.select({ id: experiences.id }).from(experiences).where(eq(experiences.helpRequestId, id)).limit(1)
+    )[0];
+    if (exp) {
+      throw new ConflictException({ error: 'CONFLICT', message: '该求助已沉淀为经验，不可删除' });
+    }
+    await this.db.delete(helpRequests).where(eq(helpRequests.id, id));
+    await this.audit.record({
+      actorId: user.id,
+      action: 'help.deleted',
+      targetType: 'help_request',
+      targetId: id,
+      meta: { title: row.title },
+    });
+    return { ok: true };
+  }
+
   /** 求助者撤销（仅 open 状态） */
   async close(user: AuthUser, id: string): Promise<HelpRequestInfo> {
     const row = await this.getRow(id);

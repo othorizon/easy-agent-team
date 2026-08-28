@@ -89,6 +89,11 @@ export class HelpController {
     return this.help.close(user, id);
   }
 
+  @Delete('help-requests/:id')
+  remove(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.help.remove(user, id);
+  }
+
   // ---------- 经验 ----------
 
   @Post('help-requests/:id/distill')
