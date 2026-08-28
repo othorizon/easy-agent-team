@@ -43,6 +43,13 @@
       "when": 1787918258994,
       "tag": "0005_lowly_reavers",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787921045145,
+      "tag": "0006_good_justice",
+      "breakpoints": true
     }
   ]
 }

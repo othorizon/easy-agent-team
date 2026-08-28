@@ -4,22 +4,41 @@ import {
   deviceApproveRequestSchema,
   devicePollRequestSchema,
   loginRequestSchema,
+  registerRequestSchema,
   type DeviceApproveRequest,
   type DevicePollRequest,
   type LoginRequest,
+  type RegisterRequest,
 } from '@eat/shared';
 import { ZodValidationPipe } from '../common/zod.pipe';
 import { CurrentUser, Public, type AuthUser } from './auth.decorators';
 import { AuthService } from './auth.service';
+import { RegistrationService } from './registration.service';
 
 @Controller('api/auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly registration: RegistrationService,
+  ) {}
 
   @Public()
   @Post('login')
   login(@Body(new ZodValidationPipe(loginRequestSchema)) body: LoginRequest, @Req() req: FastifyRequest) {
     return this.auth.login(body.email, body.password, req.ip);
+  }
+
+  /** 登录页探测：是否开放注册与后缀限制（后缀本身不敏感，用于表单提示） */
+  @Public()
+  @Get('registration')
+  registrationInfo() {
+    return this.registration.getSettings();
+  }
+
+  @Public()
+  @Post('register')
+  register(@Body(new ZodValidationPipe(registerRequestSchema)) body: RegisterRequest, @Req() req: FastifyRequest) {
+    return this.registration.register(body, req.ip);
   }
 
   @Get('whoami')

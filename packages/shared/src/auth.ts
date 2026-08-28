@@ -69,6 +69,33 @@ export const resetUserPasswordRequestSchema = z.object({
 });
 export type ResetUserPasswordRequest = z.infer<typeof resetUserPasswordRequestSchema>;
 
+// ---------- 开放注册 ----------
+
+/** 邮箱后缀：规整为小写、带 @ 前缀（如 @example.com），接受用户输入时省略 @ */
+export const emailSuffixSchema = z
+  .string()
+  .transform((s) => {
+    const t = s.trim().toLowerCase();
+    return t.startsWith('@') ? t : `@${t}`;
+  })
+  .pipe(z.string().regex(/^@[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/, '邮箱后缀格式如 @example.com'));
+
+/** 开放注册设置（管理员配置；GET /api/auth/registration 对未登录用户公开同一形状） */
+export const registrationSettingsSchema = z.object({
+  enabled: z.boolean(),
+  /** 允许注册的邮箱后缀；空数组 = 任意邮箱 */
+  allowedEmailSuffixes: z.array(emailSuffixSchema).max(20).default([]),
+});
+export type RegistrationSettings = z.infer<typeof registrationSettingsSchema>;
+
+/** 自助注册（开放注册开启时）；成功即登录，返回 LoginResponse */
+export const registerRequestSchema = z.object({
+  name: z.string().min(1).max(100),
+  email: z.string().email(),
+  password: z.string().min(8, '密码至少 8 位'),
+});
+export type RegisterRequest = z.infer<typeof registerRequestSchema>;
+
 export const apiTokenSchema = z.object({
   id: z.string(),
   name: z.string(),

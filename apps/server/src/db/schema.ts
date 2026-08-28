@@ -422,6 +422,15 @@ export const webhookDeliveries = pgTable(
 );
 
 /** 平台 AI 接入配置（单行；OpenAI 接口范式） */
+/** 开放注册设置（单行）：管理员开启后，登录页提供自助注册 */
+export const registrationSettings = pgTable('registration_setting', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  enabled: boolean('enabled').notNull().default(false),
+  /** 允许的邮箱后缀（小写、含 @ 前缀）；空数组 = 任意邮箱 */
+  allowedEmailSuffixes: jsonb('allowed_email_suffixes').$type<string[]>().notNull().default([]),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const aiSettings = pgTable('ai_setting', {
   id: uuid('id').primaryKey().defaultRandom(),
   apiBaseUrl: text('api_base_url').notNull(),

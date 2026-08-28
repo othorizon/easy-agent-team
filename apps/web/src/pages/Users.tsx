@@ -1,5 +1,6 @@
+import type { RegistrationSettings } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { App, Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
+import { App, Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography } from 'antd';
 import { useState } from 'react';
 import { api, ApiError, getStoredUser } from '../api';
 
@@ -53,7 +54,51 @@ export function UsersPage() {
     onError,
   });
 
+  const registration = useQuery({
+    queryKey: ['registration-settings'],
+    queryFn: () => api<RegistrationSettings>('GET', '/api/admin/registration-settings'),
+  });
+  const saveRegistration = useMutation({
+    mutationFn: (v: RegistrationSettings) => api('PUT', '/api/admin/registration-settings', v),
+    onSuccess: () => {
+      message.success('注册设置已保存');
+      void queryClient.invalidateQueries({ queryKey: ['registration-settings'] });
+    },
+    onError,
+  });
+
   return (
+    <Space direction="vertical" size="large" style={{ width: '100%' }}>
+    <Card title="开放注册">
+      <Typography.Paragraph type="secondary">
+        开启后登录页出现「注册」入口，任何能访问平台的人都可自助注册为<strong>成员</strong>账号。
+        可用邮箱后缀限制注册范围（如 @your-company.com）；留空表示任意邮箱都可注册。
+      </Typography.Paragraph>
+      {registration.data && (
+        <Form
+          layout="inline"
+          initialValues={registration.data}
+          onFinish={(v: RegistrationSettings) => saveRegistration.mutate({ ...v, allowedEmailSuffixes: v.allowedEmailSuffixes ?? [] })}
+        >
+          <Form.Item name="enabled" label="开放注册" valuePropName="checked">
+            <Switch checkedChildren="开" unCheckedChildren="关" />
+          </Form.Item>
+          <Form.Item name="allowedEmailSuffixes" label="允许的邮箱后缀" style={{ minWidth: 360 }}>
+            <Select
+              mode="tags"
+              tokenSeparators={[',', ' ']}
+              placeholder="回车添加，如 @example.com；留空 = 任意邮箱"
+              open={false}
+              suffixIcon={null}
+            />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" loading={saveRegistration.isPending}>
+            保存
+          </Button>
+        </Form>
+      )}
+    </Card>
+
     <Card title="用户管理" extra={<Button type="primary" onClick={() => setCreating(true)}>新建用户</Button>}>
       <Typography.Paragraph type="secondary">
         账号由管理员创建后线下告知初始密码。禁用立即生效（吊销全部 Token）；重置密码同样会吊销 Token，强制重新登录。
@@ -166,5 +211,6 @@ export function UsersPage() {
         </Form>
       </Modal>
     </Card>
+    </Space>
   );
 }

@@ -1,5 +1,5 @@
 /**
- * 用户管理（改角色/禁用/重置密码）+ CLI 自托管分发（install.sh / eat.js / AGENT.md）
+ * 用户管理（改角色/禁用/重置密码）+ 开放注册（开关/邮箱后缀限制）+ CLI 自托管分发（install.sh / eat.js / AGENT.md）
  * 前置：scripts/dev-db.sh start（端口 5433）
  */
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? 'postgres://dev@127.0.0.1:5433/eat_test';
@@ -147,6 +147,77 @@ describe('用户管理', () => {
     const ok = await loginAs('member@test.dev', 'newpass9999');
     expect(ok.status).toBe(201);
     memberToken = ok.body.token;
+  });
+});
+
+describe('开放注册', () => {
+  it('默认关闭：探测 enabled=false，注册 403；设置仅管理员可改', async () => {
+    const probe = await api('GET', '/api/auth/registration');
+    expect(probe.status).toBe(200);
+    expect(probe.body.enabled).toBe(false);
+
+    const r = await api('POST', '/api/auth/register', {
+      payload: { name: '游客', email: 'guest@corp.com', password: 'password123' },
+    });
+    expect(r.status).toBe(403);
+
+    expect((await api('GET', '/api/admin/registration-settings', { token: memberToken })).status).toBe(403);
+    const memberPut = await api('PUT', '/api/admin/registration-settings', {
+      token: memberToken,
+      payload: { enabled: true, allowedEmailSuffixes: [] },
+    });
+    expect(memberPut.status).toBe(403);
+  });
+
+  it('后缀限制：不匹配 400；匹配则注册为 member 并直接登录；重复邮箱 409', async () => {
+    const put = await api('PUT', '/api/admin/registration-settings', {
+      token: adminToken,
+      payload: { enabled: true, allowedEmailSuffixes: ['corp.com', '@Sub.Example.COM'] },
+    });
+    expect(put.status).toBe(200);
+    // 后缀规整：补 @ 前缀、统一小写
+    expect(put.body.allowedEmailSuffixes).toEqual(['@corp.com', '@sub.example.com']);
+    // 探测对未登录用户公开同一形状（登录页据此展示注册入口与后缀提示）
+    const probe = await api('GET', '/api/auth/registration');
+    expect(probe.body).toEqual({ enabled: true, allowedEmailSuffixes: ['@corp.com', '@sub.example.com'] });
+
+    const bad = await api('POST', '/api/auth/register', {
+      payload: { name: '外人', email: 'evil@other.com', password: 'password123' },
+    });
+    expect(bad.status).toBe(400);
+
+    const ok = await api('POST', '/api/auth/register', {
+      payload: { name: '新同事', email: 'Newbie@Corp.com', password: 'password123' },
+    });
+    expect(ok.status).toBe(201);
+    expect(ok.body.user.role).toBe('member');
+    expect(ok.body.user.email).toBe('newbie@corp.com'); // 落库前统一小写
+    expect((await api('GET', '/api/auth/whoami', { token: ok.body.token })).status).toBe(200);
+
+    const dup = await api('POST', '/api/auth/register', {
+      payload: { name: '重复', email: 'newbie@corp.com', password: 'password123' },
+    });
+    expect(dup.status).toBe(409);
+  });
+
+  it('清空后缀 = 任意邮箱可注册；关闭后立即失效', async () => {
+    await api('PUT', '/api/admin/registration-settings', {
+      token: adminToken,
+      payload: { enabled: true, allowedEmailSuffixes: [] },
+    });
+    const anyMail = await api('POST', '/api/auth/register', {
+      payload: { name: '任意邮箱', email: 'whoever@anywhere.io', password: 'password123' },
+    });
+    expect(anyMail.status).toBe(201);
+
+    await api('PUT', '/api/admin/registration-settings', {
+      token: adminToken,
+      payload: { enabled: false, allowedEmailSuffixes: [] },
+    });
+    const off = await api('POST', '/api/auth/register', {
+      payload: { name: '晚到', email: 'late@anywhere.io', password: 'password123' },
+    });
+    expect(off.status).toBe(403);
   });
 });
 
