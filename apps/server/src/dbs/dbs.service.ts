@@ -15,7 +15,7 @@ import type { AuthUser } from '../auth/auth.decorators';
 import { decryptSecret, encryptSecret } from '../common/crypto';
 import { DB, type Db } from '../db/db.module';
 import { dbAssignments, dbInstances, environments, envVariables, users } from '../db/schema';
-import { disablePostgres, dropPostgres, enablePostgres, provisionPostgres, type AdminConn } from './provisioner';
+import { disablePostgres, enablePostgres, provisionPostgres, type AdminConn } from './provisioner';
 
 type AssignmentRow = typeof dbAssignments.$inferSelect;
 type InstanceRow = typeof dbInstances.$inferSelect;
@@ -251,21 +251,17 @@ export class DbsService {
     return this.toInfo(await this.getAssignment(id));
   }
 
-  /** 彻底删除：DROP DATABASE + ROLE，并删除凭证环境（不可恢复） */
+  /** 删除（仅记录级，决策 13）：标记 deleted 并删除凭证环境；实例上的数据库与账号不做物理删除，需管理员在实例上手动清理 */
   async remove(user: AuthUser, id: string): Promise<DbAssignmentInfo> {
     const row = await this.getAssignment(id);
-    if (row.status !== 'active' && row.status !== 'disabled' && row.status !== 'failed') {
-      throw new ConflictException({ error: 'CONFLICT', message: '仅 active/disabled/failed 的分配可删除' });
-    }
-    const instance = await this.getInstance(row.instanceId);
-    if (row.status !== 'failed') {
-      await dropPostgres(this.adminConn(instance), row.dbName, row.dbUser);
+    if (row.status !== 'active' && row.status !== 'disabled' && row.status !== 'failed' && row.status !== 'rejected') {
+      throw new ConflictException({ error: 'CONFLICT', message: '仅 active/disabled/failed/rejected 的分配可删除' });
     }
     if (row.environmentId) {
       await this.db.delete(environments).where(eq(environments.id, row.environmentId));
     }
     await this.db.update(dbAssignments).set({ status: 'deleted', environmentId: null, decidedBy: user.id, updatedAt: new Date() }).where(eq(dbAssignments.id, id));
-    await this.audit.record({ actorId: user.id, action: 'db_assignment.deleted', targetType: 'db_assignment', targetId: id, meta: { dbName: row.dbName } });
+    await this.audit.record({ actorId: user.id, action: 'db_assignment.deleted', targetType: 'db_assignment', targetId: id, meta: { dbName: row.dbName, physicalDrop: false } });
     return this.toInfo(await this.getAssignment(id));
   }
 }

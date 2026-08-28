@@ -115,8 +115,17 @@ export function DbsPage() {
                 )}
                 {r.status === 'active' && <Button size="small" onClick={() => act.mutate({ id: r.id, action: 'disable' })}>禁用</Button>}
                 {r.status === 'disabled' && <Button size="small" onClick={() => act.mutate({ id: r.id, action: 'enable' })}>恢复</Button>}
-                {['active', 'disabled', 'failed'].includes(r.status) && (
-                  <Popconfirm title="将 DROP 数据库与账号并删除凭证环境，不可恢复。确认？" onConfirm={() => act.mutate({ id: r.id, action: 'delete' })}>
+                {['active', 'disabled', 'failed', 'rejected'].includes(r.status) && (
+                  <Popconfirm
+                    title="删除分配记录？"
+                    description={
+                      <div style={{ maxWidth: 320 }}>
+                        仅删除平台上的记录与凭证环境，<b>不会</b>删除实例上的数据库与账号；
+                        如需彻底清理，只能到数据库实例上手动删除。
+                      </div>
+                    }
+                    onConfirm={() => act.mutate({ id: r.id, action: 'delete' })}
+                  >
                     <Button size="small" danger>删除</Button>
                   </Popconfirm>
                 )}
