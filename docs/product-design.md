@@ -86,7 +86,7 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 
 ## 3.1 用户与认证
 
-- **账号体系**：管理员创建账号或开放注册审批；单团队模式，不做多租户。
+- **账号体系**：管理员创建账号或开放注册审批；单团队模式，不做多租户。控制台提供**用户管理页**（仅管理员）：建号、改角色、禁用/启用、重置密码；禁用与重置密码即时吊销该用户全部 Token；不能修改自己的角色/状态，避免锁死唯一管理员。
 - **Web 登录**：账号密码（可后续接入团队现有 SSO，非 MVP）。
 - **CLI / MCP 登录**：
   - `eat login` 走**设备码授权**：CLI 显示一个链接和短码，用户在浏览器登录确认，CLI 获得长期 Token；
@@ -342,7 +342,7 @@ sequenceDiagram
 
 ## 3.8 CLI 与 MCP 能力总览
 
-CLI 与 MCP Server 同一个包分发（`npm i -g @team/eat`），MCP Server 由 `eat mcp` 启动。
+CLI 与 MCP Server 同一个产物分发（平台自托管下载：`curl -fsSL <平台>/install.sh | sh`，见 §7.5），MCP Server 由 `eat mcp` 启动。
 
 ### CLI 命令
 
@@ -577,11 +577,12 @@ easy-agent-team/
 
 ### 7.5 CLI 构建与分发
 
-- **语言与运行时目标**：TypeScript，产物兼容 Node ≥ 18；不使用 Bun/Deno 独有 API。团队成员使用 Claude Code 时本机已有 Node，npm 分发零额外门槛；
-- **打包**：tsup（底层 esbuild）打包为单文件 JS + shebang，依赖全部内联，安装即 `npm i -g @team/eat`，也支持 `npx @team/eat` 免安装使用；
+- **语言与运行时目标**：TypeScript，产物兼容 Node ≥ 18；不使用 Bun/Deno 独有 API。团队成员使用 Claude Code 时本机已有 Node，零额外门槛；
+- **打包**：tsup（底层 esbuild）打包为单文件 JS + shebang，依赖全部内联；
+- **分发（§10 决策 9）**：**不发 npm registry，平台自托管**——平台镜像内置 CLI 单文件产物，提供三个免鉴权端点：`GET /install.sh`（安装脚本：校验 Node ≥ 18，下载产物到 `~/.eat/bin` 并生成 `eat` 启动器）、`GET /install/eat.js`（单文件产物本体）、`GET /install/AGENT.md`（给 AI Agent 的安装指令）。成员一条 `curl -fsSL <平台>/install.sh | sh` 完成安装，版本天然与平台一致，升级 = 重装；
+- **安装页（§10 决策 10）**：控制台 `/install` 页面向所有成员提供「给 Agent 的一键复制指令」（主推路径）与手动分步说明；
 - **开发期**：可以用 Bun 跑测试与本地开发提速，但 CI 产物始终按 Node 目标构建，避免运行时行为差异；
-- **可选补充产物**：如需分发给完全没有 Node 环境的机器，CI 用 `bun build --compile` 从同一份代码额外产出免依赖单二进制（macOS / Linux / Windows），作为附加下载而非主渠道；
-- **不选型**：Go/Rust 重写会造成与平台的技术栈分裂（CLI 与后端共享 API 类型定义的收益丢失）；Deno 生态与 npm 包（MCP SDK）仍有摩擦。
+- **不选型**：bun 单二进制（目标用户全部有 Node，多平台产物让镜像膨胀数百 MB，收益为零）；Go/Rust 重写会造成与平台的技术栈分裂（CLI 与后端共享 API 类型定义的收益丢失）；Deno 生态与 npm 包（MCP SDK）仍有摩擦。
 
 ---
 
@@ -643,3 +644,5 @@ easy-agent-team/
 | 6 | 平台开发框架 | **NestJS（Fastify）单体 + React/Vite/AntD SPA + pnpm monorepo**，队列用 pg-boss，ORM 首选 Drizzle（§7.2–7.4） |
 | 7 | 存储 | **全量 PostgreSQL，不引入对象存储**。Skill 附属文件限单文件 256KB / 整包 1MB，超限拒收并引导外部引用（§3.2.4）；将来出现真实大文件需求再评估 OSS |
 | 8 | 部署前置检查的执行位置 | **CLI 发起端本地执行**（密钥扫描含平台指纹匹配），构建检查外包给 Dokploy 构建，部署 API 要求携带检查报告防顺手绕过；平台侧 runner（拉代码+Docker 构建）不做（§3.7.2） |
+| 9 | CLI 分发渠道 | **不发 npm registry，平台自托管下载**：镜像内置 CLI 单文件，`curl <平台>/install.sh \| sh` 安装；产物保持 tsup 单文件 JS（Node ≥ 18），bun 单二进制不做（目标用户都有 Node）（§7.5） |
+| 10 | 成员上手方式 | 控制台提供**安装页**（人机双视角）：给人看的分步说明 + 给 AI Agent 的一键复制安装指令（同一份文案也在 `GET /install/AGENT.md` 公开提供，`packages/shared` 单一来源）（§3.1） |

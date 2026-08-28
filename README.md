@@ -18,14 +18,16 @@
 
 ## 当前状态
 
-**P0–P3 全部路线图已实现并通过全链路验证**（server 62 个 e2e 用例 + CLI/浏览器真实冒烟）：
+**P0–P3 全部路线图已实现并通过全链路验证**（server 71 个 e2e 用例 + CLI/浏览器真实冒烟）：
 
 - 环境变量：两级可见性、授权（含有效期）、申请审批、信封加密、读取审计
 - Skill：`eat skill push` 纳管、版本、订阅、`eat sync` 落地、经验沉淀
 - 求助系统：Helper 登记 + webhook（HMAC）、双入口求助、多轮对话、平台 AI 整理经验
 - 角色模板、MCP 配置分发（`${env:slug/KEY}` 按权限渲染）、数据库账号分配（真实建库建号）
 - 部署托管：Dokploy 挂载、CLI 端密钥扫描（含平台密钥指纹匹配）、部署门禁与状态透传
-- 三端齐备：Web 控制台（9 个页面）、eat CLI、MCP server（12 个工具）
+- 用户管理：管理员建号 / 改角色 / 禁用启用 / 重置密码（禁用与改密即时吊销 Token）
+- CLI 平台自托管分发：`curl -fsSL <平台>/install.sh | sh` 一条命令安装；控制台安装页提供「给 AI Agent 的一键复制安装指令」
+- 三端齐备：Web 控制台（11 个页面）、eat CLI、MCP server（12 个工具）
 
 ## 快速开始
 
@@ -34,6 +36,13 @@ pnpm install && pnpm build
 pnpm db:migrate && pnpm db:seed      # 初始管理员 admin@example.com / admin12345
 node apps/server/dist/main.js        # http://localhost:3000
 node apps/cli/dist/index.js login    # CLI 设备码登录
+```
+
+团队成员安装 CLI（平台自托管分发，无需 npm registry；也可打开控制台「安装 CLI」页，把 Agent 安装指令一键复制给自己的 AI）：
+
+```bash
+curl -fsSL http://<平台地址>/install.sh | sh
+eat login --server http://<平台地址>
 ```
 
 ## 环境变量配置

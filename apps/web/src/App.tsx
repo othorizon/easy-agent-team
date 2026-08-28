@@ -6,6 +6,7 @@ import { DevicePage } from './pages/Device';
 import { EnvDetailPage } from './pages/EnvDetail';
 import { EnvsPage } from './pages/Envs';
 import { HelpPage } from './pages/Help';
+import { InstallPage } from './pages/Install';
 import { McpConfigsPage } from './pages/McpConfigs';
 import { ProjectsPage } from './pages/Projects';
 import { TemplatesPage } from './pages/Templates';
@@ -15,13 +16,14 @@ import { RequestsPage } from './pages/Requests';
 import { SettingsPage } from './pages/Settings';
 import { SkillDetailPage } from './pages/SkillDetail';
 import { SkillsPage } from './pages/Skills';
+import { UsersPage } from './pages/Users';
 
 function Shell({ children }: { children: React.ReactNode }) {
   const user = getStoredUser();
   const navigate = useNavigate();
   const location = useLocation();
   const first = `/${location.pathname.split('/')[1] ?? ''}`;
-  const selected = ['/skills', '/templates', '/mcp', '/db', '/projects', '/requests', '/help', '/device', '/settings'].includes(
+  const selected = ['/skills', '/templates', '/mcp', '/db', '/projects', '/requests', '/help', '/device', '/install', '/users', '/settings'].includes(
     first,
   )
     ? first
@@ -48,7 +50,13 @@ function Shell({ children }: { children: React.ReactNode }) {
             { key: '/help', label: '求助' },
             { key: '/requests', label: '权限申请' },
             { key: '/device', label: '设备授权' },
-            ...(user?.role === 'admin' ? [{ key: '/settings', label: '系统设置' }] : []),
+            { key: '/install', label: '安装 CLI' },
+            ...(user?.role === 'admin'
+              ? [
+                  { key: '/users', label: '用户' },
+                  { key: '/settings', label: '系统设置' },
+                ]
+              : []),
           ]}
         />
         <Space>
@@ -98,6 +106,8 @@ export function App() {
       <Route path="/help" element={<RequireAuth><HelpPage /></RequireAuth>} />
       <Route path="/help/:id" element={<RequireAuth><HelpDetailPage /></RequireAuth>} />
       <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
+      <Route path="/users" element={<RequireAuth><UsersPage /></RequireAuth>} />
+      <Route path="/install" element={<RequireAuth><InstallPage /></RequireAuth>} />
       <Route path="/device" element={<RequireAuth><DevicePage /></RequireAuth>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

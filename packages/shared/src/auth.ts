@@ -54,6 +54,21 @@ export const createUserRequestSchema = z.object({
 });
 export type CreateUserRequest = z.infer<typeof createUserRequestSchema>;
 
+/** 管理员更新用户角色/状态（禁止操作自己，避免锁死唯一管理员） */
+export const updateUserRequestSchema = z
+  .object({
+    role: z.enum(['admin', 'member']).optional(),
+    status: z.enum(['active', 'disabled']).optional(),
+  })
+  .refine((v) => v.role !== undefined || v.status !== undefined, { message: '至少提供一个要修改的字段' });
+export type UpdateUserRequest = z.infer<typeof updateUserRequestSchema>;
+
+/** 管理员重置用户密码（重置后该用户所有 Token 吊销，需重新登录） */
+export const resetUserPasswordRequestSchema = z.object({
+  password: z.string().min(8, '密码至少 8 位'),
+});
+export type ResetUserPasswordRequest = z.infer<typeof resetUserPasswordRequestSchema>;
+
 export const apiTokenSchema = z.object({
   id: z.string(),
   name: z.string(),

@@ -37,8 +37,10 @@ WORKDIR /app
 
 # 目录布局需与 server 代码中的相对路径一致：
 #   /app/server/dist/main.js 通过 ../../web/dist 找到 /app/web/dist
+#   install 模块通过 ../../cli/dist/index.js 找到 CLI 单文件（平台自托管下载）
 COPY --from=builder /out/server /app/server
 COPY --from=builder /build/apps/web/dist /app/web/dist
+COPY --from=builder /build/apps/cli/dist /app/cli/dist
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh && chown -R node:node /app
 USER node
