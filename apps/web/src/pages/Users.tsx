@@ -1,6 +1,6 @@
 import type { RegistrationSettings } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus } from 'lucide-react';
+import { Plus, UserPlus } from 'lucide-react';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
@@ -12,7 +12,7 @@ import { TagsInput } from '../components/tags-input';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { TableSkeleton } from '../components/ui/skeleton';
@@ -33,6 +33,7 @@ export function UsersPage() {
   const me = getStoredUser();
   const [creating, setCreating] = useState(false);
   const [resetting, setResetting] = useState<UserRow | null>(null);
+  const [editingRegistration, setEditingRegistration] = useState(false);
 
   const users = useQuery({ queryKey: ['users'], queryFn: () => api<UserRow[]>('GET', '/api/users') });
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['users'] });
@@ -76,6 +77,7 @@ export function UsersPage() {
     mutationFn: (v: RegistrationSettings) => api('PUT', '/api/admin/registration-settings', v),
     onSuccess: () => {
       toast.success('注册设置已保存');
+      setEditingRegistration(false);
       void queryClient.invalidateQueries({ queryKey: ['registration-settings'] });
     },
     onError,
@@ -87,33 +89,27 @@ export function UsersPage() {
         title="用户"
         description="账号由管理员创建后线下告知初始密码，或开放注册让成员自助注册。禁用与重置密码都会立即吊销全部 Token。"
         actions={
-          <Button onClick={() => setCreating(true)}>
-            <Plus />
-            新建用户
-          </Button>
+          <>
+            <Button variant="outline" onClick={() => setEditingRegistration(true)}>
+              <UserPlus />
+              注册设置
+              {registration.data && (
+                <span
+                  className={`size-1.5 rounded-full ${registration.data.enabled ? 'bg-success' : 'bg-muted-foreground/40'}`}
+                  title={registration.data.enabled ? '已开放注册' : '未开放注册'}
+                />
+              )}
+            </Button>
+            <Button onClick={() => setCreating(true)}>
+              <Plus />
+              新建用户
+            </Button>
+          </>
         }
       />
 
       <Card>
         <CardContent>
-          <h2 className="mb-1 text-sm font-semibold">开放注册</h2>
-          <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
-            开启后登录页出现「注册」入口，任何能访问平台的人都可自助注册为<strong>成员</strong>账号。
-            可用邮箱后缀限制注册范围（如 @your-company.com）；留空表示任意邮箱都可注册。
-          </p>
-          {registration.data && (
-            <RegistrationForm
-              settings={registration.data}
-              pending={saveRegistration.isPending}
-              onSubmit={(v) => saveRegistration.mutate(v)}
-            />
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent>
-          <h2 className="mb-1 text-sm font-semibold">用户管理</h2>
           <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
             不能修改自己的角色或状态，避免锁死唯一管理员。
           </p>
@@ -193,6 +189,28 @@ export function UsersPage() {
         </CardContent>
       </Card>
 
+      {editingRegistration && (
+        <Dialog open onOpenChange={(open) => !open && setEditingRegistration(false)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>注册设置</DialogTitle>
+              <DialogDescription>
+                开启后登录页出现「注册」入口，任何能访问平台的人都可自助注册为<strong>成员</strong>账号。
+                可用邮箱后缀限制注册范围（如 @your-company.com）；留空表示任意邮箱都可注册。
+              </DialogDescription>
+            </DialogHeader>
+            {registration.data ? (
+              <RegistrationForm
+                settings={registration.data}
+                pending={saveRegistration.isPending}
+                onSubmit={(v) => saveRegistration.mutate(v)}
+              />
+            ) : (
+              <TableSkeleton rows={2} />
+            )}
+          </DialogContent>
+        </Dialog>
+      )}
       {creating && (
         <CreateUserDialog pending={create.isPending} onClose={() => setCreating(false)} onSubmit={(v) => create.mutate(v)} />
       )}
@@ -221,7 +239,7 @@ function RegistrationForm({
   const [suffixes, setSuffixes] = useState<string[]>(settings.allowedEmailSuffixes ?? []);
   return (
     <form
-      className="flex max-w-xl flex-col gap-4"
+      className="flex flex-col gap-4"
       onSubmit={(e) => {
         e.preventDefault();
         onSubmit({ enabled, allowedEmailSuffixes: suffixes });
@@ -233,7 +251,7 @@ function RegistrationForm({
       <Field label="允许的邮箱后缀" hint="回车添加，如 @example.com；留空 = 任意邮箱">
         <TagsInput value={suffixes} onChange={setSuffixes} placeholder="@example.com" />
       </Field>
-      <Button type="submit" loading={pending} className="w-fit">
+      <Button type="submit" loading={pending} className="w-full">
         保存
       </Button>
     </form>
