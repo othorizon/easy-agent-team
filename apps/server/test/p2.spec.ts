@@ -45,7 +45,7 @@ beforeAll(async () => {
     { name: '小王', email: 'wang@test.dev', role: 'member', passwordHash: hash },
     { name: '小张', email: 'zhang@test.dev', role: 'member', passwordHash: hash },
   ]);
-  // 清理可能残留的真实库/账号（上次测试中断时）
+  // 清理上次运行残留的真实库/账号（平台删除是记录级软删除，物理清理只能在实例上手动执行——测试里在此代劳）
   await pool.query(`drop database if exists proj_wang`).catch(() => undefined);
   await pool.query(`drop database if exists proj_zhang`).catch(() => undefined);
   await pool.query(`drop role if exists u_proj_wang`).catch(() => undefined);
@@ -310,14 +310,23 @@ describe('数据库账号分配（真实建库）', () => {
     expect(r.status).toBe(409);
   });
 
-  it('删除分配：库与账号被真实清除，凭证环境删除', async () => {
+  it('删除分配：仅记录级软删除，凭证环境删除，实例上的库与账号保留（决策 13）', async () => {
     const r = await api('DELETE', `/api/db/assignments/${assignmentId}`, { token: adminToken });
     expect(r.body.status).toBe('deleted');
-    const gone = new Client({ host: creds.DB_HOST, port: Number(creds.DB_PORT), user: creds.DB_USER, database: creds.DB_NAME });
-    await expect(gone.connect()).rejects.toThrow();
+    // 不做物理 DROP：实例上的库与账号仍然存在、可连接（物理清理由管理员手动执行）
+    const still = new Client({
+      host: creds.DB_HOST,
+      port: Number(creds.DB_PORT),
+      user: creds.DB_USER,
+      password: creds.DB_PASSWORD,
+      database: creds.DB_NAME,
+    });
+    await still.connect();
+    expect((await still.query('select 1 as ok')).rows[0].ok).toBe(1);
+    await still.end();
     const env = await api('POST', '/api/envs/db-proj-wang/values', { token: m1Token, payload: {} });
     expect(env.status).toBe(404);
-    // 现在可以删除实例了
+    // 记录已删除（非 active），可以删除实例登记了
     expect((await api('DELETE', `/api/db/instances/${instanceId}`, { token: adminToken })).status).toBe(200);
   });
 });

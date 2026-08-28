@@ -52,10 +52,4 @@ export async function enablePostgres(conn: AdminConn, dbUser: string): Promise<v
   });
 }
 
-export async function dropPostgres(conn: AdminConn, dbName: string, dbUser: string): Promise<void> {
-  await withAdmin(conn, async (c) => {
-    await c.query(`select pg_terminate_backend(pid) from pg_stat_activity where datname = $1 and pid <> pg_backend_pid()`, [dbName]);
-    await c.query(`drop database if exists ${q(dbName)}`);
-    await c.query(`drop role if exists ${q(dbUser)}`);
-  });
-}
+// 平台不做物理删库（决策 13）：删除分配仅记录级，DROP DATABASE/ROLE 由管理员在实例上手动执行。
