@@ -57,6 +57,7 @@ export class ExperiencesService {
 
     const slug = dto.slug ?? `exp-${requestId.slice(0, 8)}`;
     const name = dto.name ?? req.title;
+    const description = `经验沉淀：${req.title}`;
 
     // 内容来源优先级：手工提供 > AI 整理（失败回退模板）> 模板
     let content = dto.content ?? '';
@@ -73,12 +74,13 @@ export class ExperiencesService {
       }
     }
     if (!content) content = this.templateDraft(req, messages);
+    content = this.ensureFrontmatter(slug, description, content);
 
     // 经验即 Skill：复用推送通道（大小限制/密钥扫描同样生效），Owner=被求助者
     await this.skillsService.push(user, {
       slug,
       name,
-      description: `经验沉淀：${req.title}`,
+      description,
       content,
       files: [],
       changelog: `沉淀自求助 ${requestId.slice(0, 8)}`,
@@ -133,6 +135,16 @@ export class ExperiencesService {
       createdAt: row.createdAt.toISOString(),
       aiUsed,
     };
+  }
+
+  /**
+   * SKILL.md 需以 frontmatter（name/description）开头才是标准 Agent Skill——落地本地后
+   * description 是 AI 会话判断"何时用这份经验"的依据。AI 与模板产出的都是纯正文，
+   * 这里统一合成；手工提供且已自带 frontmatter 的内容保留原样。
+   */
+  private ensureFrontmatter(slug: string, description: string, body: string): string {
+    if (/^---\r?\n/.test(body)) return body;
+    return `---\nname: ${slug}\ndescription: ${description.replace(/\s+/g, ' ').trim()}\n---\n\n${body}`;
   }
 
   private buildThreadText(

@@ -273,6 +273,8 @@ describe('经验沉淀', () => {
     const detail = await api('GET', '/api/skills/exp-duizhang', { token: requesterToken });
     expect(detail.status).toBe(200);
     expect(detail.body.source).toBe('experience');
+    // 合成的标准 frontmatter：name=slug，description 用于本地 AI 触发
+    expect(detail.body.content.startsWith('---\nname: exp-duizhang\ndescription: 经验沉淀：对账单里的差异字段是什么意思\n---\n\n')).toBe(true);
     expect(detail.body.content).toContain('状态差异先核对流水号');
     const bundle = await api('GET', '/api/skills/sync-bundle', { token: requesterToken });
     expect(bundle.body.map((s: { slug: string }) => s.slug)).toContain('exp-duizhang');
@@ -353,7 +355,9 @@ describe('平台 AI 接入', () => {
     expect(r.body.aiUsed).toBe(true);
     const skill = await api('GET', '/api/skills/exp-chongxiao', { token: thirdToken });
     expect(skill.status).toBe(200);
-    expect(skill.body.content).toBe(AI_CONTENT);
+    expect(skill.body.content).toBe(
+      `---\nname: exp-chongxiao\ndescription: 经验沉淀：ERP 里的冲销单怎么建\n---\n\n${AI_CONTENT}`,
+    );
     const search = await api('GET', '/api/experiences?q=对账差异排查', { token: thirdToken });
     expect(search.body.map((e: { skillSlug: string }) => e.skillSlug)).toContain('exp-chongxiao');
   });
