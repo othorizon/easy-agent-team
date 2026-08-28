@@ -29,7 +29,7 @@ export function buildAgentInstallGuide(publicUrl: string): string {
    \`\`\`sh
    eat sync
    \`\`\`
-   会把有权限的 Skill 落地到 \`~/.claude/skills/\`，并输出团队 MCP 配置的合并指引。
+   会把有权限的 Skill 落地到 \`~/.agents/skills/\`（并软链到 \`~/.claude/skills/\`），其中始终包含平台内置的 \`eat-platform-guide\`——之后的 AI 会话读它就知道 eat 平台有哪些能力、该怎么用（先查经验再求助、无权限走申请等）。同时输出团队 MCP 配置的合并指引。
 
 5. **验证**：\`eat whoami\` 应输出用户身份；失败则回到第 2 步重试。
 

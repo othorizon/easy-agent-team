@@ -111,19 +111,22 @@ describe('角色模板', () => {
     expect(list.body.find((t: { id: string }) => t.id === templateId).selectedByMe).toBe(true);
 
     const bundle = await api('GET', '/api/skills/sync-bundle', { token: m1Token });
-    const slugs = bundle.body.map((s: { slug: string }) => s.slug).sort();
+    // 内置平台指南始终在 bundle 首位（skills.spec 单独覆盖），此处只关心模板部分
+    const slugs = bundle.body.map((s: { slug: string }) => s.slug).filter((s: string) => s !== 'eat-platform-guide').sort();
     expect(slugs).toEqual(['tpl-skill-a', 'tpl-skill-b']);
-    expect(bundle.body[0].relation).toBe('template');
+    expect(bundle.body.find((s: { slug: string }) => s.slug === 'tpl-skill-a').relation).toBe('template');
   });
 
   it('排除模板条目：退订某项后从 bundle 消失，重新订阅恢复', async () => {
+    const skillSlugs = (bundle: { body: Array<{ slug: string }> }) =>
+      bundle.body.map((s) => s.slug).filter((s) => s !== 'eat-platform-guide');
     await api('DELETE', '/api/skills/tpl-skill-b/subscribe', { token: m1Token });
     let bundle = await api('GET', '/api/skills/sync-bundle', { token: m1Token });
-    expect(bundle.body.map((s: { slug: string }) => s.slug)).toEqual(['tpl-skill-a']);
+    expect(skillSlugs(bundle)).toEqual(['tpl-skill-a']);
 
     await api('POST', '/api/skills/tpl-skill-b/subscribe', { token: m1Token });
     bundle = await api('GET', '/api/skills/sync-bundle', { token: m1Token });
-    expect(bundle.body.map((s: { slug: string }) => s.slug).sort()).toEqual(['tpl-skill-a', 'tpl-skill-b']);
+    expect(skillSlugs(bundle).sort()).toEqual(['tpl-skill-a', 'tpl-skill-b']);
   });
 
   it('模板更新自动生效；取消选用后仅保留手动订阅', async () => {
@@ -137,14 +140,16 @@ describe('角色模板', () => {
         ],
       },
     });
+    const skillSlugs = (bundle: { body: Array<{ slug: string }> }) =>
+      bundle.body.map((s) => s.slug).filter((s) => s !== 'eat-platform-guide');
     let bundle = await api('GET', '/api/skills/sync-bundle', { token: m1Token });
-    expect(bundle.body.map((s: { slug: string }) => s.slug).sort()).toEqual(['tpl-skill-a', 'tpl-skill-b', 'tpl-skill-c']);
+    expect(skillSlugs(bundle).sort()).toEqual(['tpl-skill-a', 'tpl-skill-b', 'tpl-skill-c']);
 
     await api('POST', '/api/templates/deselect', { token: m1Token });
     bundle = await api('GET', '/api/skills/sync-bundle', { token: m1Token });
     // tpl-skill-b 在上一步被手动重新订阅过（source=manual），保留；模板派生的 a/c 消失
-    expect(bundle.body.map((s: { slug: string }) => s.slug)).toEqual(['tpl-skill-b']);
-    expect(bundle.body[0].relation).toBe('subscribed');
+    expect(skillSlugs(bundle)).toEqual(['tpl-skill-b']);
+    expect(bundle.body.find((s: { slug: string }) => s.slug === 'tpl-skill-b').relation).toBe('subscribed');
   });
 });
 

@@ -77,8 +77,8 @@ ask.command('resolve <id>').description('标记已解决').action(askResolve);
 
 program
   .command('sync')
-  .description('同步已订阅的 Skill 到本地（默认 ~/.claude/skills）')
-  .option('--dir <dir>', '落地目录')
+  .description('同步 Skill 到本地（落地 ~/.agents/skills 并软链到 ~/.claude/skills）')
+  .option('--dir <dir>', '自定义落地目录（指定后不建软链）')
   .option('--force', '覆盖非 eat 管理的同名目录 / 强制重写')
   .action(sync);
 

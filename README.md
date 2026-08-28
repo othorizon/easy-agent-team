@@ -18,7 +18,7 @@
 
 ## 当前状态
 
-**P0–P3 全部路线图已实现并通过全链路验证**（server 71 个 e2e 用例 + CLI/浏览器真实冒烟）：
+**P0–P3 全部路线图已实现并通过全链路验证**（server 73 个 e2e 用例 + CLI/浏览器真实冒烟）：
 
 - 环境变量：两级可见性、授权（含有效期）、申请审批、信封加密、读取审计
 - Skill：`eat skill push` 纳管、版本、订阅、`eat sync` 落地、经验沉淀
@@ -27,6 +27,7 @@
 - 部署托管：Dokploy 挂载、CLI 端密钥扫描（含平台密钥指纹匹配）、部署门禁与状态透传
 - 用户管理：管理员建号 / 改角色 / 禁用启用 / 重置密码（禁用与改密即时吊销 Token）
 - CLI 平台自托管分发：`curl -fsSL <平台>/install.sh | sh` 一条命令安装；控制台安装页提供「给 AI Agent 的一键复制安装指令」
+- 内置「平台使用指南」Skill：`eat sync` 对每个成员自动落地 `eat-platform-guide`，让本地 AI 认识平台能力与正确用法；Skill 统一落 `~/.agents/skills/` 并软链到 `~/.claude/skills/`
 - 三端齐备：Web 控制台（11 个页面）、eat CLI、MCP server（12 个工具）
 
 ## 快速开始
