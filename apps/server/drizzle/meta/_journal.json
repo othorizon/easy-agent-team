@@ -36,6 +36,13 @@
       "when": 1787833695451,
       "tag": "0004_minor_jamie_braddock",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787918258994,
+      "tag": "0005_lowly_reavers",
+      "breakpoints": true
     }
   ]
 }

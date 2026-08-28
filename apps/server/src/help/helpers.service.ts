@@ -31,6 +31,8 @@ export class HelpersService {
           description: dto.description,
           webhookUrl,
           webhookSecretEncrypted: secretEncrypted,
+          notifyHelp: dto.notifyHelp,
+          notifyReply: dto.notifyReply,
           available: dto.available,
           updatedAt: sql`now()`,
         })
@@ -41,6 +43,8 @@ export class HelpersService {
         description: dto.description,
         webhookUrl,
         webhookSecretEncrypted: secretEncrypted,
+        notifyHelp: dto.notifyHelp,
+        notifyReply: dto.notifyReply,
         available: dto.available,
       });
     }
@@ -58,6 +62,8 @@ export class HelpersService {
       description: row.description,
       webhookUrl: row.webhookUrl ?? '',
       hasWebhookSecret: !!row.webhookSecretEncrypted,
+      notifyHelp: row.notifyHelp,
+      notifyReply: row.notifyReply,
       available: row.available,
     };
   }
@@ -110,12 +116,13 @@ export class HelpersService {
     };
   }
 
-  /** 内部用：取某用户的 webhook 配置（解密 secret） */
-  async webhookOf(userId: string): Promise<{ url: string; secret: string | null } | null> {
+  /** 内部用：取某用户的 webhook 配置（解密 secret）。按事件类型尊重「接收求助/接收回复」开关，关闭时返回 null */
+  async webhookOf(userId: string, kind: 'help' | 'reply'): Promise<{ url: string; secret: string | null } | null> {
     const row = (
       await this.db.select().from(helperProfiles).where(eq(helperProfiles.userId, userId)).limit(1)
     )[0];
     if (!row?.webhookUrl) return null;
+    if (kind === 'help' ? !row.notifyHelp : !row.notifyReply) return null;
     return {
       url: row.webhookUrl,
       secret: row.webhookSecretEncrypted ? decryptSecret(row.webhookSecretEncrypted) : null,

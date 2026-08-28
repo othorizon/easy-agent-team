@@ -336,6 +336,9 @@ export const helperProfiles = pgTable('helper_profile', {
   description: text('description').notNull(),
   webhookUrl: text('webhook_url'),
   webhookSecretEncrypted: text('webhook_secret_encrypted'),
+  /** webhook 开关：接收找我的新求助 / 接收我参与求助的新回复 */
+  notifyHelp: boolean('notify_help').notNull().default(true),
+  notifyReply: boolean('notify_reply').notNull().default(true),
   available: boolean('available').notNull().default(true),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

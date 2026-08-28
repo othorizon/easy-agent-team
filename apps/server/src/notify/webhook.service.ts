@@ -8,8 +8,9 @@ const MAX_ATTEMPTS = 5;
 const BACKOFF_MS = [0, 2000, 4000, 8000, 16000];
 
 /**
- * 出站通知：飞书群自定义机器人 webhook（§10 决策 16）。
- * 消息体为飞书 msg_type=text；机器人开启「加签」时按飞书规范附 timestamp + sign
+ * 出站通知：飞书群自定义机器人 webhook（§10 决策 16/17）。
+ * 消息体为飞书 msg_type=interactive 卡片（构建逻辑在 @eat/shared 的 buildHelpFeishuCard，测试脚本共用）；
+ * 机器人开启「加签」时按飞书规范附 timestamp + sign
  * （HmacSHA256(key = `${timestamp}\n${secret}`, data = 空串) 后 base64，签名随每次尝试重算避免过期）。
  * 飞书的失败常以 HTTP 200 + 非零 code 返回，因此按响应体 code 判定成败。
  * 重试为进程内指数退避（最多 5 次），投递状态落 webhook_delivery 便于排查。
@@ -21,9 +22,9 @@ export class WebhookService {
 
   constructor(@Inject(DB) private readonly db: Db) {}
 
-  /** 触发即返回，投递在后台进行 */
-  notify(eventType: string, targetUrl: string, secret: string | null, data: Record<string, unknown>, summary = ''): void {
-    void this.deliver(eventType, targetUrl, secret, data, summary).catch((err) =>
+  /** 触发即返回，投递在后台进行。card 为飞书卡片 JSON（不含加签字段） */
+  notify(eventType: string, targetUrl: string, secret: string | null, card: Record<string, unknown>, summary = ''): void {
+    void this.deliver(eventType, targetUrl, secret, card, summary).catch((err) =>
       this.logger.warn(`webhook 投递异常: ${(err as Error).message}`),
     );
   }
@@ -32,7 +33,7 @@ export class WebhookService {
     eventType: string,
     targetUrl: string,
     secret: string | null,
-    data: Record<string, unknown>,
+    card: Record<string, unknown>,
     summary: string,
   ): Promise<void> {
     const [row] = await this.db
@@ -40,19 +41,13 @@ export class WebhookService {
       .values({ eventType, targetUrl, summary })
       .returning({ id: webhookDeliveries.id });
 
-    const lines = [summary];
-    const from = data.requester ?? data.from;
-    if (typeof from === 'string' && from) lines.push(`来自：${from}`);
-    if (typeof data.url === 'string' && data.url) lines.push(data.url);
-    const text = lines.filter(Boolean).join('\n');
-
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       if (BACKOFF_MS[attempt - 1]) await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt - 1]));
       try {
         const res = await fetch(targetUrl, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: this.buildFeishuBody(secret, text),
+          body: this.buildFeishuBody(secret, card),
           signal: AbortSignal.timeout(10_000),
         });
         const error = await this.feishuError(res);
@@ -70,8 +65,8 @@ export class WebhookService {
     }
   }
 
-  private buildFeishuBody(secret: string | null, text: string): string {
-    const msg: Record<string, unknown> = { msg_type: 'text', content: { text } };
+  private buildFeishuBody(secret: string | null, card: Record<string, unknown>): string {
+    const msg: Record<string, unknown> = { msg_type: 'interactive', card };
     if (secret) {
       const timestamp = String(Math.floor(Date.now() / 1000));
       msg.timestamp = timestamp;

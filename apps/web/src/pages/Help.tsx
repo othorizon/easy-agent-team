@@ -4,6 +4,7 @@ import {
   App,
   Button,
   Card,
+  Collapse,
   Form,
   Input,
   Modal,
@@ -27,7 +28,15 @@ export const HELP_STATUS_TAG: Record<string, JSX.Element> = {
 
 type MyProfile =
   | { registered: false }
-  | { registered: true; description: string; webhookUrl: string; hasWebhookSecret: boolean; available: boolean };
+  | {
+      registered: true;
+      description: string;
+      webhookUrl: string;
+      hasWebhookSecret: boolean;
+      notifyHelp: boolean;
+      notifyReply: boolean;
+      available: boolean;
+    };
 
 export function HelpPage() {
   const { message } = App.useApp();
@@ -101,27 +110,48 @@ export function HelpPage() {
             initialValues={
               profile.data.registered
                 ? profile.data
-                : { description: '', webhookUrl: '', available: true, webhookSecret: '' }
+                : { description: '', webhookUrl: '', webhookSecret: '', notifyHelp: true, notifyReply: true, available: true }
             }
             onFinish={(v: UpsertHelperProfileRequest) => saveProfile.mutate(v)}
           >
-            <Form.Item name="description" label="能力描述（AI 会读取）" rules={[{ required: true }]}>
+            <Form.Item name="description" label="能力描述（AI 会读取，可留空）">
               <Input.TextArea rows={2} placeholder="例如：熟悉支付对账、内部 ERP 系统、部署流程" />
             </Form.Item>
-            <Form.Item name="webhookUrl" label="飞书机器人 Webhook 地址（可选：新求助/新回复会推送到该飞书群）">
-              <Input placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." />
-            </Form.Item>
-            <Form.Item
-              name="webhookSecret"
-              label="飞书加签密钥（可选：机器人开启「签名校验」时，从飞书复制粘贴到这里）"
-              extra={
-                profile.data.registered && profile.data.hasWebhookSecret
-                  ? '已配置加签密钥；留空保持不变，重新填写则覆盖'
-                  : '机器人未开加签则留空'
-              }
-            >
-              <Input.Password placeholder="飞书机器人安全设置里的签名密钥" autoComplete="new-password" />
-            </Form.Item>
+            <Collapse
+              style={{ marginBottom: 24 }}
+              items={[
+                {
+                  key: 'webhook',
+                  // forceRender：折叠时也注册表单字段，否则保存会把没展开的 webhook 配置清掉
+                  forceRender: true,
+                  label: `飞书群机器人通知（webhook${profile.data.registered && profile.data.webhookUrl ? '，已配置' : '，未配置'}）`,
+                  children: (
+                    <>
+                      <Form.Item name="webhookUrl" label="飞书机器人 Webhook 地址（求助/回复以卡片消息推送到该飞书群）">
+                        <Input placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." />
+                      </Form.Item>
+                      <Form.Item
+                        name="webhookSecret"
+                        label="飞书加签密钥（可选：机器人开启「签名校验」时，从飞书复制粘贴到这里）"
+                        extra={
+                          profile.data.registered && profile.data.hasWebhookSecret
+                            ? '已配置加签密钥；留空保持不变，重新填写则覆盖'
+                            : '机器人未开加签则留空'
+                        }
+                      >
+                        <Input.Password placeholder="飞书机器人安全设置里的签名密钥" autoComplete="new-password" />
+                      </Form.Item>
+                      <Form.Item name="notifyHelp" label="接收求助（找我的新求助推送到群）" valuePropName="checked">
+                        <Switch checkedChildren="开" unCheckedChildren="关" />
+                      </Form.Item>
+                      <Form.Item name="notifyReply" label="接收回复（我参与的求助有新回复时推送到群）" valuePropName="checked" style={{ marginBottom: 0 }}>
+                        <Switch checkedChildren="开" unCheckedChildren="关" />
+                      </Form.Item>
+                    </>
+                  ),
+                },
+              ]}
+            />
             <Form.Item name="available" label="接单状态（关闭 = 勿扰，不出现在候选名单）" valuePropName="checked">
               <Switch checkedChildren="可接单" unCheckedChildren="勿扰" />
             </Form.Item>
