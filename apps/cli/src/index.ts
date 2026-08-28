@@ -77,7 +77,9 @@ ask.command('resolve <id>').description('标记已解决').action(askResolve);
 
 program
   .command('sync')
-  .description('同步 Skill 到本地（落地 ~/.agents/skills 并软链到 ~/.claude/skills）')
+  .description('同步 Skill 到本地（默认全局：落地 ~/.agents/skills 并软链到 ~/.claude/skills）')
+  .option('-g, --global', '安装到全局目录 ~/.agents/skills + 软链 ~/.claude/skills（默认）')
+  .option('-p, --project', '安装到当前项目 ./.agents/skills + 软链 ./.claude/skills')
   .option('--dir <dir>', '自定义落地目录（指定后不建软链）')
   .option('--force', '覆盖非 eat 管理的同名目录 / 强制重写')
   .action(sync);

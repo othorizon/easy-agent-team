@@ -127,7 +127,7 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 
 ### 3.2.3 同步机制（CLI）
 
-- `eat sync`：将当前用户的有效 Skill 集合落地到本地（默认落 `~/.agents/skills/` 并逐个软链到 `~/.claude/skills/`，跨 Agent 工具共用一份；`--dir` 可自定义目录，此时不建软链），同时生成/更新 MCP 配置；历史直接落在 `~/.claude/skills/` 的受管目录会自动迁移为软链；
+- `eat sync`：将当前用户的有效 Skill 集合落地到本地，同时生成/更新 MCP 配置。安装范围三选一（互斥，类 npx skills 的 global/project 语义）：默认/`--global` 落 `~/.agents/skills/` 并逐个软链到 `~/.claude/skills/`（跨 Agent 工具共用一份）；`--project` 落当前项目 `./.agents/skills/` 并以**相对**软链接入 `./.claude/skills/`（仓库整体提交/移动后链接仍有效）；`--dir` 自定义目录，不建软链。历史直接落在 `.claude/skills/` 的受管目录会自动迁移为软链；
 - 采用「平台为准」的单向同步：本地被用户手工改过的沉淀目录会提示冲突，`--force` 覆盖；
 - 每个落地的 skill 目录带 `.eat-meta.json` 记录来源与版本，便于增量更新与清理已退订项；
 - **本地已有 skill 的纳管**：`eat skill push <目录>` 把本地写好的 skill 上传到平台——首次推送创建新 Skill（自己为 Owner），再次推送产生新版本；推送后平台成为该 Skill 的事实源，本地目录转为受管目录。
@@ -349,7 +349,7 @@ CLI 与 MCP Server 同一个产物分发（平台自托管下载：`curl -fsSL <
 | 命令 | 功能 |
 |---|---|
 | `eat login` / `eat logout` / `eat whoami` | 设备码登录、登出、查看当前身份 |
-| `eat sync` | 同步 Skill + MCP 配置到本地（模板 + 订阅 + 自建 + 沉淀经验） |
+| `eat sync [--global\|--project\|--dir <dir>]` | 同步 Skill + MCP 配置到本地（模板 + 订阅 + 自建 + 沉淀经验）；默认全局，`--project` 装到当前项目 |
 | `eat skill push <dir>` | 把本地已有 skill 上传纳管（首次创建、再次推送出新版本） |
 | `eat env list [env]` | 列出可见环境与变量清单（key + 备注 + 权限状态） |
 | `eat env pull <env> [--format dotenv]` | 拉取有权限的变量值，写入 `.env` 或输出 |
@@ -649,3 +649,4 @@ easy-agent-team/
 | 11 | 平台使用指南 Skill 的携带方式 | **内置虚拟 Skill**（方案 A）：内容随平台代码维护、版本号常量控制更新，`sync-bundle` 对所有用户始终注入，不落库、不可退订、slug 保留；获取需登录（`eat sync`），登录前由免鉴权 `/install/AGENT.md` 兜底（§3.8） |
 | 12 | `eat sync` 落地目录 | 实际文件落 `~/.agents/skills/`（跨 Agent 工具共用），逐个**软链**到 `~/.claude/skills/`；历史直接落地目录自动迁移；`--dir` 自定义时不建软链（§3.2.2） |
 | 13 | 数据库分配的删除语义 | **仅记录级软删除，平台不做物理 DROP**：删除只标记记录 deleted 并移除凭证环境，实例上的数据库与账号保留，物理清理由管理员在实例上手动执行；控制台二次确认时明确提示。rejected 的记录同样可删（§3.4） |
+| 14 | `eat sync` 安装范围参数 | 类 npx skills 的 global/project 语义：默认/`--global` 落 `~/.agents/skills/` + 软链 `~/.claude/skills/`（决策 12 布局不变）；`--project` 落当前项目 `./.agents/skills/` + **相对**软链 `./.claude/skills/`；`--dir` 仍为自定义目录不建软链；三者互斥（§3.2.3） |
