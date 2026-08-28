@@ -1,6 +1,6 @@
 /**
  * P1 求助系统端到端测试：
- * Helper 登记 / 求助状态机 / 可见性 / 频率限制 / webhook(HMAC 验签) /
+ * Helper 登记 / 求助状态机 / 可见性 / 频率限制 / 飞书 webhook（mock 机器人 + 加签验签，决策 16）/
  * AI 设置 / 经验沉淀（模板回退 + mock OpenAI）/ 经验搜索与授权
  */
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? 'postgres://dev@127.0.0.1:5433/eat_test';
@@ -25,11 +25,11 @@ let thirdToken: string;
 let adminToken: string;
 let helperId: string;
 
-// 本地 webhook 接收端
-const webhookHits: Array<{ signature: string | undefined; body: string }> = [];
+// 本地 mock 飞书机器人接收端（HTTP 200 + code:0 表示成功）
+const webhookHits: Array<{ body: string }> = [];
 let webhookServer: http.Server;
 let webhookUrl: string;
-let webhookSecret: string;
+const webhookSecret = 'feishu-sign-secret-for-test'; // 用户从飞书「加签」处粘贴的密钥
 
 // 本地 mock OpenAI
 const AI_CONTENT = '# AI 整理的经验\n\n## 适用场景\n对账差异排查\n\n## 结论\n先核对流水号再对金额。';
@@ -78,8 +78,8 @@ beforeAll(async () => {
     let body = '';
     req.on('data', (c) => (body += c));
     req.on('end', () => {
-      webhookHits.push({ signature: req.headers['x-eat-signature'] as string | undefined, body });
-      res.writeHead(200).end('ok');
+      webhookHits.push({ body });
+      res.writeHead(200, { 'content-type': 'application/json' }).end('{"code":0,"msg":"success"}');
     });
   });
   webhookUrl = `http://127.0.0.1:${await listen(webhookServer)}/hook`;
@@ -124,36 +124,37 @@ let requestId: string;
 let skillRequestId: string;
 
 describe('Helper 登记', () => {
-  it('登记（含 webhook）返回一次性签名密钥；出现在候选名单', async () => {
+  it('登记（含飞书 webhook + 用户粘贴的加签密钥）；出现在候选名单', async () => {
     const r = await api('PUT', '/api/helpers/me', {
       token: helperToken,
-      payload: { description: '熟悉支付对账、内部 ERP 系统', webhookUrl, available: true },
+      payload: { description: '熟悉支付对账、内部 ERP 系统', webhookUrl, webhookSecret, available: true },
     });
     expect(r.status).toBe(200);
-    expect(r.body.webhookSecret).toMatch(/^whsec_/);
-    webhookSecret = r.body.webhookSecret;
+    expect(r.body.hasWebhookSecret).toBe(true);
+    expect(r.body.webhookSecret).toBeUndefined(); // 密钥不回显
 
     const targets = await api('GET', '/api/helpers', { token: requesterToken });
     expect(targets.body.helpers.map((h: { name: string }) => h.name)).toContain('资深同事D');
     expect(targets.body.helpers[0].description).toContain('支付对账');
   });
 
-  it('勿扰后从候选名单消失，恢复后回来', async () => {
+  it('勿扰后从候选名单消失，恢复后回来；更新时留空加签密钥保持不变', async () => {
     await api('PUT', '/api/helpers/me', {
       token: helperToken,
       payload: { description: '熟悉支付对账、内部 ERP 系统', webhookUrl, available: false },
     });
     const off = await api('GET', '/api/helpers', { token: requesterToken });
     expect(off.body.helpers).toEqual([]);
-    await api('PUT', '/api/helpers/me', {
+    const back = await api('PUT', '/api/helpers/me', {
       token: helperToken,
       payload: { description: '熟悉支付对账、内部 ERP 系统', webhookUrl, available: true },
     });
+    expect(back.body.hasWebhookSecret).toBe(true); // 两次都没带 webhookSecret，仍保留首次配置的值
   });
 });
 
 describe('求助流程', () => {
-  it('创建求助 → webhook 收到 help.created 且 HMAC 验签通过', async () => {
+  it('创建求助 → 飞书机器人收到 text 消息且加签验签通过', async () => {
     const r = await api('POST', '/api/help-requests', {
       token: requesterToken,
       payload: {
@@ -168,12 +169,14 @@ describe('求助流程', () => {
     requestId = r.body.id;
 
     await waitFor(() => webhookHits.length >= 1);
-    const hit = webhookHits[0];
-    const expected = createHmac('sha256', webhookSecret).update(hit.body).digest('hex');
-    expect(hit.signature).toBe(expected);
-    const payload = JSON.parse(hit.body);
-    expect(payload.event).toBe('help.created');
-    expect(payload.data.title).toContain('对账单');
+    const payload = JSON.parse(webhookHits[0].body);
+    expect(payload.msg_type).toBe('text');
+    expect(payload.content.text).toContain('求助: 对账单');
+    expect(payload.content.text).toContain('来自：');
+    expect(payload.content.text).toContain(`/help/${requestId}`);
+    // 飞书加签：sign = base64(HmacSHA256(key = `${timestamp}\n${secret}`, data = 空串))
+    const expected = createHmac('sha256', `${payload.timestamp}\n${webhookSecret}`).update('').digest('base64');
+    expect(payload.sign).toBe(expected);
   });
 
   it('可见性：第三人 404，管理员可见（决策 #1）', async () => {
