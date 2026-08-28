@@ -10,6 +10,7 @@ import { DeployModule } from './deploy/deploy.module';
 import { EnvsModule } from './envs/envs.module';
 import { HealthController } from './health.controller';
 import { HelpModule } from './help/help.module';
+import { InstallModule } from './install/install.module';
 import { McpConfigsModule } from './mcp-configs/mcp-configs.module';
 import { NotifyModule } from './notify/notify.module';
 import { SkillsModule } from './skills/skills.module';
@@ -27,6 +28,7 @@ import { UsersModule } from './users/users.module';
     EnvsModule,
     SkillsModule,
     HelpModule,
+    InstallModule,
     TemplatesModule,
     McpConfigsModule,
     DbsModule,
