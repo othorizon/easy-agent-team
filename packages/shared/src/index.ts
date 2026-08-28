@@ -3,6 +3,7 @@ export * from './auth.js';
 export * from './env.js';
 export * from './skill.js';
 export * from './help.js';
+export * from './feishu-card.js';
 export * from './ai.js';
 export * from './template.js';
 export * from './mcp.js';
