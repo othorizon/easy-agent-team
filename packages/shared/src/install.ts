@@ -13,7 +13,7 @@ export function buildAgentInstallGuide(publicUrl: string): string {
    \`\`\`sh
    curl -fsSL ${publicUrl}/install.sh | sh
    \`\`\`
-   脚本会把 CLI 装到 \`~/.eat/bin/eat\`。若脚本提示需要手动配置 PATH，按提示处理；本次会话中也可以直接用完整路径 \`~/.eat/bin/eat\`。
+   脚本会把 CLI 装到 \`~/.eat/bin/eat\`，并自动配置 PATH：软链到 \`~/.local/bin\`（以及可写时的 \`/usr/local/bin\`），同时幂等写入 shell 配置（zsh 的 \`~/.zshenv\`、bash 的 \`~/.bashrc\` 等），新开终端与非交互 shell 都能直接用 \`eat\`。当前会话如找不到命令，先执行 \`export PATH="$HOME/.eat/bin:$PATH"\` 或直接用完整路径 \`~/.eat/bin/eat\`。
 
 2. **登录**（设备码授权，需要用户参与）：
    \`\`\`sh
