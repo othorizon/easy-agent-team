@@ -514,7 +514,7 @@ sequenceDiagram
 
 ### 6.2 部署流程
 
-`eat deploy` → 平台创建 deployment(pending) → 平台 runner 拉代码跑前置检查 → 全部通过 → 调 Dokploy API 触发部署 → 轮询/webhook 回传状态 → 成功/失败通知触发人。任一检查失败则终止，AI 可读检查报告自行修复后重试。
+`eat deploy` → CLI 在发起端本地执行前置检查（密钥扫描含平台指纹匹配 + 可选 `--check` 预跑，平台不拉代码，见决策 #8）→ 全部通过后携带检查报告调用平台 API → 平台校验报告并创建 deployment → 调 Dokploy API 触发部署 → 轮询状态回传 → 成功/失败通知触发人。任一本地检查失败则终止，AI 可读检查报告自行修复后重试。
 
 ---
 
