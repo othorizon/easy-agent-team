@@ -1,7 +1,6 @@
 import type { HelperInfo, HelpRequestInfo, HelpTargets, UpsertHelperProfileRequest } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Alert,
   App,
   Button,
   Card,
@@ -26,13 +25,14 @@ export const HELP_STATUS_TAG: Record<string, JSX.Element> = {
   closed: <Tag>已关闭</Tag>,
 };
 
-type MyProfile = { registered: false } | { registered: true; description: string; webhookUrl: string; available: boolean };
+type MyProfile =
+  | { registered: false }
+  | { registered: true; description: string; webhookUrl: string; hasWebhookSecret: boolean; available: boolean };
 
 export function HelpPage() {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
   const [asking, setAsking] = useState(false);
-  const [webhookSecret, setWebhookSecret] = useState<string | null>(null);
 
   const profile = useQuery({ queryKey: ['helper-me'], queryFn: () => api<MyProfile>('GET', '/api/helpers/me') });
   const targets = useQuery({ queryKey: ['help-targets'], queryFn: () => api<HelpTargets>('GET', '/api/helpers') });
@@ -40,10 +40,9 @@ export function HelpPage() {
   const mine = useQuery({ queryKey: ['help-mine'], queryFn: () => api<HelpRequestInfo[]>('GET', '/api/help-requests/mine') });
 
   const saveProfile = useMutation({
-    mutationFn: (v: UpsertHelperProfileRequest) => api<{ webhookSecret: string | null }>('PUT', '/api/helpers/me', v),
-    onSuccess: (res) => {
+    mutationFn: (v: UpsertHelperProfileRequest) => api<MyProfile>('PUT', '/api/helpers/me', v),
+    onSuccess: () => {
       message.success('已保存');
-      if (res.webhookSecret) setWebhookSecret(res.webhookSecret);
       void queryClient.invalidateQueries({ queryKey: ['helper-me'] });
       void queryClient.invalidateQueries({ queryKey: ['help-targets'] });
     },
@@ -95,17 +94,6 @@ export function HelpPage() {
         <Typography.Paragraph type="secondary">
           登记后，其他成员（和他们的 AI）遇到你擅长的问题时会来求助。「能力描述」会被 AI 读取用于选择求助对象，请写清楚擅长领域。
         </Typography.Paragraph>
-        {webhookSecret && (
-          <Alert
-            type="success"
-            showIcon
-            style={{ marginBottom: 16 }}
-            message="Webhook 签名密钥（仅此一次展示，请保存到接收端用于验签）"
-            description={<Typography.Text code copyable>{webhookSecret}</Typography.Text>}
-            closable
-            onClose={() => setWebhookSecret(null)}
-          />
-        )}
         {profile.data && (
           <Form
             layout="vertical"
@@ -113,15 +101,26 @@ export function HelpPage() {
             initialValues={
               profile.data.registered
                 ? profile.data
-                : { description: '', webhookUrl: '', available: true }
+                : { description: '', webhookUrl: '', available: true, webhookSecret: '' }
             }
             onFinish={(v: UpsertHelperProfileRequest) => saveProfile.mutate(v)}
           >
             <Form.Item name="description" label="能力描述（AI 会读取）" rules={[{ required: true }]}>
               <Input.TextArea rows={2} placeholder="例如：熟悉支付对账、内部 ERP 系统、部署流程" />
             </Form.Item>
-            <Form.Item name="webhookUrl" label="Webhook 告警地址（可选：新求助/新回复会推送到这里，支持飞书/钉钉/企微机器人）">
+            <Form.Item name="webhookUrl" label="飞书机器人 Webhook 地址（可选：新求助/新回复会推送到该飞书群）">
               <Input placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." />
+            </Form.Item>
+            <Form.Item
+              name="webhookSecret"
+              label="飞书加签密钥（可选：机器人开启「签名校验」时，从飞书复制粘贴到这里）"
+              extra={
+                profile.data.registered && profile.data.hasWebhookSecret
+                  ? '已配置加签密钥；留空保持不变，重新填写则覆盖'
+                  : '机器人未开加签则留空'
+              }
+            >
+              <Input.Password placeholder="飞书机器人安全设置里的签名密钥" autoComplete="new-password" />
             </Form.Item>
             <Form.Item name="available" label="接单状态（关闭 = 勿扰，不出现在候选名单）" valuePropName="checked">
               <Switch checkedChildren="可接单" unCheckedChildren="勿扰" />

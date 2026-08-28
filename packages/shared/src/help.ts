@@ -6,8 +6,10 @@ import { slugSchema } from './common.js';
 export const upsertHelperProfileSchema = z.object({
   /** 能力描述：会被 AI 读取用于选择向谁求助，写清楚擅长领域 */
   description: z.string().min(1).max(2000),
-  /** 新求助/新回复推送到此地址（飞书/钉钉/企微机器人或任意 HTTP 端点） */
+  /** 新求助/新回复推送到此地址（飞书群自定义机器人 webhook，§10 决策 16） */
   webhookUrl: z.url().max(500).optional().or(z.literal('')),
+  /** 飞书机器人「加签」密钥（可选）。留空 = 保持已保存的值不变；清空 webhookUrl 时一并清除 */
+  webhookSecret: z.string().max(200).optional().or(z.literal('')),
   /** 勿扰时不出现在 AI 的候选名单 */
   available: z.boolean().default(true),
 });

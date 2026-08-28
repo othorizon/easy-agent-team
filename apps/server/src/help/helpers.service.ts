@@ -3,7 +3,7 @@ import { and, asc, eq, sql } from 'drizzle-orm';
 import type { HelperInfo, HelpTargets, UpsertHelperProfileRequest } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
-import { decryptSecret, encryptSecret, randomToken } from '../common/crypto';
+import { decryptSecret, encryptSecret } from '../common/crypto';
 import { DB, type Db } from '../db/db.module';
 import { helperProfiles, skills, users } from '../db/schema';
 
@@ -19,12 +19,10 @@ export class HelpersService {
     const existing = (
       await this.db.select().from(helperProfiles).where(eq(helperProfiles.userId, user.id)).limit(1)
     )[0];
-    // webhook 签名密钥：首次配置 webhook 时生成，展示一次给用户配置到接收端
-    let webhookSecret: string | null = null;
-    let secretEncrypted = existing?.webhookSecretEncrypted ?? null;
-    if (webhookUrl && !secretEncrypted) {
-      webhookSecret = randomToken('whsec');
-      secretEncrypted = encryptSecret(webhookSecret);
+    // 飞书机器人「加签」密钥（决策 16）：由用户从飞书粘贴；留空保持已有值，清空 webhookUrl 时一并清除
+    let secretEncrypted = webhookUrl ? (existing?.webhookSecretEncrypted ?? null) : null;
+    if (webhookUrl && dto.webhookSecret) {
+      secretEncrypted = encryptSecret(dto.webhookSecret);
     }
     if (existing) {
       await this.db
@@ -32,7 +30,7 @@ export class HelpersService {
         .set({
           description: dto.description,
           webhookUrl,
-          webhookSecretEncrypted: webhookUrl ? secretEncrypted : null,
+          webhookSecretEncrypted: secretEncrypted,
           available: dto.available,
           updatedAt: sql`now()`,
         })
@@ -42,12 +40,12 @@ export class HelpersService {
         userId: user.id,
         description: dto.description,
         webhookUrl,
-        webhookSecretEncrypted: webhookUrl ? secretEncrypted : null,
+        webhookSecretEncrypted: secretEncrypted,
         available: dto.available,
       });
     }
     await this.audit.record({ actorId: user.id, action: 'helper.registered', targetType: 'helper_profile', targetId: user.id });
-    return { ...(await this.getMine(user)), webhookSecret };
+    return this.getMine(user);
   }
 
   async getMine(user: AuthUser) {
@@ -59,6 +57,7 @@ export class HelpersService {
       registered: true as const,
       description: row.description,
       webhookUrl: row.webhookUrl ?? '',
+      hasWebhookSecret: !!row.webhookSecretEncrypted,
       available: row.available,
     };
   }
