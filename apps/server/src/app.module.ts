@@ -8,6 +8,7 @@ import { DbModule } from './db/db.module';
 import { DbsModule } from './dbs/dbs.module';
 import { DeployModule } from './deploy/deploy.module';
 import { EnvsModule } from './envs/envs.module';
+import { HealthController } from './health.controller';
 import { HelpModule } from './help/help.module';
 import { McpConfigsModule } from './mcp-configs/mcp-configs.module';
 import { NotifyModule } from './notify/notify.module';
@@ -31,6 +32,7 @@ import { UsersModule } from './users/users.module';
     DbsModule,
     DeployModule,
   ],
+  controllers: [HealthController],
   providers: [{ provide: APP_FILTER, useClass: AppExceptionFilter }],
 })
 export class AppModule {}

@@ -14,6 +14,7 @@
 ## 文档
 
 - [产品设计文档](docs/product-design.md) —— 完整的产品设计：角色、功能模块、权限模型、数据模型、API / CLI / MCP 设计、技术架构与路线图（含全部决策记录）。
+- [部署文档](docs/deployment.md) —— Dockerfile 构建、Dokploy 部署步骤、环境变量、备份、CLI 分发与自举。
 
 ## 当前状态
 

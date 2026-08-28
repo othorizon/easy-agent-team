@@ -6,7 +6,7 @@
 
 easy-agent-team：面向团队的 AI 能力集中管理与分发平台（Skill / MCP 配置 / 环境变量 / 数据库账号 / 部署托管 / 人机求助与经验沉淀）。
 
-**当前状态：P0–P3 全部路线图完成并全链路验证**——P0：环境变量 + Skill 管理 + 认证；P1：求助系统 + 平台 AI 接入 + 经验沉淀；P2：角色模板 + MCP 配置分发 + 数据库账号分配（真实建库建号）；P3：部署托管（Dokploy 挂载、CLI 端密钥扫描含平台指纹匹配、部署门禁携带报告、状态按需刷新）。server 62 个 e2e 用例全过（含 mock Dokploy、mock OpenAI、本地 webhook 验签、真实 PG 建库），CLI 12 命令组 + MCP 12 工具 + 控制台 9 页面均做过真实冒烟。剩余待办：真实联调（用户提供 Dokploy 地址/token 与 AI 三参数后在控制台配置即可）、正式部署（Dockerfile 与部署文档待写）、MySQL 自动建库（暂缓）。
+**当前状态：P0–P3 全部路线图完成并全链路验证**——P0：环境变量 + Skill 管理 + 认证；P1：求助系统 + 平台 AI 接入 + 经验沉淀；P2：角色模板 + MCP 配置分发 + 数据库账号分配（真实建库建号）；P3：部署托管（Dokploy 挂载、CLI 端密钥扫描含平台指纹匹配、部署门禁携带报告、状态按需刷新）。server 62 个 e2e 用例全过（含 mock Dokploy、mock OpenAI、本地 webhook 验签、真实 PG 建库），CLI 12 命令组 + MCP 12 工具 + 控制台 9 页面均做过真实冒烟。剩余待办：真实联调（用户提供 Dokploy 地址/token 与 AI 三参数后在控制台配置即可）、正式部署（Dockerfile 与 docs/deployment.md 已就绪，镜像布局在容器内做过等效验证——pnpm deploy --legacy 产物 + 迁移/种子编译入口 + SPA 托管全通，真实 docker build 需在有 Docker 的机器上做）、MySQL 自动建库（暂缓）、管理员改密功能（待办）。
 
 **已知环境行为**：云端容器会不定期回收后台进程（postgres、node server 都可能消失，无 OOM、日志无 shutdown 记录）——重跑 `scripts/dev-db.sh start` 和重启 server 即可，不必排查。
 

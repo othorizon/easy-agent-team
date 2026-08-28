@@ -61,6 +61,12 @@ afterAll(async () => {
 });
 
 describe('认证', () => {
+  it('健康检查无需登录', async () => {
+    const r = await api('GET', '/api/health');
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+  });
+
   it('密码错误返回 401', async () => {
     const r = await api('POST', '/api/auth/login', {
       payload: { email: 'admin@test.dev', password: 'wrong' },
