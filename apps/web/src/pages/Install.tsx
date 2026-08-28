@@ -87,7 +87,14 @@ export function InstallPage() {
             },
             {
               title: '同步团队能力',
-              description: <Cmd text="eat sync" />,
+              description: (
+                <>
+                  <Cmd text="eat sync" />
+                  <Typography.Text type="secondary">
+                    Skill 落地 ~/.agents/skills 并软链到 ~/.claude/skills；内置的「eat 平台使用指南」会一起同步，让 AI 认识平台能力。
+                  </Typography.Text>
+                </>
+              ),
             },
           ]}
         />

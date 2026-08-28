@@ -167,3 +167,26 @@ describe('可见性与订阅', () => {
     expect(detail.status).toBe(404);
   });
 });
+
+describe('内置平台使用指南（决策 11）', () => {
+  it('对任何用户始终出现在 sync-bundle 首位，relation=builtin', async () => {
+    for (const token of [authorToken, readerToken]) {
+      const r = await api('GET', '/api/skills/sync-bundle', { token });
+      expect(r.status).toBe(200);
+      expect(r.body[0].slug).toBe('eat-platform-guide');
+      expect(r.body[0].relation).toBe('builtin');
+      expect(r.body[0].source).toBe('builtin');
+      expect(r.body[0].version).toBeGreaterThanOrEqual(1);
+      expect(r.body[0].content).toContain('search_experiences');
+      expect(r.body[0].content).toContain('PERMISSION_REQUIRED');
+    }
+  });
+
+  it('保留 slug：不允许 push 同名 skill', async () => {
+    const r = await api('POST', '/api/skills/push', {
+      token: authorToken,
+      payload: { slug: 'eat-platform-guide', name: '假指南', description: 'x', content: '# x', files: [] },
+    });
+    expect(r.status).toBe(400);
+  });
+});

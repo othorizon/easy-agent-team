@@ -127,7 +127,7 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 
 ### 3.2.3 同步机制（CLI）
 
-- `eat sync`：将当前用户的有效 Skill 集合落地到本地（默认 `~/.claude/skills/`，可配置项目级目录），同时生成/更新 MCP 配置；
+- `eat sync`：将当前用户的有效 Skill 集合落地到本地（默认落 `~/.agents/skills/` 并逐个软链到 `~/.claude/skills/`，跨 Agent 工具共用一份；`--dir` 可自定义目录，此时不建软链），同时生成/更新 MCP 配置；历史直接落在 `~/.claude/skills/` 的受管目录会自动迁移为软链；
 - 采用「平台为准」的单向同步：本地被用户手工改过的沉淀目录会提示冲突，`--force` 覆盖；
 - 每个落地的 skill 目录带 `.eat-meta.json` 记录来源与版本，便于增量更新与清理已退订项；
 - **本地已有 skill 的纳管**：`eat skill push <目录>` 把本地写好的 skill 上传到平台——首次推送创建新 Skill（自己为 Owner），再次推送产生新版本；推送后平台成为该 Skill 的事实源，本地目录转为受管目录。
@@ -137,7 +137,7 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 ### 3.2.4 Skill 的存储与脚本策略
 
 - **存储**：Skill 内容存 PostgreSQL——`skill_version.content` 存 SKILL.md 正文，附属文件存 `files` jsonb（`[{path, content, encoding}]`，文本直存、二进制 base64）。限制：单文件 ≤ 256KB、整包 ≤ 1MB，超限拒收。不引入对象存储 / git 后端（单体 + 单库的部署形态下，Postgres 是唯一持久层，且 skill 体量小、版本化查询需求强）。
-- **脚本**：skill 目录里的辅助脚本（`scripts/*.sh`、`*.py` 等）作为普通附属文件存储分发，**服务端永远不执行**。执行发生在使用者本地（`eat sync` 落地到 `~/.claude/skills/<slug>/` 并恢复可执行位），以使用者本人的权限运行——信任级别等同于安装团队内部 npm 包。
+- **脚本**：skill 目录里的辅助脚本（`scripts/*.sh`、`*.py` 等）作为普通附属文件存储分发，**服务端永远不执行**。执行发生在使用者本地（`eat sync` 落地到 `~/.agents/skills/<slug>/`（软链到 `~/.claude/skills/`）并恢复可执行位），以使用者本人的权限运行——信任级别等同于安装团队内部 npm 包。
 - **安全防线**：① Owner + 版本历史 + 审计保证出处可追溯；② `eat skill push` 上传时服务端做密钥扫描（复用部署前置检查规则），防止密钥被硬编码进脚本分发；③ 附属文件路径校验，禁止 `../` 与绝对路径，落地只能写入 skill 自身目录；④ `eat sync` 对包含可执行脚本的 skill 在首次安装/变更时明确提示。管理员预审开关留作 P2 可选。
 
 ### 3.2.5 MCP 配置分发
@@ -372,7 +372,7 @@ CLI 与 MCP Server 同一个产物分发（平台自托管下载：`curl -fsSL <
 | `get_help_request` / `reply_help_request` | 读取回复、追问 |
 | `trigger_deploy` / `get_deploy_status` / `get_deploy_logs` | 部署三件套 |
 
-💡 设计说明：平台随角色模板内置一个「平台使用指南」基础 Skill，教 AI 正确的行为序列（先搜经验 → 再求助；先 list → 再 pull → 无权限则申请），这比在每个工具描述里堆规则更有效。
+💡 设计说明：平台内置一个「平台使用指南」基础 Skill（`eat-platform-guide`，§10 决策 11），教 AI 正确的行为序列（先搜经验 → 再求助；先 list → 再 pull → 无权限则申请），这比在每个工具描述里堆规则更有效。实现为**内置虚拟 Skill**：内容随平台代码维护（`packages/shared/src/platform-guide.ts`，改内容须递增版本号），`sync-bundle` 对所有登录用户始终注入首位（`relation=builtin`），不落数据库、不可退订，slug 为保留名不可被 push 占用；登录后首次 `eat sync` 即落地，之后随平台升级自动更新。安装到登录之间的窗口由免鉴权的 `/install/AGENT.md` 兜底。
 
 ## 3.9 平台 AI 接入
 
@@ -646,3 +646,5 @@ easy-agent-team/
 | 8 | 部署前置检查的执行位置 | **CLI 发起端本地执行**（密钥扫描含平台指纹匹配），构建检查外包给 Dokploy 构建，部署 API 要求携带检查报告防顺手绕过；平台侧 runner（拉代码+Docker 构建）不做（§3.7.2） |
 | 9 | CLI 分发渠道 | **不发 npm registry，平台自托管下载**：镜像内置 CLI 单文件，`curl <平台>/install.sh \| sh` 安装；产物保持 tsup 单文件 JS（Node ≥ 18），bun 单二进制不做（目标用户都有 Node）（§7.5） |
 | 10 | 成员上手方式 | 控制台提供**安装页**（人机双视角）：给人看的分步说明 + 给 AI Agent 的一键复制安装指令（同一份文案也在 `GET /install/AGENT.md` 公开提供，`packages/shared` 单一来源）（§3.1） |
+| 11 | 平台使用指南 Skill 的携带方式 | **内置虚拟 Skill**（方案 A）：内容随平台代码维护、版本号常量控制更新，`sync-bundle` 对所有用户始终注入，不落库、不可退订、slug 保留；获取需登录（`eat sync`），登录前由免鉴权 `/install/AGENT.md` 兜底（§3.8） |
+| 12 | `eat sync` 落地目录 | 实际文件落 `~/.agents/skills/`（跨 Agent 工具共用），逐个**软链**到 `~/.claude/skills/`；历史直接落地目录自动迁移；`--dir` 自定义时不建软链（§3.2.2） |

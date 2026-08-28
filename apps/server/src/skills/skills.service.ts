@@ -14,7 +14,7 @@ import type {
   SyncSkill,
   UpdateSkillRequest,
 } from '@eat/shared';
-import { SKILL_FILE_MAX_BYTES, SKILL_TOTAL_MAX_BYTES } from '@eat/shared';
+import { PLATFORM_GUIDE_SLUG, platformGuideSyncSkill, SKILL_FILE_MAX_BYTES, SKILL_TOTAL_MAX_BYTES } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
 import { DB, type Db } from '../db/db.module';
@@ -194,6 +194,9 @@ export class SkillsService {
   async push(user: AuthUser, dto: PushSkillRequest): Promise<SkillDetail> {
     const problem = this.validatePayload(dto);
     if (problem) throw new BadRequestException({ error: 'VALIDATION_FAILED', message: problem });
+    if (dto.slug === PLATFORM_GUIDE_SLUG) {
+      throw new BadRequestException({ error: 'VALIDATION_FAILED', message: `${PLATFORM_GUIDE_SLUG} 是平台内置 skill 的保留名` });
+    }
 
     const existing = (await this.db.select().from(skills).where(eq(skills.slug, dto.slug)).limit(1))[0];
     let skill: SkillRow;
@@ -323,14 +326,16 @@ export class SkillsService {
 
   /** eat sync 的落地内容：（订阅 ∪ 模板−排除）且仍可见的 skill 当前版本 */
   async syncBundle(user: AuthUser): Promise<SyncSkill[]> {
+    // 内置平台使用指南对所有用户始终下发（§10 决策 11）：不落库、不可退订，随平台版本更新
+    const guide = platformGuideSyncSkill();
     const { subs, effective } = await this.effectiveSkillIds(user.id);
-    if (effective.size === 0) return [];
+    if (effective.size === 0) return [guide];
     const rows = await this.db
       .select()
       .from(skills)
       .where(inArray(skills.id, [...effective]));
-    const visible = rows.filter((s) => this.canSee(s, user, subs) && s.currentVersion > 0);
-    if (visible.length === 0) return [];
+    const visible = rows.filter((s) => this.canSee(s, user, subs) && s.currentVersion > 0 && s.slug !== PLATFORM_GUIDE_SLUG);
+    if (visible.length === 0) return [guide];
     const versions = await this.db
       .select()
       .from(skillVersions)
@@ -345,7 +350,7 @@ export class SkillsService {
         ),
       );
     const bySkill = new Map(versions.map((v) => [v.skillId, v]));
-    return visible.map((s) => {
+    return [guide, ...visible.map((s) => {
       const v = bySkill.get(s.id);
       return {
         slug: s.slug,
@@ -360,6 +365,6 @@ export class SkillsService {
         content: v?.content ?? '',
         files: v?.files ?? [],
       };
-    });
+    })];
   }
 }

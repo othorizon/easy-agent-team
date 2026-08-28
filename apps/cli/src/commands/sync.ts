@@ -64,9 +64,36 @@ function writeSkill(dir: string, skill: SyncSkill): void {
   }
 }
 
+/**
+ * 把 linkPath 维护成指向 dir 的软链接（~/.claude/skills/<slug> → ~/.agents/skills/<slug>）。
+ * 历史版本直接落地在 .claude 的受管真实目录会被替换为链接（迁移）；非 eat 管理的占位仅 --force 才覆盖。
+ */
+function ensureLink(linkPath: string, dir: string, force: boolean): 'ok' | 'linked' | 'conflict' {
+  let st: fs.Stats | undefined;
+  try {
+    st = fs.lstatSync(linkPath);
+  } catch {
+    st = undefined;
+  }
+  if (st?.isSymbolicLink()) {
+    if (fs.readlinkSync(linkPath) === dir) return 'ok';
+    fs.rmSync(linkPath, { force: true });
+  } else if (st) {
+    if (!readMeta(linkPath) && !force) return 'conflict';
+    fs.rmSync(linkPath, { recursive: true, force: true });
+  }
+  fs.symlinkSync(dir, linkPath, 'dir');
+  return st?.isSymbolicLink() ? 'ok' : 'linked';
+}
+
 export async function sync(opts: { dir?: string; force?: boolean }): Promise<void> {
-  const target = path.resolve(opts.dir ?? path.join(os.homedir(), '.claude', 'skills'));
+  // 实际文件落 ~/.agents/skills（跨 Agent 工具共用），~/.claude/skills 里只放软链接；
+  // 指定 --dir 时直接落该目录，不建链接（保持可预期）。
+  const defaultMode = !opts.dir;
+  const target = path.resolve(opts.dir ?? path.join(os.homedir(), '.agents', 'skills'));
+  const linkRoot = path.join(os.homedir(), '.claude', 'skills');
   fs.mkdirSync(target, { recursive: true });
+  if (defaultMode) fs.mkdirSync(linkRoot, { recursive: true });
   const api = Api.fromSaved();
   const bundle = await api.request<SyncSkill[]>('GET', '/api/skills/sync-bundle');
 
@@ -74,28 +101,36 @@ export async function sync(opts: { dir?: string; force?: boolean }): Promise<voi
   const updated: string[] = [];
   const upToDate: string[] = [];
   const conflicts: string[] = [];
+  const linkConflicts: string[] = [];
+  let linkFailed: string | null = null;
 
   for (const skill of bundle) {
     const dir = path.join(target, skill.slug);
+    const meta = fs.existsSync(dir) ? readMeta(dir) : null;
     if (!fs.existsSync(dir)) {
       writeSkill(dir, skill);
       added.push(skill.slug);
-      continue;
-    }
-    const meta = readMeta(dir);
-    if (!meta && !opts.force) {
+    } else if (!meta && !opts.force) {
       conflicts.push(skill.slug);
       continue;
-    }
-    if (meta && meta.version === skill.version && !opts.force) {
+    } else if (meta && meta.version === skill.version && !opts.force) {
       upToDate.push(skill.slug);
-      continue;
+    } else {
+      writeSkill(dir, skill);
+      updated.push(`${skill.slug}（v${meta?.version ?? '?'} → v${skill.version}）`);
     }
-    writeSkill(dir, skill);
-    updated.push(`${skill.slug}（v${meta?.version ?? '?'} → v${skill.version}）`);
+    if (defaultMode) {
+      try {
+        if (ensureLink(path.join(linkRoot, skill.slug), dir, opts.force ?? false) === 'conflict') {
+          linkConflicts.push(skill.slug);
+        }
+      } catch (err) {
+        linkFailed = err instanceof Error ? err.message : String(err);
+      }
+    }
   }
 
-  // 清理：本地受管但已不在同步范围（退订/删除/不可见）的 skill
+  // 清理：受管但已不在同步范围（退订/删除/不可见）的 skill，连同 .claude 里的软链接/历史落地
   const bundleSlugs = new Set(bundle.map((s) => s.slug));
   const removed: string[] = [];
   for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
@@ -107,8 +142,22 @@ export async function sync(opts: { dir?: string; force?: boolean }): Promise<voi
       removed.push(meta.slug);
     }
   }
+  if (defaultMode) {
+    for (const entry of fs.readdirSync(linkRoot, { withFileTypes: true })) {
+      const p = path.join(linkRoot, entry.name);
+      if (entry.isSymbolicLink()) {
+        // 指向 target 内但源已被清理的悬空链接
+        const to = fs.readlinkSync(p);
+        if (to.startsWith(target + path.sep) && !fs.existsSync(to)) fs.rmSync(p, { force: true });
+      } else if (entry.isDirectory()) {
+        // 历史版本直接落地在 .claude 的受管目录：不在同步范围则一并清理
+        const meta = readMeta(p);
+        if (meta && !bundleSlugs.has(meta.slug)) fs.rmSync(p, { recursive: true, force: true });
+      }
+    }
+  }
 
-  console.log(`Skill 同步完成 → ${target}`);
+  console.log(`Skill 同步完成 → ${target}${defaultMode ? `（已软链到 ${linkRoot}）` : ''}`);
   if (added.length) console.log(`  新增: ${added.join(', ')}`);
   if (updated.length) console.log(`  更新: ${updated.join(', ')}`);
   if (removed.length) console.log(`  移除(退订/已删除): ${removed.join(', ')}`);
@@ -116,6 +165,12 @@ export async function sync(opts: { dir?: string; force?: boolean }): Promise<voi
   if (conflicts.length) {
     console.log(`  跳过(目录已存在但非 eat 管理): ${conflicts.join(', ')}`);
     console.log('  如确认覆盖这些目录，重新运行: eat sync --force');
+  }
+  if (linkConflicts.length) {
+    console.log(`  未建软链(.claude 下同名目录非 eat 管理): ${linkConflicts.join(', ')}，--force 可覆盖`);
+  }
+  if (linkFailed) {
+    console.log(`  软链接创建失败（${linkFailed}）；skill 已落地 ${target}，请把该目录加入你的 Agent skill 搜索路径`);
   }
   if (bundle.length === 0) console.log('  （没有订阅任何 skill；eat skill list 看看团队里有什么）');
 
