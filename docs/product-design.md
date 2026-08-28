@@ -579,7 +579,7 @@ easy-agent-team/
 
 - **语言与运行时目标**：TypeScript，产物兼容 Node ≥ 18；不使用 Bun/Deno 独有 API。团队成员使用 Claude Code 时本机已有 Node，零额外门槛；
 - **打包**：tsup（底层 esbuild）打包为单文件 JS + shebang，依赖全部内联；
-- **分发（§10 决策 9）**：**不发 npm registry，平台自托管**——平台镜像内置 CLI 单文件产物，提供三个免鉴权端点：`GET /install.sh`（安装脚本：校验 Node ≥ 18，下载产物到 `~/.eat/bin` 并生成 `eat` 启动器）、`GET /install/eat.js`（单文件产物本体）、`GET /install/AGENT.md`（给 AI Agent 的安装指令）。成员一条 `curl -fsSL <平台>/install.sh | sh` 完成安装，版本天然与平台一致，升级 = 重装；
+- **分发（§10 决策 9）**：**不发 npm registry，平台自托管**——平台镜像内置 CLI 单文件产物，提供三个免鉴权端点：`GET /install.sh`（安装脚本：校验 Node ≥ 18，下载产物到 `~/.eat/bin` 并生成 `eat` 启动器，随后按 §10 决策 15 三层叠加配置 PATH）、`GET /install/eat.js`（单文件产物本体）、`GET /install/AGENT.md`（给 AI Agent 的安装指令）。成员一条 `curl -fsSL <平台>/install.sh | sh` 完成安装，版本天然与平台一致，升级 = 重装；
 - **安装页（§10 决策 10）**：控制台 `/install` 页面向所有成员提供「给 Agent 的一键复制指令」（主推路径）与手动分步说明；
 - **开发期**：可以用 Bun 跑测试与本地开发提速，但 CI 产物始终按 Node 目标构建，避免运行时行为差异；
 - **不选型**：bun 单二进制（目标用户全部有 Node，多平台产物让镜像膨胀数百 MB，收益为零）；Go/Rust 重写会造成与平台的技术栈分裂（CLI 与后端共享 API 类型定义的收益丢失）；Deno 生态与 npm 包（MCP SDK）仍有摩擦。
@@ -650,3 +650,4 @@ easy-agent-team/
 | 12 | `eat sync` 落地目录 | 实际文件落 `~/.agents/skills/`（跨 Agent 工具共用），逐个**软链**到 `~/.claude/skills/`；历史直接落地目录自动迁移；`--dir` 自定义时不建软链（§3.2.2） |
 | 13 | 数据库分配的删除语义 | **仅记录级软删除，平台不做物理 DROP**：删除只标记记录 deleted 并移除凭证环境，实例上的数据库与账号保留，物理清理由管理员在实例上手动执行；控制台二次确认时明确提示。rejected 的记录同样可删（§3.4） |
 | 14 | `eat sync` 安装范围参数 | 类 npx skills 的 global/project 语义：默认/`--global` 落 `~/.agents/skills/` + 软链 `~/.claude/skills/`（决策 12 布局不变）；`--project` 落当前项目 `./.agents/skills/` + **相对**软链 `./.claude/skills/`；`--dir` 仍为自定义目录不建软链；三者互斥（§3.2.3） |
+| 15 | 安装脚本 PATH 落地 | **三层叠加（非递进兜底），全部幂等**：① 软链 `~/.local/bin/eat`（XDG 惯例，无需 sudo）；② `/usr/local/bin` 可写时软链（系统级 PATH，非交互 shell 可见）；③ 幂等写 shell 配置——zsh 写 `~/.zshenv`（非交互也加载，而非 `.zshrc`），bash 写 `~/.bashrc`，登录 shell 写 `~/.bash_profile`（仅存在 `~/.profile` 且无 `~/.bash_profile` 时改写 `~/.profile`，避免屏蔽），marker 注释去重。三层互为冗余覆盖不同 shell 场景，保证 Agent 的非交互子进程也能直接调 `eat`（§7.5） |

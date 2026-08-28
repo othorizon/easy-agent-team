@@ -49,19 +49,41 @@ exec node "$HOME/.eat/bin/eat.js" "$@"
 LAUNCHER
 chmod +x "$BIN_DIR/eat"
 
+# —— PATH 落地：三层叠加（均幂等），让交互式与非交互式 shell 都能找到 eat ——
 LINKED=""
+
+# 1) ~/.local/bin：XDG 惯例位置，多数 Linux 默认在 PATH，无需 sudo
+mkdir -p "$HOME/.local/bin"
+ln -sf "$BIN_DIR/eat" "$HOME/.local/bin/eat" && LINKED="$HOME/.local/bin/eat"
+
+# 2) /usr/local/bin：系统级 PATH（非交互 shell / cron / Agent 子进程也可见），可写时顺带链接
 if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
-  ln -sf "$BIN_DIR/eat" /usr/local/bin/eat && LINKED="/usr/local/bin/eat"
+  ln -sf "$BIN_DIR/eat" /usr/local/bin/eat && LINKED="/usr/local/bin/eat $LINKED"
+fi
+
+# 3) 幂等写 shell 配置，兜住前两层的盲区（macOS zsh 默认 PATH 无 ~/.local/bin 等）：
+#    zsh 写 ~/.zshenv（所有 zsh 进程都会加载，含非交互）；bash 写 ~/.bashrc；
+#    登录 shell 写 ~/.bash_profile，但它会屏蔽 ~/.profile——仅存在 ~/.profile 时改写后者
+PATH_LINE='export PATH="$HOME/.eat/bin:$HOME/.local/bin:$PATH"'
+MARKER='# easy-agent-team CLI (eat) PATH'
+append_path() {
+  if [ -f "$1" ] && grep -qF "$MARKER" "$1" 2>/dev/null; then return 0; fi
+  printf '\\n%s\\n%s\\n' "$MARKER" "$PATH_LINE" >> "$1"
+}
+append_path "$HOME/.zshenv"
+append_path "$HOME/.bashrc"
+if [ -f "$HOME/.profile" ] && [ ! -f "$HOME/.bash_profile" ]; then
+  append_path "$HOME/.profile"
+else
+  append_path "$HOME/.bash_profile"
 fi
 
 echo ""
 echo "✅ eat CLI 安装完成：$BIN_DIR/eat（$("$BIN_DIR/eat" --version)）"
-if [ -n "$LINKED" ]; then
-  echo "已链接到 $LINKED，可直接使用 eat 命令。"
-else
-  echo "请把下面这行加入 ~/.bashrc 或 ~/.zshrc，然后重开终端："
-  echo '  export PATH="$HOME/.eat/bin:$PATH"'
-fi
+echo "已链接：$LINKED"
+echo "已写入 shell 配置（zsh/bash，重复安装不会重复写入）。"
+echo "新开的终端可直接使用 eat；当前终端如找不到，先执行："
+echo '  export PATH="$HOME/.eat/bin:$PATH"'
 echo ""
 echo "下一步："
 echo "  1. eat login --server $SERVER    # 浏览器完成设备码授权"

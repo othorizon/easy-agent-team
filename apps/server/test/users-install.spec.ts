@@ -157,6 +157,11 @@ describe('CLI 自托管分发', () => {
     expect(String(r.headers['content-type'])).toContain('text/x-shellscript');
     expect(r.body).toContain('/install/eat.js');
     expect(r.body).toContain('eat login --server');
+    // 决策 15：PATH 三层叠加落地（~/.local/bin 软链 + /usr/local/bin + 幂等写 shell 配置）
+    expect(r.body).toContain('$HOME/.local/bin');
+    expect(r.body).toContain('/usr/local/bin');
+    expect(r.body).toContain('.zshenv');
+    expect(r.body).toContain('grep -qF "$MARKER"');
   });
 
   it('AGENT.md 免鉴权，给 Agent 的完整安装指令', async () => {

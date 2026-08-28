@@ -100,8 +100,11 @@ export function InstallPage() {
         />
         <Divider style={{ margin: '12px 0' }} />
         <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-          安装脚本会把 CLI 放到 <Typography.Text code>~/.eat/bin</Typography.Text>；如未自动进入
-          PATH，按脚本提示把该目录加进 shell 配置。卸载：删除 <Typography.Text code>~/.eat</Typography.Text> 目录即可。
+          安装脚本会把 CLI 放到 <Typography.Text code>~/.eat/bin</Typography.Text>，并自动配置
+          PATH（软链 <Typography.Text code>~/.local/bin</Typography.Text> 与可写时的{' '}
+          <Typography.Text code>/usr/local/bin</Typography.Text>，幂等写入 shell 配置）；当前终端找不到命令时执行{' '}
+          <Typography.Text code>export PATH=&quot;$HOME/.eat/bin:$PATH&quot;</Typography.Text>。卸载：删除{' '}
+          <Typography.Text code>~/.eat</Typography.Text> 目录及各处 eat 软链即可。
         </Typography.Paragraph>
       </Card>
     </Space>
