@@ -201,7 +201,7 @@ export class DbsService {
         source: 'db_assignment',
       })
       .returning();
-    // 仅密码敏感（加密存储、读取需授权并审计）；主机/端口/库名/账号为非敏感明文，平台上可直接查看
+    // 仅密码敏感（加密存储、读取落审计）；主机/端口/库名/账号非敏感（明文存储、有权限者平台上直接明文可见）。读值授权不变：默认仅申请人（环境 Owner）可读
     const vars: Array<[string, string, string, boolean]> = [
       ['DB_HOST', instance.host, '数据库主机', false],
       ['DB_PORT', String(instance.port), '数据库端口', false],

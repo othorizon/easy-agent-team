@@ -324,8 +324,8 @@ describe('变量更新与删除', () => {
   });
 });
 
-describe('非敏感变量（明文存储、全员明文可读）', () => {
-  it('创建非敏感变量：清单直接带明文值，成员免授权可读', async () => {
+describe('非敏感变量（明文存储；读值授权模型不变）', () => {
+  it('创建非敏感变量：有权限者清单直接带明文值；无权限成员不带值且拉取被拒', async () => {
     await api('POST', '/api/envs', {
       token: adminToken,
       payload: { slug: 'plain-env', name: '公共配置', description: '非敏感的服务地址等' },
@@ -336,57 +336,66 @@ describe('非敏感变量（明文存储、全员明文可读）', () => {
     });
     expect(created.status).toBe(201);
     expect(created.body.secret).toBe(false);
+    // Owner/管理员有权限：清单直接附带明文值
     expect(created.body.value).toBe('https://svc.internal:8080');
-    // 对照：敏感变量清单不含值
     await api('POST', '/api/envs/plain-env/variables', {
       token: adminToken,
       payload: { key: 'PLAIN_ENV_TOKEN', value: 'sec-token-value-12345', description: '敏感令牌' },
     });
 
-    // 成员无任何授权：清单里非敏感变量带明文值且 hasAccess=true
+    // 未授权成员：清单可见（默认可见性）但 hasAccess=false、不含值
+    const list = await api('GET', '/api/envs/plain-env/variables', { token: memberToken });
+    const plain = list.body.find((v: { key: string }) => v.key === 'SERVICE_URL');
+    expect(plain.secret).toBe(false);
+    expect(plain.hasAccess).toBe(false);
+    expect(plain.value).toBeNull();
+
+    // 未授权成员拉取同样被拒——非敏感≠免授权
+    const pull = await api('POST', '/api/envs/plain-env/values', {
+      token: memberToken,
+      payload: { keys: ['SERVICE_URL'] },
+    });
+    expect(pull.body.values).toEqual({});
+    expect(pull.body.denied[0].error).toBe('PERMISSION_REQUIRED');
+  });
+
+  it('授权后成员可见明文值并可拉取；非敏感值读取不落 secret.read 审计', async () => {
+    const envs = await api('GET', '/api/envs', { token: adminToken });
+    const env = envs.body.find((e: { slug: string }) => e.slug === 'plain-env');
+    await api('POST', '/api/envs/plain-env/grants', {
+      token: adminToken,
+      payload: { userId: memberId, environmentId: env.id },
+    });
     const list = await api('GET', '/api/envs/plain-env/variables', { token: memberToken });
     const plain = list.body.find((v: { key: string }) => v.key === 'SERVICE_URL');
     expect(plain.hasAccess).toBe(true);
     expect(plain.value).toBe('https://svc.internal:8080');
-    const secretVar = list.body.find((v: { key: string }) => v.key === 'PLAIN_ENV_TOKEN');
-    expect(secretVar.hasAccess).toBe(false);
-    expect(secretVar.value).toBeNull();
 
-    // 成员直接拉取非敏感值成功；缺省拉取也包含非敏感值、敏感值不在其中
-    const pull = await api('POST', '/api/envs/plain-env/values', { token: memberToken, payload: {} });
-    expect(pull.body.values).toEqual({ SERVICE_URL: 'https://svc.internal:8080' });
-    expect(pull.body.denied).toEqual([]);
-  });
+    const pull = await api('POST', '/api/envs/plain-env/values', {
+      token: memberToken,
+      payload: { keys: ['SERVICE_URL'] },
+    });
+    expect(pull.body.values.SERVICE_URL).toBe('https://svc.internal:8080');
 
-  it('非敏感值读取不落 secret.read 审计', async () => {
-    const r = await api('GET', '/api/audit?action=secret.read', { token: adminToken });
-    const hits = r.body.filter((x: { meta: { keys?: string[] } }) => x.meta?.keys?.includes('SERVICE_URL'));
+    // 值本身非敏感，读取不落 secret.read 审计
+    const audit = await api('GET', '/api/audit?action=secret.read', { token: adminToken });
+    const hits = audit.body.filter((x: { meta: { keys?: string[] } }) => x.meta?.keys?.includes('SERVICE_URL'));
     expect(hits).toEqual([]);
   });
 
-  it('敏感性可切换：改敏感后需授权，改回后恢复明文', async () => {
+  it('敏感性切换只改存储与展示：切敏感后清单值打码，切回恢复明文', async () => {
     const toSecret = await api('POST', '/api/envs/plain-env/variables', {
       token: adminToken,
       payload: { key: 'SERVICE_URL', value: 'https://svc.internal:9090', description: '', secret: true },
     });
     expect(toSecret.body.secret).toBe(true);
     expect(toSecret.body.value).toBeNull();
-    const denied = await api('POST', '/api/envs/plain-env/values', {
-      token: memberToken,
-      payload: { keys: ['SERVICE_URL'] },
-    });
-    expect(denied.body.denied[0].error).toBe('PERMISSION_REQUIRED');
 
     const back = await api('POST', '/api/envs/plain-env/variables', {
       token: adminToken,
       payload: { key: 'SERVICE_URL', value: 'https://svc.internal:8080', description: '', secret: false },
     });
     expect(back.body.value).toBe('https://svc.internal:8080');
-    const pull = await api('POST', '/api/envs/plain-env/values', {
-      token: memberToken,
-      payload: { keys: ['SERVICE_URL'] },
-    });
-    expect(pull.body.values.SERVICE_URL).toBe('https://svc.internal:8080');
   });
 
   it('非敏感变量不进入密钥指纹清单', async () => {

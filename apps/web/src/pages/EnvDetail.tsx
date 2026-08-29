@@ -203,6 +203,7 @@ export function EnvDetailPage() {
                       <span className="inline-flex items-center gap-1">
                         <InlineCode>{row.key}</InlineCode>
                         <CopyButton text={row.key} />
+                        {!row.secret && <Badge variant="secondary">非敏感</Badge>}
                       </span>
                       <div className="mt-0.5 truncate text-xs text-muted-foreground md:hidden">{row.description}</div>
                     </TableCell>
@@ -210,25 +211,19 @@ export function EnvDetailPage() {
                       {row.description}
                     </TableCell>
                     <TableCell>
-                      {row.secret ? (
-                        <span className="text-xs text-muted-foreground">••••••</span>
-                      ) : (
+                      {row.value != null ? (
                         <span className="inline-flex max-w-40 items-center gap-1">
-                          <InlineCode className="truncate" title={row.value ?? ''}>
+                          <InlineCode className="truncate" title={row.value}>
                             {row.value}
                           </InlineCode>
-                          <CopyButton text={row.value ?? ''} />
+                          <CopyButton text={row.value} />
                         </span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">••••••</span>
                       )}
                     </TableCell>
                     <TableCell>
-                      {!row.secret ? (
-                        <Badge variant="secondary">非敏感</Badge>
-                      ) : row.hasAccess ? (
-                        <Badge variant="success">可读取</Badge>
-                      ) : (
-                        <Badge variant="outline">无权限</Badge>
-                      )}
+                      {row.hasAccess ? <Badge variant="success">可读取</Badge> : <Badge variant="outline">无权限</Badge>}
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground lg:table-cell">
                       {row.visibleWithoutPermission ? '是' : '否'}
@@ -431,7 +426,10 @@ function VariableDialog({
               {...register('key', { required: '请输入 Key', pattern: rules.envKey })}
             />
           </Field>
-          <Field label="敏感变量" hint={secret ? '值加密存储，读取需授权并落审计' : '值明文存储，全员可在平台直接查看'}>
+          <Field
+            label="敏感变量"
+            hint={secret ? '值加密存储、控制台打码，读取落审计' : '值明文存储，有读取权限的成员在平台可直接明文查看；读值授权要求不变'}
+          >
             <Controller
               control={control}
               name="secret"

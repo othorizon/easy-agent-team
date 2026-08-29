@@ -148,7 +148,8 @@ export class EnvsService {
       description: v.description,
       visibleWithoutPermission: v.visibleWithoutPermission,
       secret: v.secret,
-      value: v.secret ? null : (v.valuePlain ?? ''),
+      // 非敏感只是「明文存储、有权限者平台上直接明文可见」；无权限者拿不到值
+      value: !v.secret && hasAccess ? (v.valuePlain ?? '') : null,
       hasAccess,
       version: v.version,
       updatedAt: v.updatedAt.toISOString(),
@@ -156,8 +157,9 @@ export class EnvsService {
   }
 
   /**
-   * 变量清单（不含值）。核心可见性规则：
-   * 有权限 → 可见且 hasAccess=true；无权限但变量配置为"无权限可见"（默认）→ 可见、hasAccess=false；
+   * 变量清单。核心可见性规则：
+   * 有权限 → 可见且 hasAccess=true（非敏感变量直接附带明文值）；
+   * 无权限但变量配置为"无权限可见"（默认）→ 可见、hasAccess=false、不含值；
    * 无权限且配置为不可见 → 不出现在清单。
    */
   async listVariables(user: AuthUser, slug: string): Promise<VariableMeta[]> {
@@ -168,9 +170,8 @@ export class EnvsService {
       .where(eq(envVariables.environmentId, env.id))
       .orderBy(asc(envVariables.key));
     const access = await this.accessibleSet(user, env);
-    // 非敏感变量全员可读值（hasAccess 恒为 true），敏感变量按授权判定
     return vars
-      .map((v) => this.toMeta(v, env.slug, !v.secret || access === 'ALL' || access.has(v.id)))
+      .map((v) => this.toMeta(v, env.slug, access === 'ALL' || access.has(v.id)))
       .filter((m) => m.hasAccess || m.visibleWithoutPermission);
   }
 
@@ -268,10 +269,7 @@ export class EnvsService {
     const access = await this.accessibleSet(user, env);
     const byKey = new Map(allVars.map((v) => [v.key, v]));
 
-    const requested =
-      keys && keys.length > 0
-        ? keys
-        : allVars.filter((v) => !v.secret || access === 'ALL' || access.has(v.id)).map((v) => v.key);
+    const requested = keys && keys.length > 0 ? keys : allVars.filter((v) => access === 'ALL' || access.has(v.id)).map((v) => v.key);
 
     const values: Record<string, string> = {};
     const denied: PullValuesResponse['denied'] = [];
@@ -282,8 +280,7 @@ export class EnvsService {
         denied.push({ key, error: 'PERMISSION_REQUIRED', message: `变量 ${key} 不存在或不可见`, howToRequest: HOW_TO_REQUEST });
         continue;
       }
-      // 非敏感变量全员可读，不需要授权
-      if (!v.secret || access === 'ALL' || access.has(v.id)) {
+      if (access === 'ALL' || access.has(v.id)) {
         values[key] = this.readValue(v);
         if (v.secret) secretReadKeys.push(key);
       } else {

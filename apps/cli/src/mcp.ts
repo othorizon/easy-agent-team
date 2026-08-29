@@ -14,7 +14,7 @@ const TOOLS = [
   {
     name: 'list_env_variables',
     description:
-      '列出平台上的环境与变量清单（含备注与权限状态；敏感变量不含值，非敏感变量直接附带明文值 value）。找配置先调这个：每个变量的备注说明了它的作用；hasAccess=false 表示值需要先申请权限。',
+      '列出平台上的环境与变量清单（含备注与权限状态，不含敏感值；有权限的非敏感变量直接附带明文值 value）。找配置先调这个：每个变量的备注说明了它的作用；hasAccess=false 表示值需要先申请权限。',
     inputSchema: {
       type: 'object',
       properties: {

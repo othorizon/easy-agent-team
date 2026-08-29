@@ -274,8 +274,8 @@ describe('数据库账号分配（真实建库）', () => {
     expect(creds.DB_NAME).toBe('proj_wang');
     expect(creds.DB_USER).toBe('u_proj_wang');
     expect(creds.DB_PASSWORD).toBeTruthy();
-    // 除密码外均为非敏感明文：清单直接带值，其他成员也能明文查看
-    const vars = await api('GET', '/api/envs/db-proj-wang/variables', { token: m2Token });
+    // 除密码外均为非敏感明文存储：申请人（环境 Owner）在清单里直接看到明文值
+    const vars = await api('GET', '/api/envs/db-proj-wang/variables', { token: m1Token });
     type VarMeta = { key: string; secret: boolean; value: string | null };
     const byKey: Record<string, VarMeta> = Object.fromEntries(
       vars.body.map((v: VarMeta): [string, VarMeta] => [v.key, v]),
@@ -287,9 +287,12 @@ describe('数据库账号分配（真实建库）', () => {
     expect(byKey.DB_NAME.value).toBe('proj_wang');
     expect(byKey.DB_PASSWORD.secret).toBe(true);
     expect(byKey.DB_PASSWORD.value).toBeNull();
+    // 其他成员未授权：非敏感≠免授权——清单不含值，拉取被拒
+    const otherVars = await api('GET', '/api/envs/db-proj-wang/variables', { token: m2Token });
+    const otherHost = otherVars.body.find((v: { key: string }) => v.key === 'DB_HOST');
+    expect(otherHost.value).toBeNull();
     const hostPull = await api('POST', '/api/envs/db-proj-wang/values', { token: m2Token, payload: { keys: ['DB_HOST'] } });
-    expect(hostPull.body.values.DB_HOST).toBe('127.0.0.1');
-    // 密码对其他成员仍无权限
+    expect(hostPull.body.denied[0].error).toBe('PERMISSION_REQUIRED');
     const other = await api('POST', '/api/envs/db-proj-wang/values', { token: m2Token, payload: { keys: ['DB_PASSWORD'] } });
     expect(other.body.denied[0].error).toBe('PERMISSION_REQUIRED');
   });

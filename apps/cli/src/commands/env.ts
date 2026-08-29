@@ -22,8 +22,9 @@ export async function envList(envSlug?: string): Promise<void> {
     }
     const keyWidth = Math.max(...variables.map((v) => v.key.length), 3);
     for (const v of variables) {
-      const access = !v.secret ? '○ 非敏感' : v.hasAccess ? '✓ 可读取' : '✗ 无权限';
-      const valueHint = v.secret ? '' : `（值: ${v.value}）`;
+      const access = v.hasAccess ? '✓ 可读取' : '✗ 无权限';
+      // 非敏感变量在有权限时清单直接附带明文值
+      const valueHint = v.value != null ? `（值: ${v.value}）` : '';
       console.log(`  ${v.key.padEnd(keyWidth)}  ${access}  ${v.description}${valueHint}`);
     }
   }
