@@ -320,6 +320,8 @@ export class DeployService {
       .innerJoin(environments, eq(envVariables.environmentId, environments.id));
     const out: SecretFingerprint[] = [];
     for (const r of rows) {
+      // 非敏感变量明文存储，不是密钥，不进指纹清单
+      if (!r.variable.secret || !r.variable.valueEncrypted) continue;
       let value: string;
       try {
         value = decryptSecret(r.variable.valueEncrypted);

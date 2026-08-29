@@ -1,12 +1,13 @@
-import type { CreateProjectRequest, DeploymentInfo, ProjectInfo } from '@eat/shared';
+import type { CreateProjectRequest, DeploymentInfo, ProjectInfo, UpdateProjectRequest } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, X } from 'lucide-react';
+import { Pencil, Plus, Trash2, X } from 'lucide-react';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
 import { InlineCode } from '../components/code';
 import { Combobox } from '../components/combobox';
+import { Confirm } from '../components/confirm';
 import { Empty } from '../components/empty';
 import { Field, rules } from '../components/form';
 import { PageHeader } from '../components/page-header';
@@ -35,6 +36,7 @@ export function ProjectsPage() {
   const queryClient = useQueryClient();
   const me = getStoredUser();
   const [creating, setCreating] = useState(false);
+  const [editingSlug, setEditingSlug] = useState<string | null>(null);
   const [viewingSlug, setViewingSlug] = useState<string | null>(null);
 
   const projects = useQuery({ queryKey: ['projects'], queryFn: () => api<ProjectInfo[]>('GET', '/api/projects') });
@@ -42,6 +44,7 @@ export function ProjectsPage() {
 
   // 弹窗数据从最新列表里取，成员变更后自动刷新
   const viewing = viewingSlug ? (projects.data ?? []).find((p) => p.slug === viewingSlug) ?? null : null;
+  const editingProject = editingSlug ? (projects.data ?? []).find((p) => p.slug === editingSlug) ?? null : null;
 
   const deployments = useQuery({
     queryKey: ['deployments', viewingSlug],
@@ -60,6 +63,26 @@ export function ProjectsPage() {
       invalidate();
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '创建失败'),
+  });
+
+  const update = useMutation({
+    mutationFn: (v: { slug: string; body: UpdateProjectRequest }) => api('PATCH', `/api/projects/${v.slug}`, v.body),
+    onSuccess: () => {
+      toast.success('项目已更新');
+      setEditingSlug(null);
+      invalidate();
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '更新失败'),
+  });
+
+  const remove = useMutation({
+    mutationFn: (slug: string) => api('DELETE', `/api/projects/${slug}`),
+    onSuccess: () => {
+      toast.success('项目已删除');
+      setViewingSlug(null);
+      invalidate();
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '删除失败'),
   });
 
   const addMember = useMutation({
@@ -151,6 +174,15 @@ export function ProjectsPage() {
         <CreateProjectDialog pending={create.isPending} onClose={() => setCreating(false)} onSubmit={(v) => create.mutate(v)} />
       )}
 
+      {editingProject && (
+        <EditProjectDialog
+          project={editingProject}
+          pending={update.isPending}
+          onClose={() => setEditingSlug(null)}
+          onSubmit={(v) => update.mutate({ slug: editingProject.slug, body: v })}
+        />
+      )}
+
       {viewing && (
         <Dialog open onOpenChange={(open) => !open && setViewingSlug(null)}>
           <DialogContent className="max-w-2xl">
@@ -160,6 +192,25 @@ export function ProjectsPage() {
               </DialogTitle>
             </DialogHeader>
             <div className="flex flex-col gap-5">
+              {canManage(viewing) && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setEditingSlug(viewing.slug)}>
+                    <Pencil />
+                    编辑配置
+                  </Button>
+                  <Confirm
+                    title={`删除项目 ${viewing.slug}？`}
+                    description="将删除平台上的项目配置与部署记录，不影响 Dokploy 上的应用本身。"
+                    confirmText="删除"
+                    onConfirm={() => remove.mutate(viewing.slug)}
+                  >
+                    <Button variant="outline-destructive" size="sm">
+                      <Trash2 />
+                      删除项目
+                    </Button>
+                  </Confirm>
+                </div>
+              )}
               {canManage(viewing) && (
                 <div>
                   <h3 className="mb-2 text-sm font-semibold">成员管理</h3>
@@ -236,6 +287,69 @@ export function ProjectsPage() {
         </Dialog>
       )}
     </div>
+  );
+}
+
+function EditProjectDialog({
+  project,
+  pending,
+  onClose,
+  onSubmit,
+}: {
+  project: ProjectInfo;
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: (v: UpdateProjectRequest) => void;
+}) {
+  const { register, handleSubmit, formState: { errors } } = useForm<{
+    name: string;
+    dokployApplicationId: string;
+    repoUrl: string;
+    description: string;
+  }>({
+    defaultValues: {
+      name: project.name,
+      dokployApplicationId: project.dokployApplicationId,
+      repoUrl: project.repoUrl,
+      description: project.description,
+    },
+  });
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>编辑项目 {project.slug}</DialogTitle>
+        </DialogHeader>
+        <form className="flex flex-col gap-4" onSubmit={handleSubmit(onSubmit)}>
+          <Field label="名称" htmlFor="proj-edit-name" required error={errors.name?.message}>
+            <Input id="proj-edit-name" aria-invalid={!!errors.name} {...register('name', { required: '请输入名称' })} />
+          </Field>
+          <Field
+            label="Dokploy Application ID"
+            htmlFor="proj-edit-app"
+            required
+            error={errors.dokployApplicationId?.message}
+            hint="在 Dokploy 控制台的应用详情里查看"
+          >
+            <Input
+              id="proj-edit-app"
+              className="font-mono"
+              aria-invalid={!!errors.dokployApplicationId}
+              {...register('dokployApplicationId', { required: '请输入 Application ID' })}
+            />
+          </Field>
+          <Field label="仓库地址" htmlFor="proj-edit-repo" hint="可选">
+            <Input id="proj-edit-repo" placeholder="https://git.example.com/crm" {...register('repoUrl')} />
+          </Field>
+          <Field label="说明" htmlFor="proj-edit-desc">
+            <Textarea id="proj-edit-desc" rows={2} {...register('description')} />
+          </Field>
+          <Button type="submit" loading={pending} className="w-full">
+            保存
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

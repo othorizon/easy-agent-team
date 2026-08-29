@@ -274,7 +274,22 @@ describe('数据库账号分配（真实建库）', () => {
     expect(creds.DB_NAME).toBe('proj_wang');
     expect(creds.DB_USER).toBe('u_proj_wang');
     expect(creds.DB_PASSWORD).toBeTruthy();
-    // 其他成员无权限
+    // 除密码外均为非敏感明文：清单直接带值，其他成员也能明文查看
+    const vars = await api('GET', '/api/envs/db-proj-wang/variables', { token: m2Token });
+    type VarMeta = { key: string; secret: boolean; value: string | null };
+    const byKey: Record<string, VarMeta> = Object.fromEntries(
+      vars.body.map((v: VarMeta): [string, VarMeta] => [v.key, v]),
+    );
+    for (const k of ['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER']) {
+      expect(byKey[k].secret).toBe(false);
+      expect(byKey[k].value).toBeTruthy();
+    }
+    expect(byKey.DB_NAME.value).toBe('proj_wang');
+    expect(byKey.DB_PASSWORD.secret).toBe(true);
+    expect(byKey.DB_PASSWORD.value).toBeNull();
+    const hostPull = await api('POST', '/api/envs/db-proj-wang/values', { token: m2Token, payload: { keys: ['DB_HOST'] } });
+    expect(hostPull.body.values.DB_HOST).toBe('127.0.0.1');
+    // 密码对其他成员仍无权限
     const other = await api('POST', '/api/envs/db-proj-wang/values', { token: m2Token, payload: { keys: ['DB_PASSWORD'] } });
     expect(other.body.denied[0].error).toBe('PERMISSION_REQUIRED');
   });
@@ -326,6 +341,11 @@ describe('数据库账号分配（真实建库）', () => {
     await still.end();
     const env = await api('POST', '/api/envs/db-proj-wang/values', { token: m1Token, payload: {} });
     expect(env.status).toBe(404);
+    // 已删除的记录不再出现在列表里
+    const mineList = await api('GET', '/api/db/assignments/mine', { token: m1Token });
+    expect(mineList.body.map((a: { id: string }) => a.id)).not.toContain(assignmentId);
+    const allList = await api('GET', '/api/db/assignments', { token: adminToken });
+    expect(allList.body.map((a: { id: string }) => a.id)).not.toContain(assignmentId);
     // 记录已删除（非 active），可以删除实例登记了
     expect((await api('DELETE', `/api/db/instances/${instanceId}`, { token: adminToken })).status).toBe(200);
   });

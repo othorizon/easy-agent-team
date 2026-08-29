@@ -1,9 +1,9 @@
-import type { GrantInfo, UpsertVariableRequest, VariableMeta } from '@eat/shared';
+import type { EnvironmentInfo, GrantInfo, UpdateEnvironmentRequest, UpsertVariableRequest, VariableMeta } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Plus } from 'lucide-react';
+import { ArrowLeft, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
 import { CopyButton, InlineCode } from '../components/code';
@@ -32,8 +32,10 @@ interface UserRow {
 export function EnvDetailPage() {
   const { slug = '' } = useParams();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const me = getStoredUser();
   const [editing, setEditing] = useState<VariableMeta | 'new' | null>(null);
+  const [editingEnv, setEditingEnv] = useState(false);
   const [granting, setGranting] = useState(false);
 
   const variables = useQuery({
@@ -50,14 +52,15 @@ export function EnvDetailPage() {
     queryKey: ['users'],
     queryFn: () => api<UserRow[]>('GET', '/api/users'),
   });
-  // 环境级授权需要环境 id：从环境列表缓存里找
+  // 环境信息（名称/备注/id）：从环境列表里找
   const envs = useQuery({
     queryKey: ['envs'],
-    queryFn: () => api<Array<{ id: string; slug: string }>>('GET', '/api/envs'),
+    queryFn: () => api<EnvironmentInfo[]>('GET', '/api/envs'),
   });
 
   const canManage = !grants.isError;
-  const envId = envs.data?.find((e) => e.slug === slug)?.id;
+  const env = envs.data?.find((e) => e.slug === slug);
+  const envId = env?.id;
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['vars', slug] });
@@ -108,6 +111,26 @@ export function EnvDetailPage() {
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '撤销失败'),
   });
 
+  const updateEnv = useMutation({
+    mutationFn: (v: UpdateEnvironmentRequest) => api('PATCH', `/api/envs/${slug}`, v),
+    onSuccess: () => {
+      toast.success('环境已更新');
+      setEditingEnv(false);
+      void queryClient.invalidateQueries({ queryKey: ['envs'] });
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '更新失败'),
+  });
+
+  const removeEnv = useMutation({
+    mutationFn: () => api('DELETE', `/api/envs/${slug}`),
+    onSuccess: () => {
+      toast.success('环境已删除');
+      void queryClient.invalidateQueries({ queryKey: ['envs'] });
+      navigate('/');
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '删除失败'),
+  });
+
   return (
     <div className="space-y-5">
       <div>
@@ -122,14 +145,33 @@ export function EnvDetailPage() {
           title={
             <span className="inline-flex flex-wrap items-center gap-2">
               环境 <InlineCode className="text-lg">{slug}</InlineCode>
+              {env?.name && <span>{env.name}</span>}
             </span>
           }
+          description={env?.description || undefined}
           actions={
             canManage && (
-              <Button onClick={() => setEditing('new')}>
-                <Plus />
-                新增变量
-              </Button>
+              <>
+                <Button variant="outline" onClick={() => setEditingEnv(true)}>
+                  <Pencil />
+                  编辑环境
+                </Button>
+                <Confirm
+                  title={`删除环境 ${slug}？`}
+                  description="将同时删除环境下的全部变量与授权，此操作不可恢复。"
+                  confirmText="删除"
+                  onConfirm={() => removeEnv.mutate()}
+                >
+                  <Button variant="outline-destructive">
+                    <Trash2 />
+                    删除环境
+                  </Button>
+                </Confirm>
+                <Button onClick={() => setEditing('new')}>
+                  <Plus />
+                  新增变量
+                </Button>
+              </>
             )
           }
         />
@@ -147,6 +189,7 @@ export function EnvDetailPage() {
                 <TableRow>
                   <TableHead>Key</TableHead>
                   <TableHead className="hidden md:table-cell">备注</TableHead>
+                  <TableHead className="w-40">值</TableHead>
                   <TableHead className="w-24">权限</TableHead>
                   <TableHead className="hidden w-28 lg:table-cell">无权限可见</TableHead>
                   <TableHead className="hidden w-16 sm:table-cell">版本</TableHead>
@@ -167,7 +210,25 @@ export function EnvDetailPage() {
                       {row.description}
                     </TableCell>
                     <TableCell>
-                      {row.hasAccess ? <Badge variant="success">可读取</Badge> : <Badge variant="outline">无权限</Badge>}
+                      {row.secret ? (
+                        <span className="text-xs text-muted-foreground">••••••</span>
+                      ) : (
+                        <span className="inline-flex max-w-40 items-center gap-1">
+                          <InlineCode className="truncate" title={row.value ?? ''}>
+                            {row.value}
+                          </InlineCode>
+                          <CopyButton text={row.value ?? ''} />
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {!row.secret ? (
+                        <Badge variant="secondary">非敏感</Badge>
+                      ) : row.hasAccess ? (
+                        <Badge variant="success">可读取</Badge>
+                      ) : (
+                        <Badge variant="outline">无权限</Badge>
+                      )}
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground lg:table-cell">
                       {row.visibleWithoutPermission ? '是' : '否'}
@@ -263,6 +324,14 @@ export function EnvDetailPage() {
           onSubmit={(v) => upsert.mutate(v)}
         />
       )}
+      {editingEnv && env && (
+        <EditEnvDialog
+          env={env}
+          pending={updateEnv.isPending}
+          onClose={() => setEditingEnv(false)}
+          onSubmit={(v) => updateEnv.mutate(v)}
+        />
+      )}
       {granting && (
         <GrantDialog
           users={(users.data ?? []).filter((u) => u.id !== me?.id)}
@@ -276,11 +345,48 @@ export function EnvDetailPage() {
   );
 }
 
+function EditEnvDialog({
+  env,
+  pending,
+  onClose,
+  onSubmit,
+}: {
+  env: EnvironmentInfo;
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: (v: UpdateEnvironmentRequest) => void;
+}) {
+  const { register, handleSubmit, formState: { errors } } = useForm<{ name: string; description: string }>({
+    defaultValues: { name: env.name, description: env.description },
+  });
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>编辑环境 {env.slug}</DialogTitle>
+        </DialogHeader>
+        <form className="flex flex-col gap-4" onSubmit={handleSubmit(onSubmit)}>
+          <Field label="名称" htmlFor="env-edit-name" required error={errors.name?.message}>
+            <Input id="env-edit-name" aria-invalid={!!errors.name} {...register('name', { required: '请输入名称' })} />
+          </Field>
+          <Field label="备注" htmlFor="env-edit-desc" hint="供人和 AI 理解这个环境的用途">
+            <Textarea id="env-edit-desc" rows={2} {...register('description')} />
+          </Field>
+          <Button type="submit" loading={pending} className="w-full">
+            保存
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 interface VariableFormValues {
   key: string;
   value: string;
   description: string;
   visibleWithoutPermission: boolean;
+  secret: boolean;
 }
 
 function VariableDialog({
@@ -295,16 +401,19 @@ function VariableDialog({
   onSubmit: (v: UpsertVariableRequest) => void;
 }) {
   const isNew = editing === 'new';
-  const { register, handleSubmit, control, formState: { errors } } = useForm<VariableFormValues>({
+  const { register, handleSubmit, control, watch, formState: { errors } } = useForm<VariableFormValues>({
     defaultValues: isNew
-      ? { key: '', value: '', description: '', visibleWithoutPermission: true }
+      ? { key: '', value: '', description: '', visibleWithoutPermission: true, secret: true }
       : {
           key: editing.key,
-          value: '',
+          // 非敏感变量的当前值本就明文可见，编辑时直接带出
+          value: editing.secret ? '' : (editing.value ?? ''),
           description: editing.description,
           visibleWithoutPermission: editing.visibleWithoutPermission,
+          secret: editing.secret,
         },
   });
+  const secret = watch('secret');
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
@@ -322,17 +431,31 @@ function VariableDialog({
               {...register('key', { required: '请输入 Key', pattern: rules.envKey })}
             />
           </Field>
+          <Field label="敏感变量" hint={secret ? '值加密存储，读取需授权并落审计' : '值明文存储，全员可在平台直接查看'}>
+            <Controller
+              control={control}
+              name="secret"
+              render={({ field }) => <Switch checked={field.value} onCheckedChange={field.onChange} />}
+            />
+          </Field>
           <Field
             label={isNew ? '值' : '新值'}
             htmlFor="var-value"
             required
             error={errors.value?.message}
-            hint={isNew ? '值会加密存储，读取受审计' : '更新会使旧值失效并递增版本'}
+            hint={
+              secret
+                ? isNew
+                  ? '值会加密存储，读取受审计'
+                  : '更新会使旧值失效并递增版本'
+                : '非敏感配置（如服务地址、端口），明文存储'
+            }
           >
             <Input
               id="var-value"
-              type="password"
-              autoComplete="new-password"
+              type={secret ? 'password' : 'text'}
+              autoComplete={secret ? 'new-password' : 'off'}
+              className={secret ? undefined : 'font-mono'}
               aria-invalid={!!errors.value}
               {...register('value', { required: '请输入值' })}
             />

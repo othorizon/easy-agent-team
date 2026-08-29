@@ -135,6 +135,11 @@ export class EnvsService {
 
   // ---------- 变量 ----------
 
+  /** 变量取值：敏感值解密，非敏感值直接取明文列 */
+  private readValue(v: VarRow): string {
+    return v.secret ? decryptSecret(v.valueEncrypted ?? '') : (v.valuePlain ?? '');
+  }
+
   private toMeta(v: VarRow, envSlug: string, hasAccess: boolean): VariableMeta {
     return {
       id: v.id,
@@ -142,6 +147,8 @@ export class EnvsService {
       key: v.key,
       description: v.description,
       visibleWithoutPermission: v.visibleWithoutPermission,
+      secret: v.secret,
+      value: v.secret ? null : (v.valuePlain ?? ''),
       hasAccess,
       version: v.version,
       updatedAt: v.updatedAt.toISOString(),
@@ -161,8 +168,9 @@ export class EnvsService {
       .where(eq(envVariables.environmentId, env.id))
       .orderBy(asc(envVariables.key));
     const access = await this.accessibleSet(user, env);
+    // 非敏感变量全员可读值（hasAccess 恒为 true），敏感变量按授权判定
     return vars
-      .map((v) => this.toMeta(v, env.slug, access === 'ALL' || access.has(v.id)))
+      .map((v) => this.toMeta(v, env.slug, !v.secret || access === 'ALL' || access.has(v.id)))
       .filter((m) => m.hasAccess || m.visibleWithoutPermission);
   }
 
@@ -187,12 +195,17 @@ export class EnvsService {
         .where(and(eq(envVariables.environmentId, env.id), eq(envVariables.key, dto.key)))
         .limit(1)
     )[0];
+    // 敏感 → 只存加密列；非敏感 → 只存明文列（切换敏感性时清掉另一列）
+    const valueColumns = dto.secret
+      ? { valueEncrypted: encryptSecret(dto.value), valuePlain: null }
+      : { valueEncrypted: null, valuePlain: dto.value };
     let row: VarRow;
     if (existing) {
       [row] = await this.db
         .update(envVariables)
         .set({
-          valueEncrypted: encryptSecret(dto.value),
+          ...valueColumns,
+          secret: dto.secret,
           description: dto.description,
           visibleWithoutPermission: dto.visibleWithoutPermission,
           version: existing.version + 1,
@@ -206,7 +219,8 @@ export class EnvsService {
         .values({
           environmentId: env.id,
           key: dto.key,
-          valueEncrypted: encryptSecret(dto.value),
+          ...valueColumns,
+          secret: dto.secret,
           description: dto.description,
           visibleWithoutPermission: dto.visibleWithoutPermission,
         })
@@ -254,18 +268,24 @@ export class EnvsService {
     const access = await this.accessibleSet(user, env);
     const byKey = new Map(allVars.map((v) => [v.key, v]));
 
-    const requested = keys && keys.length > 0 ? keys : allVars.filter((v) => access === 'ALL' || access.has(v.id)).map((v) => v.key);
+    const requested =
+      keys && keys.length > 0
+        ? keys
+        : allVars.filter((v) => !v.secret || access === 'ALL' || access.has(v.id)).map((v) => v.key);
 
     const values: Record<string, string> = {};
     const denied: PullValuesResponse['denied'] = [];
+    const secretReadKeys: string[] = [];
     for (const key of requested) {
       const v = byKey.get(key);
       if (!v) {
         denied.push({ key, error: 'PERMISSION_REQUIRED', message: `变量 ${key} 不存在或不可见`, howToRequest: HOW_TO_REQUEST });
         continue;
       }
-      if (access === 'ALL' || access.has(v.id)) {
-        values[key] = decryptSecret(v.valueEncrypted);
+      // 非敏感变量全员可读，不需要授权
+      if (!v.secret || access === 'ALL' || access.has(v.id)) {
+        values[key] = this.readValue(v);
+        if (v.secret) secretReadKeys.push(key);
       } else {
         denied.push({
           key,
@@ -276,15 +296,15 @@ export class EnvsService {
       }
     }
 
-    const readKeys = Object.keys(values);
-    if (readKeys.length > 0) {
+    // 仅敏感值的读取落审计
+    if (secretReadKeys.length > 0) {
       await this.audit.record({
         actorId: user.id,
         actorTokenId: user.tokenId,
         action: 'secret.read',
         targetType: 'environment',
         targetId: env.id,
-        meta: { environment: env.slug, keys: readKeys },
+        meta: { environment: env.slug, keys: secretReadKeys },
         ip,
       });
     }

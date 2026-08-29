@@ -40,16 +40,21 @@ export const upsertVariableSchema = z.object({
   description: z.string().max(2000).default(''),
   /** 无权限时是否在清单中可见（默认可见——让 AI 能"看见清单、看懂用途"） */
   visibleWithoutPermission: z.boolean().default(true),
+  /** 是否敏感（默认敏感）：敏感值加密存储、读取需授权；非敏感值明文存储、全员可在平台明文查看 */
+  secret: z.boolean().default(true),
 });
 export type UpsertVariableRequest = z.infer<typeof upsertVariableSchema>;
 
-/** 变量清单条目：不含值。hasAccess 告诉调用方（人或 AI）能否读值 */
+/** 变量清单条目：敏感变量不含值；非敏感变量附带明文值。hasAccess 告诉调用方（人或 AI）能否读值 */
 export const variableMetaSchema = z.object({
   id: z.string(),
   environmentSlug: z.string(),
   key: z.string(),
   description: z.string(),
   visibleWithoutPermission: z.boolean(),
+  secret: z.boolean(),
+  /** 非敏感变量的明文值；敏感变量恒为 null */
+  value: z.string().nullable(),
   hasAccess: z.boolean(),
   version: z.number(),
   updatedAt: z.string(),

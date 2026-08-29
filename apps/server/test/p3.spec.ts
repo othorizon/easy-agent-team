@@ -250,12 +250,18 @@ describe('密钥指纹清单', () => {
       token: adminToken,
       payload: { key: 'HIDDEN_LONG', value: 'hidden-secret-value-456', description: '', visibleWithoutPermission: false },
     });
+    // 非敏感变量明文存储，不是密钥，不进指纹清单
+    await api('POST', '/api/envs/fp-env/variables', {
+      token: adminToken,
+      payload: { key: 'PLAIN_LONG', value: 'plain-service-url-very-long', description: '', secret: false },
+    });
     const r = await api('GET', '/api/secret-fingerprints', { token: outsiderToken });
     expect(r.status).toBe(200);
     const keys = r.body.map((f: { key: string }) => f.key);
     expect(keys).toContain('LONG_TOKEN');
     expect(keys).not.toContain('SHORT');
     expect(keys).not.toContain('HIDDEN_LONG');
+    expect(keys).not.toContain('PLAIN_LONG');
     expect(keys).toContain('(受限变量)');
     const long = r.body.find((f: { key: string }) => f.key === 'LONG_TOKEN');
     expect(long.fingerprint).toMatch(/^[0-9a-f]{64}$/);

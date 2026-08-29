@@ -323,3 +323,106 @@ describe('变量更新与删除', () => {
     expect(pull.body.denied[0].key).toBe('API_TOKEN');
   });
 });
+
+describe('非敏感变量（明文存储、全员明文可读）', () => {
+  it('创建非敏感变量：清单直接带明文值，成员免授权可读', async () => {
+    await api('POST', '/api/envs', {
+      token: adminToken,
+      payload: { slug: 'plain-env', name: '公共配置', description: '非敏感的服务地址等' },
+    });
+    const created = await api('POST', '/api/envs/plain-env/variables', {
+      token: adminToken,
+      payload: { key: 'SERVICE_URL', value: 'https://svc.internal:8080', description: '内部服务地址', secret: false },
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.secret).toBe(false);
+    expect(created.body.value).toBe('https://svc.internal:8080');
+    // 对照：敏感变量清单不含值
+    await api('POST', '/api/envs/plain-env/variables', {
+      token: adminToken,
+      payload: { key: 'PLAIN_ENV_TOKEN', value: 'sec-token-value-12345', description: '敏感令牌' },
+    });
+
+    // 成员无任何授权：清单里非敏感变量带明文值且 hasAccess=true
+    const list = await api('GET', '/api/envs/plain-env/variables', { token: memberToken });
+    const plain = list.body.find((v: { key: string }) => v.key === 'SERVICE_URL');
+    expect(plain.hasAccess).toBe(true);
+    expect(plain.value).toBe('https://svc.internal:8080');
+    const secretVar = list.body.find((v: { key: string }) => v.key === 'PLAIN_ENV_TOKEN');
+    expect(secretVar.hasAccess).toBe(false);
+    expect(secretVar.value).toBeNull();
+
+    // 成员直接拉取非敏感值成功；缺省拉取也包含非敏感值、敏感值不在其中
+    const pull = await api('POST', '/api/envs/plain-env/values', { token: memberToken, payload: {} });
+    expect(pull.body.values).toEqual({ SERVICE_URL: 'https://svc.internal:8080' });
+    expect(pull.body.denied).toEqual([]);
+  });
+
+  it('非敏感值读取不落 secret.read 审计', async () => {
+    const r = await api('GET', '/api/audit?action=secret.read', { token: adminToken });
+    const hits = r.body.filter((x: { meta: { keys?: string[] } }) => x.meta?.keys?.includes('SERVICE_URL'));
+    expect(hits).toEqual([]);
+  });
+
+  it('敏感性可切换：改敏感后需授权，改回后恢复明文', async () => {
+    const toSecret = await api('POST', '/api/envs/plain-env/variables', {
+      token: adminToken,
+      payload: { key: 'SERVICE_URL', value: 'https://svc.internal:9090', description: '', secret: true },
+    });
+    expect(toSecret.body.secret).toBe(true);
+    expect(toSecret.body.value).toBeNull();
+    const denied = await api('POST', '/api/envs/plain-env/values', {
+      token: memberToken,
+      payload: { keys: ['SERVICE_URL'] },
+    });
+    expect(denied.body.denied[0].error).toBe('PERMISSION_REQUIRED');
+
+    const back = await api('POST', '/api/envs/plain-env/variables', {
+      token: adminToken,
+      payload: { key: 'SERVICE_URL', value: 'https://svc.internal:8080', description: '', secret: false },
+    });
+    expect(back.body.value).toBe('https://svc.internal:8080');
+    const pull = await api('POST', '/api/envs/plain-env/values', {
+      token: memberToken,
+      payload: { keys: ['SERVICE_URL'] },
+    });
+    expect(pull.body.values.SERVICE_URL).toBe('https://svc.internal:8080');
+  });
+
+  it('非敏感变量不进入密钥指纹清单', async () => {
+    await api('POST', '/api/envs/plain-env/variables', {
+      token: adminToken,
+      payload: { key: 'PLAIN_LONG', value: 'plain-but-long-value-1234567890', description: '', secret: false },
+    });
+    const r = await api('GET', '/api/secret-fingerprints', { token: adminToken });
+    const keys = r.body.map((f: { key: string }) => f.key);
+    expect(keys).not.toContain('PLAIN_LONG');
+    expect(keys).toContain('PLAIN_ENV_TOKEN');
+  });
+});
+
+describe('环境编辑与删除', () => {
+  it('非 Owner 不能编辑/删除环境', async () => {
+    expect((await api('PATCH', '/api/envs/plain-env', { token: memberToken, payload: { name: 'x' } })).status).toBe(403);
+    expect((await api('DELETE', '/api/envs/plain-env', { token: memberToken })).status).toBe(403);
+  });
+
+  it('Owner 更新名称与备注', async () => {
+    const r = await api('PATCH', '/api/envs/plain-env', {
+      token: adminToken,
+      payload: { name: '公共配置（新）', description: '改过的备注' },
+    });
+    expect(r.status).toBe(200);
+    const envs = await api('GET', '/api/envs', { token: memberToken });
+    const env = envs.body.find((e: { slug: string }) => e.slug === 'plain-env');
+    expect(env.name).toBe('公共配置（新）');
+    expect(env.description).toBe('改过的备注');
+  });
+
+  it('删除环境后从列表消失，变量一并删除', async () => {
+    expect((await api('DELETE', '/api/envs/plain-env', { token: adminToken })).status).toBe(200);
+    const envs = await api('GET', '/api/envs', { token: adminToken });
+    expect(envs.body.map((e: { slug: string }) => e.slug)).not.toContain('plain-env');
+    expect((await api('GET', '/api/envs/plain-env/variables', { token: adminToken })).status).toBe(404);
+  });
+});

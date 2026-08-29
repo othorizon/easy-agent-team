@@ -86,7 +86,12 @@ export const envVariables = pgTable(
       .notNull()
       .references(() => environments.id, { onDelete: 'cascade' }),
     key: text('key').notNull(),
-    valueEncrypted: text('value_encrypted').notNull(),
+    /** 敏感变量的加密值；非敏感变量此列为空 */
+    valueEncrypted: text('value_encrypted'),
+    /** 非敏感变量的明文值（secret=false 时使用，平台上可直接查看） */
+    valuePlain: text('value_plain'),
+    /** 是否敏感：敏感值加密存储、读取需授权并审计；非敏感值明文存储、全员可读 */
+    secret: boolean('secret').notNull().default(true),
     description: text('description').notNull().default(''),
     /** 无权限时是否在清单中可见（默认可见：AI 能看懂用途，取值另需权限） */
     visibleWithoutPermission: boolean('visible_without_permission').notNull().default(true),

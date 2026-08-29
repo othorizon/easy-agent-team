@@ -139,17 +139,24 @@ export class DbsService {
     return this.toInfo(row);
   }
 
+  // 已删除的分配不再出现在列表里（记录保留在库中供审计追溯）
+
   async listMine(user: AuthUser): Promise<DbAssignmentInfo[]> {
     const rows = await this.db
       .select()
       .from(dbAssignments)
-      .where(eq(dbAssignments.requesterId, user.id))
+      .where(and(eq(dbAssignments.requesterId, user.id), ne(dbAssignments.status, 'deleted')))
       .orderBy(desc(dbAssignments.createdAt));
     return Promise.all(rows.map((r) => this.toInfo(r)));
   }
 
   async listAll(): Promise<DbAssignmentInfo[]> {
-    const rows = await this.db.select().from(dbAssignments).orderBy(desc(dbAssignments.createdAt)).limit(200);
+    const rows = await this.db
+      .select()
+      .from(dbAssignments)
+      .where(ne(dbAssignments.status, 'deleted'))
+      .orderBy(desc(dbAssignments.createdAt))
+      .limit(200);
     return Promise.all(rows.map((r) => this.toInfo(r)));
   }
 
@@ -194,18 +201,21 @@ export class DbsService {
         source: 'db_assignment',
       })
       .returning();
-    const vars: Array<[string, string, string]> = [
-      ['DB_HOST', instance.host, '数据库主机'],
-      ['DB_PORT', String(instance.port), '数据库端口'],
-      ['DB_NAME', row.dbName, '库名'],
-      ['DB_USER', row.dbUser, '专属账号（权限限定在本库）'],
-      ['DB_PASSWORD', password, '账号密码（平台生成，读取受审计）'],
+    // 仅密码敏感（加密存储、读取需授权并审计）；主机/端口/库名/账号为非敏感明文，平台上可直接查看
+    const vars: Array<[string, string, string, boolean]> = [
+      ['DB_HOST', instance.host, '数据库主机', false],
+      ['DB_PORT', String(instance.port), '数据库端口', false],
+      ['DB_NAME', row.dbName, '库名', false],
+      ['DB_USER', row.dbUser, '专属账号（权限限定在本库）', false],
+      ['DB_PASSWORD', password, '账号密码（平台生成，读取受审计）', true],
     ];
-    for (const [key, value, description] of vars) {
+    for (const [key, value, description, secret] of vars) {
       await this.db.insert(envVariables).values({
         environmentId: env.id,
         key,
-        valueEncrypted: encryptSecret(value),
+        valueEncrypted: secret ? encryptSecret(value) : null,
+        valuePlain: secret ? null : value,
+        secret,
         description,
       });
     }
