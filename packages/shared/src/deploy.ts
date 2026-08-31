@@ -25,6 +25,19 @@ export const dokploySettingsInfoSchema = z.object({
 });
 export type DokploySettingsInfo = z.infer<typeof dokploySettingsInfoSchema>;
 
+/**
+ * Dokploy 上的一个应用（供控制台「从 Dokploy 选择」快速填 application id 用，决策 27）。
+ * name 是应用显示名、appName 是 Dokploy 生成的容器名（同名应用靠它区分）、projectName 是所属 Dokploy 项目。
+ */
+export const dokployApplicationSchema = z.object({
+  applicationId: z.string(),
+  name: z.string(),
+  appName: z.string(),
+  projectName: z.string(),
+  description: z.string(),
+});
+export type DokployApplication = z.infer<typeof dokployApplicationSchema>;
+
 // ---------- 项目 ----------
 
 export const createProjectSchema = z.object({

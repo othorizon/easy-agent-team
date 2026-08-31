@@ -1,4 +1,4 @@
-import type { CreateProjectRequest, DeploymentInfo, ProjectInfo, UpdateProjectRequest } from '@eat/shared';
+import type { CreateProjectRequest, DeploymentInfo, DokployApplication, ProjectInfo, UpdateProjectRequest } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Pencil, Plus, Trash2, X } from 'lucide-react';
 import { useState } from 'react';
@@ -8,6 +8,7 @@ import { api, ApiError, getStoredUser } from '../api';
 import { InlineCode } from '../components/code';
 import { Combobox } from '../components/combobox';
 import { Confirm } from '../components/confirm';
+import { DokployAppPicker } from '../components/dokploy-app-picker';
 import { Empty } from '../components/empty';
 import { Field, rules } from '../components/form';
 import { PageHeader } from '../components/page-header';
@@ -301,7 +302,7 @@ function EditProjectDialog({
   onClose: () => void;
   onSubmit: (v: UpdateProjectRequest) => void;
 }) {
-  const { register, handleSubmit, formState: { errors } } = useForm<{
+  const { register, handleSubmit, setValue, watch, formState: { errors } } = useForm<{
     name: string;
     dokployApplicationId: string;
     repoUrl: string;
@@ -314,6 +315,8 @@ function EditProjectDialog({
       description: project.description,
     },
   });
+  const [picked, setPicked] = useState<DokployApplication | null>(null);
+  const appId = watch('dokployApplicationId');
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
@@ -329,14 +332,27 @@ function EditProjectDialog({
             htmlFor="proj-edit-app"
             required
             error={errors.dokployApplicationId?.message}
-            hint="在 Dokploy 控制台的应用详情里查看"
+            hint={
+              picked && picked.applicationId === appId
+                ? `已选择：${picked.name}${picked.projectName ? `（${picked.projectName}）` : ''}`
+                : '可从 Dokploy 搜索选择，或在应用详情里查到后手动填写'
+            }
           >
-            <Input
-              id="proj-edit-app"
-              className="font-mono"
-              aria-invalid={!!errors.dokployApplicationId}
-              {...register('dokployApplicationId', { required: '请输入 Application ID' })}
-            />
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input
+                id="proj-edit-app"
+                className="flex-1 font-mono"
+                aria-invalid={!!errors.dokployApplicationId}
+                {...register('dokployApplicationId', { required: '请输入 Application ID' })}
+              />
+              <DokployAppPicker
+                value={appId}
+                onPick={(app) => {
+                  setValue('dokployApplicationId', app.applicationId, { shouldValidate: true, shouldDirty: true });
+                  setPicked(app);
+                }}
+              />
+            </div>
           </Field>
           <Field label="仓库地址" htmlFor="proj-edit-repo" hint="可选">
             <Input id="proj-edit-repo" placeholder="https://git.example.com/crm" {...register('repoUrl')} />
@@ -362,9 +378,11 @@ function CreateProjectDialog({
   onClose: () => void;
   onSubmit: (v: CreateProjectRequest) => void;
 }) {
-  const { register, handleSubmit, formState: { errors } } = useForm<CreateProjectRequest>({
+  const { register, handleSubmit, setValue, watch, formState: { errors } } = useForm<CreateProjectRequest>({
     defaultValues: { slug: '', name: '', dokployApplicationId: '', repoUrl: '', description: '' },
   });
+  const [picked, setPicked] = useState<DokployApplication | null>(null);
+  const appId = watch('dokployApplicationId');
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
@@ -391,14 +409,27 @@ function CreateProjectDialog({
             htmlFor="proj-app"
             required
             error={errors.dokployApplicationId?.message}
-            hint="在 Dokploy 控制台的应用详情里查看"
+            hint={
+              picked && picked.applicationId === appId
+                ? `已选择：${picked.name}${picked.projectName ? `（${picked.projectName}）` : ''}`
+                : '可从 Dokploy 搜索选择，或在应用详情里查到后手动填写'
+            }
           >
-            <Input
-              id="proj-app"
-              className="font-mono"
-              aria-invalid={!!errors.dokployApplicationId}
-              {...register('dokployApplicationId', { required: '请输入 Application ID' })}
-            />
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input
+                id="proj-app"
+                className="flex-1 font-mono"
+                aria-invalid={!!errors.dokployApplicationId}
+                {...register('dokployApplicationId', { required: '请输入 Application ID' })}
+              />
+              <DokployAppPicker
+                value={appId}
+                onPick={(app) => {
+                  setValue('dokployApplicationId', app.applicationId, { shouldValidate: true, shouldDirty: true });
+                  setPicked(app);
+                }}
+              />
+            </div>
           </Field>
           <Field label="仓库地址" htmlFor="proj-repo" hint="可选">
             <Input id="proj-repo" placeholder="https://git.example.com/crm" {...register('repoUrl')} />

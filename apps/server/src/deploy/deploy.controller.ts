@@ -44,6 +44,15 @@ export class DeployController {
     return this.deploy.testSettings(body);
   }
 
+  /**
+   * Dokploy 应用清单（决策 27）：控制台建项目/改项目时用它搜索并快速填 application id。
+   * 与创建项目同权限（任何登录成员），不加 @Roles('admin')——见 DeployService.listDokployApplications 注释。
+   */
+  @Get('dokploy/applications')
+  listDokployApplications() {
+    return this.deploy.listDokployApplications();
+  }
+
   // ---------- 项目 ----------
 
   @Get('projects')
