@@ -29,6 +29,9 @@ async function runPrecheck(api: Api, dir: string, checkCmd?: string): Promise<Pr
   const fingerprints = await api.request<SecretFingerprint[]>('GET', '/api/secret-fingerprints');
   const { scannedFiles, findings } = scanWorkspace(dir, fingerprints);
   console.log(`  已扫描 ${scannedFiles} 个文件，${findings.length} 个问题`);
+  if (scannedFiles === 0) {
+    console.warn('  ⚠ 没扫到任何文件，确认目录指向项目代码（部署时用 --dir 指定），否则密钥检查等于没做');
+  }
   for (const f of findings) {
     console.error(`  ✗ [${f.rule}] ${f.file}${f.line ? `:${f.line}` : ''} — ${f.note}`);
   }
@@ -84,7 +87,7 @@ export async function deployRun(slug: string | undefined, opts: { dir?: string; 
   if (dep.status === 'deploying') {
     console.log(`仍在部署中，稍后查询: eat deploy-status ${dep.id}`);
   } else if (dep.status === 'success') {
-    console.log(`部署成功（${dep.id.slice(0, 8)}）`);
+    console.log(`部署成功（${dep.id}）`);
   } else {
     console.error(`部署失败: ${dep.error ?? '未知原因'}`);
     process.exitCode = 1;
@@ -94,7 +97,7 @@ export async function deployRun(slug: string | undefined, opts: { dir?: string; 
 export async function deployStatus(id: string): Promise<void> {
   const api = Api.fromSaved();
   const dep = await api.request<DeploymentInfo>('GET', `/api/deployments/${id}`);
-  console.log(`[${STATUS_LABEL[dep.status]}] ${dep.projectSlug}（${dep.id.slice(0, 8)}，触发人 ${dep.triggeredByName}）`);
+  console.log(`[${STATUS_LABEL[dep.status]}] ${dep.projectSlug}（${dep.id}，触发人 ${dep.triggeredByName}）`);
   if (dep.error) console.log(`原因: ${dep.error}`);
 }
 
