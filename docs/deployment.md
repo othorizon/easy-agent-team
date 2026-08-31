@@ -66,12 +66,16 @@ docker run -d --name eat -p 3000:3000 --env-file .env easy-agent-team
 **平台自托管分发，无需 npm registry**（§10 决策 9）：镜像构建时已把 CLI 单文件产物（`apps/cli/dist`）拷进 `/app/cli/dist`，平台直接提供下载。成员安装只需一条命令：
 
 ```bash
+# macOS / Linux / WSL / Git Bash
 curl -fsSL https://你的域名/install.sh | sh
+# Windows PowerShell（决策 24）
+powershell -ExecutionPolicy ByPass -c "irm https://你的域名/install.ps1 | iex"
+
 eat login --server https://你的域名     # 或设 EAT_SERVER 环境变量
 ```
 
 - 控制台「安装 CLI」页（`/install`）提供人机双视角：手动分步说明 + **给 AI Agent 的一键复制安装指令**（成员直接粘贴给自己的 AI 完成安装配置）；Agent 也可直接读 `GET /install/AGENT.md`。
-- 三个分发端点均免鉴权：`/install.sh`、`/install/eat.js`、`/install/AGENT.md`；产物路径可用 `EAT_CLI_DIST` 环境变量覆盖（默认按镜像布局 `../../cli/dist/index.js` 相对定位）。
+- 五个分发端点均免鉴权：`/install.sh`、`/install.ps1`、`/install/eat.js`、`/install/AGENT.md`、`/install/MCP.md`；产物路径可用 `EAT_CLI_DIST` 环境变量覆盖（默认按镜像布局 `../../cli/dist/index.js` 相对定位）。
 - 升级：CLI 版本随镜像走，成员重跑安装命令即可获得与平台一致的版本。
 
 MCP 接入 Claude Code：`claude mcp add --scope user eat -- eat mcp`（或把 `eat mcp` 写进 `.mcp.json`）。

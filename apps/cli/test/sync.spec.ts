@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ensureLink, resolveSyncRoots } from '../src/commands/sync.js';
+import { defaultLinkStrategy, ensureLink, resolveSyncRoots } from '../src/commands/sync.js';
 
 const home = os.homedir();
 
@@ -111,5 +111,85 @@ describe('ensureLink：软链维护', () => {
     expect(fs.lstatSync(link).isDirectory()).toBe(true);
     expect(ensureLink(link, dir, true, false)).toBe('linked');
     expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+  });
+});
+
+describe('defaultLinkStrategy：按平台选同步方式（决策 24）', () => {
+  it('Windows 用复制，其余平台用软链', () => {
+    expect(defaultLinkStrategy('win32')).toBe('copy');
+    expect(defaultLinkStrategy('darwin')).toBe('symlink');
+    expect(defaultLinkStrategy('linux')).toBe('symlink');
+  });
+});
+
+describe('ensureLink copy 策略：Windows 上复制实文件', () => {
+  let root: string;
+  let agents: string;
+  let claude: string;
+
+  beforeAll(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'eat-sync-copy-'));
+    agents = path.join(root, '.agents', 'skills');
+    claude = path.join(root, '.claude', 'skills');
+    fs.mkdirSync(agents, { recursive: true });
+    fs.mkdirSync(claude, { recursive: true });
+  });
+
+  afterAll(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  /** 造一个受管 skill 目录（含 .eat-meta.json，与 writeSkill 落地的结构一致） */
+  function mkManagedSkill(slug: string, version: number, syncedAt: string): string {
+    const dir = path.join(agents, slug);
+    fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), `# ${slug} v${version}\n`);
+    fs.writeFileSync(path.join(dir, 'scripts', 'run.sh'), 'echo hi\n');
+    fs.writeFileSync(
+      path.join(dir, '.eat-meta.json'),
+      JSON.stringify({ slug, name: slug, version, managed: true, syncedAt }),
+    );
+    return dir;
+  }
+
+  it('首次复制整棵目录（含子目录），再跑一次是幂等的 ok', () => {
+    const dir = mkManagedSkill('copied', 1, '2026-01-01T00:00:00.000Z');
+    const dest = path.join(claude, 'copied');
+    expect(ensureLink(dest, dir, false, false, 'copy')).toBe('copied');
+    expect(fs.lstatSync(dest).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(path.join(dest, 'SKILL.md'), 'utf8')).toBe('# copied v1\n');
+    expect(fs.readFileSync(path.join(dest, 'scripts', 'run.sh'), 'utf8')).toBe('echo hi\n');
+    expect(ensureLink(dest, dir, false, false, 'copy')).toBe('ok');
+  });
+
+  it('源被重新落地（版本或 syncedAt 变化）时副本随之更新', () => {
+    const dir = mkManagedSkill('bumped', 1, '2026-01-01T00:00:00.000Z');
+    const dest = path.join(claude, 'bumped');
+    expect(ensureLink(dest, dir, false, false, 'copy')).toBe('copied');
+    mkManagedSkill('bumped', 2, '2026-02-02T00:00:00.000Z');
+    expect(ensureLink(dest, dir, false, false, 'copy')).toBe('copied');
+    expect(fs.readFileSync(path.join(dest, 'SKILL.md'), 'utf8')).toBe('# bumped v2\n');
+  });
+
+  it('非 eat 管理的同名目录：默认 conflict 且原样保留，--force 才覆盖', () => {
+    const dir = mkManagedSkill('taken', 1, '2026-01-01T00:00:00.000Z');
+    const dest = path.join(claude, 'taken');
+    fs.mkdirSync(dest);
+    fs.writeFileSync(path.join(dest, 'SKILL.md'), '# 用户自己的\n');
+    expect(ensureLink(dest, dir, false, false, 'copy')).toBe('conflict');
+    expect(fs.readFileSync(path.join(dest, 'SKILL.md'), 'utf8')).toBe('# 用户自己的\n');
+    expect(ensureLink(dest, dir, true, false, 'copy')).toBe('copied');
+    expect(fs.readFileSync(path.join(dest, 'SKILL.md'), 'utf8')).toBe('# taken v1\n');
+  });
+
+  it('历史遗留的软链被替换为副本（换平台/换策略后的迁移）', () => {
+    const dir = mkManagedSkill('waslink', 1, '2026-01-01T00:00:00.000Z');
+    const dest = path.join(claude, 'waslink');
+    fs.symlinkSync(dir, dest, 'dir');
+    expect(ensureLink(dest, dir, false, false, 'copy')).toBe('copied');
+    expect(fs.lstatSync(dest).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(path.join(dest, 'SKILL.md'), 'utf8')).toBe('# waslink v1\n');
+    // 源目录没被连带删除
+    expect(fs.existsSync(path.join(dir, 'SKILL.md'))).toBe(true);
   });
 });

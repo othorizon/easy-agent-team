@@ -25,7 +25,7 @@ let memberId: string;
 let tmpDir: string;
 
 async function api(
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   url: string,
   opts: { token?: string; payload?: unknown } = {},
 ) {
@@ -233,6 +233,29 @@ describe('CLI 自托管分发', () => {
     expect(r.body).toContain('/usr/local/bin');
     expect(r.body).toContain('.zshenv');
     expect(r.body).toContain('grep -qF "$MARKER"');
+    // 决策 24：全部逻辑包进 main()、末行才调用——管道被截断时不会执行半截脚本
+    expect(r.body).toContain('main() {');
+    expect(r.body.trimEnd().endsWith('main "$@"')).toBe(true);
+    expect(r.body).toContain('/install.ps1'); // 指到 Windows 入口
+  });
+
+  it('install.ps1 免鉴权：Windows 安装脚本含 shim 三件套与用户级 PATH（决策 24）', async () => {
+    const r = await api('GET', '/install.ps1');
+    expect(r.status).toBe(200);
+    expect(String(r.headers['content-type'])).toContain('text/plain');
+    expect(r.body).toContain('/install/eat.js');
+    expect(r.body).toContain('eat login --server');
+    // shim 三件套：cmd.exe / PowerShell / Git Bash
+    expect(r.body).toContain("'@node \"%~dp0eat.js\" %*'");
+    expect(r.body).toContain('eat.cmd');
+    expect(r.body).toContain('eat.ps1');
+    expect(r.body).toContain('exit $LASTEXITCODE'); // .ps1 shim 必须透传退出码
+    // PATH 写用户级环境变量，绝不能用 setx（超过 1024 字符会被截断）
+    expect(r.body).toContain("[Environment]::SetEnvironmentVariable('Path'");
+    expect(r.body).not.toMatch(/^\s*setx\b/m); // 注释里可以提它，但不能真的调用
+    // 与 sh 脚本同样的截断保护：包成函数、末行才调用
+    expect(r.body).toContain('function Install-EatCli');
+    expect(r.body.trimEnd().endsWith('Install-EatCli')).toBe(true);
   });
 
   it('AGENT.md 免鉴权：只含 CLI 安装流程，不提及 MCP（决策 20）', async () => {
@@ -243,6 +266,10 @@ describe('CLI 自托管分发', () => {
     expect(r.body).toContain('eat login --server');
     expect(r.body).toContain('eat sync');
     expect(String(r.body).toLowerCase()).not.toContain('mcp');
+    // 决策 24：两套命令都给出，并要求 Agent 先判断平台
+    expect(r.body).toContain('/install.sh | sh');
+    expect(r.body).toContain('/install.ps1 | iex');
+    expect(r.body).toContain("process.platform === 'win32'");
   });
 
   it('MCP.md 独立板块：面向无 shell 环境的客户端，含注册命令', async () => {
@@ -252,6 +279,8 @@ describe('CLI 自托管分发', () => {
     expect(r.body).toContain('claude mcp add --scope user eat -- eat mcp');
     expect(r.body).toContain('stdio');
     expect(r.body).toContain('无需配置 MCP'); // 有 shell 装 CLI 即可的定位写进指引本身
+    // 决策 24：Windows 上 eat 是 eat.cmd，Node 不允许不经 shell 直接拉起
+    expect(r.body).toContain('claude mcp add --scope user eat -- cmd /c eat mcp');
   });
 
   it('eat.js：产物缺失 404；就绪后按原样下发', async () => {

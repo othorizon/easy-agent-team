@@ -64,23 +64,70 @@ function writeSkill(dir: string, skill: SyncSkill): void {
   }
 }
 
+export type LinkStrategy = 'symlink' | 'copy';
+
 /**
- * 把 linkPath 维护成指向 dir 的软链接（.claude/skills/<slug> → .agents/skills/<slug>）。
- * 历史版本直接落地在 .claude 的受管真实目录会被替换为链接（迁移）；非 eat 管理的占位仅 --force 才覆盖。
- * relative 时写相对链接（项目模式：目录随仓库整体移动/克隆后链接仍有效）。
+ * .claude/skills 的同步方式：类 Unix 用软链，Windows 用复制（决策 24）。
+ * Windows 上建符号链接需要管理员或开发者模式，junction 又只支持绝对目标（--project 的相对链接用不了）；
+ * skill 是 KB 级文本且 eat sync 是唯一写入方，复制实文件行为等价且零权限依赖。
+ */
+export function defaultLinkStrategy(platform: string = process.platform): LinkStrategy {
+  return platform === 'win32' ? 'copy' : 'symlink';
+}
+
+/** 递归复制目录（不用 fs.cpSync：它在 Node 18/20 上仍是 experimental） */
+function copyDir(src: string, dest: string): void {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const from = path.join(src, entry.name);
+    const to = path.join(dest, entry.name);
+    if (entry.isDirectory()) copyDir(from, to);
+    else if (entry.isFile()) fs.copyFileSync(from, to);
+  }
+}
+
+/**
+ * 把 linkPath 维护成 dir 的镜像（.claude/skills/<slug> → .agents/skills/<slug>）：
+ * symlink 策略建软链（relative 时写相对链接，项目目录随仓库移动/克隆后仍有效），copy 策略复制实文件。
+ * 历史版本直接落地在 .claude 的受管真实目录会被替换（迁移）；非 eat 管理的占位仅 --force 才覆盖。
  */
 export function ensureLink(
   linkPath: string,
   dir: string,
   force: boolean,
   relative: boolean,
-): 'ok' | 'linked' | 'conflict' {
+  strategy: LinkStrategy = defaultLinkStrategy(),
+): 'ok' | 'linked' | 'copied' | 'conflict' {
   let st: fs.Stats | undefined;
   try {
     st = fs.lstatSync(linkPath);
   } catch {
     st = undefined;
   }
+
+  if (strategy === 'copy') {
+    if (st?.isSymbolicLink()) {
+      fs.rmSync(linkPath, { force: true }); // 换平台/换策略后残留的软链
+    } else if (st) {
+      const existing = readMeta(linkPath);
+      if (!existing && !force) return 'conflict';
+      // 受管副本与源同版本、同一次落地（syncedAt 由 writeSkill 刷新）时无需重复复制
+      const source = readMeta(dir);
+      if (
+        !force &&
+        existing &&
+        source &&
+        existing.version === source.version &&
+        existing.syncedAt === source.syncedAt
+      ) {
+        return 'ok';
+      }
+      fs.rmSync(linkPath, { recursive: true, force: true });
+    }
+    copyDir(dir, linkPath);
+    return 'copied';
+  }
+
   if (st?.isSymbolicLink()) {
     if (path.resolve(path.dirname(linkPath), fs.readlinkSync(linkPath)) === dir) return 'ok';
     fs.rmSync(linkPath, { force: true });
@@ -128,10 +175,12 @@ export function resolveSyncRoots(opts: SyncOpts, cwd = process.cwd()): SyncRoots
 }
 
 export async function sync(opts: SyncOpts): Promise<void> {
-  // 实际文件落 .agents/skills（跨 Agent 工具共用），.claude/skills 里只放软链接；
+  // 实际文件落 .agents/skills（跨 Agent 工具共用），.claude/skills 里放软链（Windows 上放副本）；
   // 默认落用户目录（--global），--project 落当前项目（类 npx skills 的 global/project 语义），
   // 指定 --dir 时直接落该目录，不建链接（保持可预期）。
   const { target, linkRoot, relativeLinks } = resolveSyncRoots(opts);
+  const strategy = defaultLinkStrategy();
+  const linkWord = strategy === 'copy' ? '复制' : '软链';
   const api = Api.fromSaved();
   fs.mkdirSync(target, { recursive: true });
   if (linkRoot) fs.mkdirSync(linkRoot, { recursive: true });
@@ -162,8 +211,13 @@ export async function sync(opts: SyncOpts): Promise<void> {
     if (linkRoot) {
       try {
         if (
-          ensureLink(path.join(linkRoot, skill.slug), dir, opts.force ?? false, relativeLinks) ===
-          'conflict'
+          ensureLink(
+            path.join(linkRoot, skill.slug),
+            dir,
+            opts.force ?? false,
+            relativeLinks,
+            strategy,
+          ) === 'conflict'
         ) {
           linkConflicts.push(skill.slug);
         }
@@ -173,7 +227,7 @@ export async function sync(opts: SyncOpts): Promise<void> {
     }
   }
 
-  // 清理：受管但已不在同步范围（退订/删除/不可见）的 skill，连同 .claude 里的软链接/历史落地
+  // 清理：受管但已不在同步范围（退订/删除/不可见）的 skill，连同 .claude 里的软链/副本/历史落地
   const bundleSlugs = new Set(bundle.map((s) => s.slug));
   const removed: string[] = [];
   for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
@@ -193,14 +247,14 @@ export async function sync(opts: SyncOpts): Promise<void> {
         const to = path.resolve(linkRoot, fs.readlinkSync(p));
         if (to.startsWith(target + path.sep) && !fs.existsSync(to)) fs.rmSync(p, { force: true });
       } else if (entry.isDirectory()) {
-        // 历史版本直接落地在 .claude 的受管目录：不在同步范围则一并清理
+        // Windows 副本、以及历史版本直接落地在 .claude 的受管目录：不在同步范围则一并清理
         const meta = readMeta(p);
         if (meta && !bundleSlugs.has(meta.slug)) fs.rmSync(p, { recursive: true, force: true });
       }
     }
   }
 
-  console.log(`Skill 同步完成 → ${target}${linkRoot ? `（已软链到 ${linkRoot}）` : ''}`);
+  console.log(`Skill 同步完成 → ${target}${linkRoot ? `（已${linkWord}到 ${linkRoot}）` : ''}`);
   if (added.length) console.log(`  新增: ${added.join(', ')}`);
   if (updated.length) console.log(`  更新: ${updated.join(', ')}`);
   if (removed.length) console.log(`  移除(退订/已删除): ${removed.join(', ')}`);
@@ -210,10 +264,10 @@ export async function sync(opts: SyncOpts): Promise<void> {
     console.log('  如确认覆盖这些目录，重新运行: eat sync --force');
   }
   if (linkConflicts.length) {
-    console.log(`  未建软链(.claude 下同名目录非 eat 管理): ${linkConflicts.join(', ')}，--force 可覆盖`);
+    console.log(`  未${linkWord}(.claude 下同名目录非 eat 管理): ${linkConflicts.join(', ')}，--force 可覆盖`);
   }
   if (linkFailed) {
-    console.log(`  软链接创建失败（${linkFailed}）；skill 已落地 ${target}，请把该目录加入你的 Agent skill 搜索路径`);
+    console.log(`  ${linkWord}到 ${linkRoot} 失败（${linkFailed}）；skill 已落地 ${target}，请把该目录加入你的 Agent skill 搜索路径`);
   }
   if (bundle.length === 0) console.log('  （没有订阅任何 skill；eat skill list 看看团队里有什么）');
 

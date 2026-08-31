@@ -19,6 +19,7 @@ export function loadCredentials(): Credentials | null {
   }
 }
 
+/** mode 在 Windows 上被忽略（%USERPROFILE% 默认 ACL 已限本人可读），类 Unix 上必须 0600 */
 export function saveCredentials(cred: Credentials): void {
   fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   fs.writeFileSync(CRED_FILE, JSON.stringify(cred, null, 2), { mode: 0o600 });
