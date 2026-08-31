@@ -128,7 +128,7 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 
 ### 3.2.3 同步机制（CLI）
 
-- `eat sync`：将当前用户的有效 Skill 集合落地到本地，同时生成/更新 MCP 配置。安装范围三选一（互斥，类 npx skills 的 global/project 语义）：默认/`--global` 落 `~/.agents/skills/` 并逐个软链到 `~/.claude/skills/`（跨 Agent 工具共用一份）；`--project` 落当前项目 `./.agents/skills/` 并以**相对**软链接入 `./.claude/skills/`（仓库整体提交/移动后链接仍有效）；`--dir` 自定义目录，不建软链。历史直接落在 `.claude/skills/` 的受管目录会自动迁移为软链；
+- `eat sync`：将当前用户的有效 Skill 集合落地到本地，同时生成/更新 MCP 配置。安装范围三选一（互斥，类 npx skills 的 global/project 语义）：默认/`--global` 落 `~/.agents/skills/` 并逐个软链到 `~/.claude/skills/`（跨 Agent 工具共用一份）；`--project` 落当前项目 `./.agents/skills/` 并以**相对**软链接入 `./.claude/skills/`（仓库整体提交/移动后链接仍有效）；`--dir` 自定义目录，不建软链。历史直接落在 `.claude/skills/` 的受管目录会自动迁移为软链。**Windows 上把软链换成复制实文件**（§10 决策 24），其余语义（版本判断、冲突保护、清理）完全一致；
 - 采用「平台为准」的单向同步：本地被用户手工改过的沉淀目录会提示冲突，`--force` 覆盖；
 - 每个落地的 skill 目录带 `.eat-meta.json` 记录来源与版本，便于增量更新与清理已退订项；
 - **本地已有 skill 的纳管**：`eat skill push <目录>` 把本地写好的 skill 上传到平台——首次推送创建新 Skill（自己为 Owner），再次推送产生新版本；推送后平台成为该 Skill 的事实源，本地目录转为受管目录。
@@ -138,7 +138,7 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 ### 3.2.4 Skill 的存储与脚本策略
 
 - **存储**：Skill 内容存 PostgreSQL——`skill_version.content` 存 SKILL.md 正文，附属文件存 `files` jsonb（`[{path, content, encoding}]`，文本直存、二进制 base64）。限制：单文件 ≤ 256KB、整包 ≤ 1MB，超限拒收。不引入对象存储 / git 后端（单体 + 单库的部署形态下，Postgres 是唯一持久层，且 skill 体量小、版本化查询需求强）。
-- **脚本**：skill 目录里的辅助脚本（`scripts/*.sh`、`*.py` 等）作为普通附属文件存储分发，**服务端永远不执行**。执行发生在使用者本地（`eat sync` 落地到 `~/.agents/skills/<slug>/`（软链到 `~/.claude/skills/`）并恢复可执行位），以使用者本人的权限运行——信任级别等同于安装团队内部 npm 包。
+- **脚本**：skill 目录里的辅助脚本（`scripts/*.sh`、`*.py` 等）作为普通附属文件存储分发，**服务端永远不执行**。执行发生在使用者本地（`eat sync` 落地到 `~/.agents/skills/<slug>/`（软链/复制到 `~/.claude/skills/`）并恢复可执行位，可执行位在 Windows 上无意义），以使用者本人的权限运行——信任级别等同于安装团队内部 npm 包。
 - **安全防线**：① Owner + 版本历史 + 审计保证出处可追溯；② `eat skill push` 上传时服务端做密钥扫描（复用部署前置检查规则），防止密钥被硬编码进脚本分发；③ 附属文件路径校验，禁止 `../` 与绝对路径，落地只能写入 skill 自身目录；④ `eat sync` 对包含可执行脚本的 skill 在首次安装/变更时明确提示。管理员预审开关留作 P2 可选。
 
 ### 3.2.5 MCP 配置分发
@@ -347,7 +347,7 @@ sequenceDiagram
 
 ## 3.8 CLI 与 MCP 能力总览
 
-CLI 与 MCP Server 同一个产物分发（平台自托管下载：`curl -fsSL <平台>/install.sh | sh`，见 §7.5），MCP Server 由 `eat mcp` 启动。
+CLI 与 MCP Server 同一个产物分发（平台自托管下载：类 Unix `curl -fsSL <平台>/install.sh | sh`，Windows `irm <平台>/install.ps1 | iex`，见 §7.5），MCP Server 由 `eat mcp` 启动（Windows 的 MCP 客户端要写成 `cmd /c eat mcp`，§10 决策 24）。
 
 ### CLI 命令
 
@@ -584,8 +584,8 @@ easy-agent-team/
 
 - **语言与运行时目标**：TypeScript，产物兼容 Node ≥ 18；不使用 Bun/Deno 独有 API。团队成员使用 Claude Code 时本机已有 Node，零额外门槛；
 - **打包**：tsup（底层 esbuild）打包为单文件 JS + shebang，依赖全部内联；
-- **分发（§10 决策 9）**：**不发 npm registry，平台自托管**——平台镜像内置 CLI 单文件产物，提供四个免鉴权端点：`GET /install.sh`（安装脚本：校验 Node ≥ 18，下载产物到 `~/.eat/bin` 并生成 `eat` 启动器，随后按 §10 决策 15 三层叠加配置 PATH）、`GET /install/eat.js`（单文件产物本体）、`GET /install/AGENT.md`（给 AI Agent 的安装指令，**只含 CLI 流程，不提及 MCP**，§10 决策 20）、`GET /install/MCP.md`（MCP 配置指引独立板块，仅无 shell 环境的 AI 客户端需要）。成员一条 `curl -fsSL <平台>/install.sh | sh` 完成安装，版本天然与平台一致，升级 = 重装；
-- **安装页（§10 决策 10）**：控制台 `/install` 页面向所有成员提供「给 Agent 的一键复制指令」（主推路径，只装 CLI）与手动分步说明；「MCP 配置」为页面上的独立板块（决策 20），仅面向无 shell 环境的 AI 客户端；
+- **分发（§10 决策 9、24）**：**不发 npm registry，平台自托管**——平台镜像内置 CLI 单文件产物，提供五个免鉴权端点：`GET /install.sh`（POSIX 安装脚本：校验 Node ≥ 18，下载产物到 `~/.eat/bin` 并生成 `eat` 启动器，随后按 §10 决策 15 三层叠加配置 PATH）、`GET /install.ps1`（Windows PowerShell 安装脚本，与 sh 版一一对应，§10 决策 24）、`GET /install/eat.js`（单文件产物本体）、`GET /install/AGENT.md`（给 AI Agent 的安装指令，**只含 CLI 流程，不提及 MCP**，§10 决策 20；含两套平台命令并要求 Agent 先判断系统）、`GET /install/MCP.md`（MCP 配置指引独立板块，仅无 shell 环境的 AI 客户端需要）。成员一条命令完成安装（类 Unix `curl -fsSL <平台>/install.sh | sh`，Windows `powershell -ExecutionPolicy ByPass -c "irm <平台>/install.ps1 | iex"`），版本天然与平台一致，升级 = 重装；
+- **安装页（§10 决策 10）**：控制台 `/install` 页面向所有成员提供「给 Agent 的一键复制指令」（主推路径，只装 CLI）与手动分步说明（按平台分 macOS/Linux 与 Windows 两个页签，按 UA 嗅探默认选中，§10 决策 24）；「MCP 配置」为页面上的独立板块（决策 20），仅面向无 shell 环境的 AI 客户端；
 - **开发期**：可以用 Bun 跑测试与本地开发提速，但 CI 产物始终按 Node 目标构建，避免运行时行为差异；
 - **不选型**：bun 单二进制（目标用户全部有 Node，多平台产物让镜像膨胀数百 MB，收益为零）；Go/Rust 重写会造成与平台的技术栈分裂（CLI 与后端共享 API 类型定义的收益丢失）；Deno 生态与 npm 包（MCP SDK）仍有摩擦。
 
@@ -664,3 +664,4 @@ easy-agent-team/
 | 21 | 控制台 UI 迁移 shadcn + Tailwind | 控制台从 Ant Design 全量重构为 **Tailwind CSS v4 + shadcn 风格组件**（Radix 原语 + cva 源码内置 `apps/web/src/components/ui/`，不走 shadcn CLI；表单栈 react-hook-form，消息 sonner，图标 lucide，搜索选择 cmdk；移除 antd/dayjs，日期改原生 `datetime-local`）。布局重设计：桌面**左侧分组侧边栏**（能力分发/协作/资源/接入/管理）+ 顶栏用户菜单，移动端汉堡 + 抽屉导航；**手机端自适应**——表格次要列按断点隐藏并折叠进主列、横向滚动兜底、弹窗与表单全宽适配。全部 16 页面经 Playwright 桌面/移动双视口截图与交互冒烟（登录、校验、弹窗建删、抽屉导航）验证（§7.2） |
 | 22 | 多板块页面改 tabs 布局 | 一个页面上下平铺多个功能板块的布局不合理，改为**页内 tabs**（新增 `components/ui/tabs.tsx`，Radix Tabs）：求助页「找我的求助 / 我发起的求助」、数据库页「我的数据库（默认）/ 数据库实例 / 全部分配（仅管理员）」、权限申请页「待我审批 / 我发起的申请」。tab 触发器带**待处理数角标**（待我回复的求助 / 有新回复 / 待批准 / 待审批）；当前 tab 同步到 URL `?tab=`（`useTabParam`，默认 tab 不写 URL、replace 不污染历史），刷新与深链可用。低频配置不再平铺、收进页头按钮弹窗（按钮带状态圆点）：求助页「我的可求助登记」（接单状态圆点）、用户页「注册设置」（开放注册圆点）。设置页（两块配置表单纵排）保持原布局——settings 型页面平铺表单是常规形态（§7.2） |
 | 23 | 非敏感环境变量（明文存储） | 变量新增 **`secret` 标记（默认敏感）**，**只影响存储与展示、不改变授权模型**——读值（含 CLI/MCP 拉取）无论敏感与否都需授权（Owner/管理员/被授权者）。敏感值加密存储（`value_encrypted`）、控制台打码、每次读取落 `secret.read` 审计；**非敏感值明文存储**（`value_plain` 列）、**有读取权限者在平台直接明文可见**——清单（`GET variables` / catalog / MCP `list_env_variables`）对有权限者直接附带明文 `value`，控制台表格明文展示并可复制；无权限者与敏感变量一致（可见 key+备注、值需申请）。非敏感值读取不落审计、**不进密钥指纹清单**（值本身不是密钥）。数据库分配生成的凭证环境同步遵循：**仅 `DB_PASSWORD` 敏感**，`DB_HOST/DB_PORT/DB_NAME/DB_USER` 为非敏感明文存储，整组默认仍仅授权申请人（§3.3、§3.7）。同批补齐控制台缺失的管理入口：环境详情页**编辑（名称/备注）/ 删除环境**，部署项目弹窗**编辑配置 / 删除项目**（接口原已具备）；数据库分配**删除后（status=deleted）不再出现在任何列表**，记录仅留库内供审计 |
+| 24 | Windows 兼容 | **安装入口按平台成对提供、CLI 内部按平台切换落地方式**（业界通行做法）：① 新增 `GET /install.ps1`（PowerShell 5.1+），与 `install.sh` 一一对应——下载 `eat.js` 后生成 **shim 三件套** `eat.cmd`（cmd 与 `shell:true` 子进程）/ `eat.ps1`（PowerShell，显式 `exit $LASTEXITCODE` 透传退出码）/ `eat`（Git Bash），对齐 npm cmd-shim 的做法（Windows 建软链需管理员或开发者模式，不可依赖）；PATH 写**用户级环境变量**（`[Environment]::SetEnvironmentVariable(...,'User')`），**不用 `setx`**（超 1024 字符会截断）。② 两个脚本都把逻辑包进函数、末行才调用（`main "$@"` / `Install-EatCli`），管道下载被截断时不会执行半截脚本。③ `eat sync` 在 Windows 上把 `.claude/skills` 的**软链换成复制实文件**（junction 只支持绝对目标，`--project` 的相对链接用不了；skill 是 KB 级文本且 sync 是唯一写入方），受管副本按 `version + syncedAt` 判断是否重写，遗留软链自动迁移为副本。④ AGENT.md 给出两套命令并要求 Agent 先判断平台；安装页按 UA 嗅探分页签；MCP 指引补 Windows 形式 `cmd /c eat mcp` 与 `node <绝对路径>\eat.js mcp` 兜底（Node 出于安全不允许不经 shell 直接拉起 `.cmd`）。⑤ 凭证文件 0600 在 Windows 上被忽略，依赖 `%USERPROFILE%` 默认 ACL，不额外调 icacls（§7.5、§3.2.2） |

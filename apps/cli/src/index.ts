@@ -78,10 +78,10 @@ ask.command('delete <id>').description('删除求助（仅求助者/管理员；
 
 program
   .command('sync')
-  .description('同步 Skill 到本地（默认全局：落地 ~/.agents/skills 并软链到 ~/.claude/skills）')
-  .option('-g, --global', '安装到全局目录 ~/.agents/skills + 软链 ~/.claude/skills（默认）')
-  .option('-p, --project', '安装到当前项目 ./.agents/skills + 软链 ./.claude/skills')
-  .option('--dir <dir>', '自定义落地目录（指定后不建软链）')
+  .description('同步 Skill 到本地（默认全局：落地 ~/.agents/skills 并同步到 ~/.claude/skills；类 Unix 用软链，Windows 用复制）')
+  .option('-g, --global', '安装到全局目录 ~/.agents/skills + 同步 ~/.claude/skills（默认）')
+  .option('-p, --project', '安装到当前项目 ./.agents/skills + 同步 ./.claude/skills')
+  .option('--dir <dir>', '自定义落地目录（指定后不同步到 .claude/skills）')
   .option('--force', '覆盖非 eat 管理的同名目录 / 强制重写')
   .action(sync);
 

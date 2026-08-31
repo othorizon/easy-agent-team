@@ -27,9 +27,12 @@ export class AppExceptionFilter implements ExceptionFilter {
         : HttpStatus.INTERNAL_SERVER_ERROR;
 
     // SPA 回退：控制台前端的路由都交给 index.html。
-    // /install.sh 与 /install/* 是 curl 下载端点，必须回真实 404（HTML 会被存成 eat.js）；
+    // /install.sh、/install.ps1 与 /install/* 是 curl / irm 下载端点，必须回真实 404（HTML 会被存成 eat.js）；
     // 控制台安装页路由是恰好 /install，不带后缀/子路径，仍走回退。
-    const isDownloadPath = request.url.startsWith('/install.sh') || request.url.startsWith('/install/');
+    const isDownloadPath =
+      request.url.startsWith('/install.sh') ||
+      request.url.startsWith('/install.ps1') ||
+      request.url.startsWith('/install/');
     if (status === 404 && request.method === 'GET' && !request.url.startsWith('/api') && !isDownloadPath) {
       const html = this.loadIndexHtml();
       if (html) {
