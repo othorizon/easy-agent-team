@@ -21,6 +21,10 @@ node apps/server/dist/main.js    # 启动平台（http://localhost:3000，含控
 node apps/cli/dist/index.js      # eat CLI（login/env list/env pull/mcp 等）
 ```
 
+- **版本号约定（手改常量，最容易漏，改代码时务必对照）**：
+  - 改了 CLI（`apps/cli/**`，或 CLI 依赖的 shared 代码）→ 递增 `packages/shared/src/version.ts` 的 `CLI_VERSION`，并同步 `apps/cli/package.json` 的 `version`（CLI 单测断言两者一致，但**不检查你该升没升**）。漏升的后果：已安装的客户端收不到「有新版 CLI」提示，会一直跑旧产物且无任何报错（决策 26）。
+  - 改了内置平台指南的内容（`packages/shared/src/platform-guide.ts` 的 `CONTENT`）→ 递增同文件的 `PLATFORM_GUIDE_VERSION`。漏升的后果：`eat sync` 判定本地已是最新，用户永远拿不到新内容（决策 11）。
+  - 团队 Skill 的版本**不用管**：`eat skill push` 时服务端自动 `currentVersion + 1`；用户侧的「Skill 有更新」指纹也由服务端实时算出（决策 26）。
 - schema 改动流程：改 `apps/server/src/db/schema.ts` → `pnpm --filter @eat/server db:generate` 生成迁移 SQL（提交进库）→ `pnpm db:migrate`。
 - server 测试用 vitest + unplugin-swc（es6 模块，tsup/esbuild 不产 decorator metadata 所以必须 swc）；CLI 是 ESM + tsup 单文件（banner 里有 createRequire 垫片，勿删）。
 
