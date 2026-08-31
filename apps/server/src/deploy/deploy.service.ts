@@ -13,6 +13,7 @@ import type {
   ConnectionTestResult,
   CreateProjectRequest,
   DeploymentInfo,
+  DokployApplication,
   DokploySettingsInfo,
   PrecheckReport,
   ProjectInfo,
@@ -100,6 +101,25 @@ export class DeployService {
       throw new ServiceUnavailableException({ error: 'DOKPLOY_UNAVAILABLE', message: 'Dokploy 未配置或已停用（系统设置 → Dokploy）' });
     }
     return new DokployClient({ apiUrl: row.apiUrl, apiToken: decryptSecret(row.apiTokenEncrypted) });
+  }
+
+  /**
+   * Dokploy 应用清单（决策 27）：控制台建项目时「从 Dokploy 选择」用，免去手抄 application id。
+   * 与创建项目同权限（任何登录成员）——成员本就能手填任意 application id 建项目并部署，
+   * 这里只是把已经开放的能力变得可发现，不放大权限。清单只含应用名与 id，不含任何凭证。
+   */
+  async listDokployApplications(): Promise<DokployApplication[]> {
+    const client = await this.client();
+    try {
+      return await client.listApplications();
+    } catch (err) {
+      const e = err as Error & { cause?: { message?: string } };
+      const detail = e.cause?.message ? `${e.message}（${e.cause.message}）` : e.message;
+      throw new ServiceUnavailableException({
+        error: 'DOKPLOY_UNAVAILABLE',
+        message: `拉取 Dokploy 应用清单失败: ${detail}`,
+      });
+    }
   }
 
   // ---------- 项目 ----------

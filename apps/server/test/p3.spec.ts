@@ -23,6 +23,27 @@ let memberId: string;
 // mock Dokploy
 const deployCalls: string[] = [];
 let mockAppStatus = 'running';
+/**
+ * project.all 的真实形状：项目下挂 applications，同时还有 postgres / compose 等其他服务。
+ * 清单接口只应取 applications，且要能扛住缺字段与非法条目。
+ */
+let mockProjectAll: unknown = [
+  {
+    projectId: 'proj-1',
+    name: '生产环境',
+    applications: [
+      { applicationId: 'app-crm-api', name: 'CRM 后端', appName: 'crm-api-7f3a', description: '对外 API' },
+      { applicationId: 'app-crm-web', name: 'CRM 前端', appName: 'crm-web-91bd' },
+    ],
+    postgres: [{ postgresId: 'pg-1', name: '主库' }],
+  },
+  {
+    projectId: 'proj-2',
+    name: '测试环境',
+    applications: [{ applicationId: 'app-crm-api-staging', name: 'CRM 后端', appName: 'crm-api-stg-22c1' }],
+  },
+  { projectId: 'proj-3', name: '空项目', compose: [{ composeId: 'c-1' }] },
+];
 let dokployServer: http.Server;
 let dokployUrl: string;
 
@@ -77,7 +98,7 @@ beforeAll(async () => {
         res.writeHead(401, { 'content-type': 'application/json' }).end('{"message":"invalid token"}');
         return;
       }
-      res.writeHead(200, { 'content-type': 'application/json' }).end('[]');
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(mockProjectAll));
       return;
     }
     if (req.method === 'GET' && req.url?.startsWith('/api/application.one')) {
@@ -153,6 +174,72 @@ describe('Dokploy 接入配置', () => {
     expect(badUrl.status).toBe(200);
     expect(badUrl.body.ok).toBe(false);
     expect(badUrl.body.message).toContain('404');
+  });
+});
+
+describe('Dokploy 应用清单（决策 27：建项目时快速填 application id）', () => {
+  const defaultMock = mockProjectAll;
+
+  it('展平 project.all：只取 applications，带回所属项目名，缺字段有兜底', async () => {
+    const res = await api('GET', '/api/dokploy/applications', { token: ownerToken });
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(3);
+    expect(res.body[0]).toEqual({
+      applicationId: 'app-crm-api',
+      name: 'CRM 后端',
+      appName: 'crm-api-7f3a',
+      projectName: '生产环境',
+      description: '对外 API',
+    });
+    // 缺 description 的条目兜底为空串，不是 undefined
+    expect(res.body[1]).toEqual({
+      applicationId: 'app-crm-web',
+      name: 'CRM 前端',
+      appName: 'crm-web-91bd',
+      projectName: '生产环境',
+      description: '',
+    });
+    // 同名应用靠 appName + 所属项目区分（前端搜索因此要一并匹配 appName）
+    expect(res.body[2]).toMatchObject({ applicationId: 'app-crm-api-staging', name: 'CRM 后端', projectName: '测试环境' });
+    // postgres / compose 等其他服务不出现在清单里
+    expect(JSON.stringify(res.body)).not.toContain('pg-1');
+    expect(JSON.stringify(res.body)).not.toContain('c-1');
+  });
+
+  it('与创建项目同权限：任何登录成员可用，未登录不可用', async () => {
+    expect((await api('GET', '/api/dokploy/applications', { token: outsiderToken })).status).toBe(200);
+    expect((await api('GET', '/api/dokploy/applications')).status).toBe(401);
+  });
+
+  it('防御式解析：跳过缺 applicationId 的条目，响应不是数组时回空清单', async () => {
+    mockProjectAll = [
+      { name: 'P', applications: [{ name: '没有 id 的条目' }, { applicationId: '', name: '空 id' }, { applicationId: 'ok-1' }] },
+      { name: '坏项目', applications: '不是数组' },
+    ];
+    const res = await api('GET', '/api/dokploy/applications', { token: ownerToken });
+    expect(res.status).toBe(200);
+    // 只剩合法的那条；name 缺失时兜底用 id
+    expect(res.body).toEqual([{ applicationId: 'ok-1', name: 'ok-1', appName: '', projectName: 'P', description: '' }]);
+
+    mockProjectAll = { message: 'unexpected' };
+    expect((await api('GET', '/api/dokploy/applications', { token: ownerToken })).body).toEqual([]);
+    mockProjectAll = defaultMock;
+  });
+
+  it('Dokploy 停用时回 503 DOKPLOY_UNAVAILABLE，前端据此提示仍可手填', async () => {
+    await api('PUT', '/api/admin/dokploy-settings', {
+      token: adminToken,
+      payload: { apiUrl: dokployUrl, apiToken: '', enabled: false },
+    });
+    const res = await api('GET', '/api/dokploy/applications', { token: ownerToken });
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe('DOKPLOY_UNAVAILABLE');
+
+    // 复原，后续用例依赖 Dokploy 可用
+    await api('PUT', '/api/admin/dokploy-settings', {
+      token: adminToken,
+      payload: { apiUrl: dokployUrl, apiToken: '', enabled: true },
+    });
   });
 });
 
