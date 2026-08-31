@@ -226,6 +226,42 @@ describe('部署门禁与状态', () => {
     expect(list.body[0].report.passed).toBe(true);
   });
 
+  it('短 ID 查询：前 8 位可查，过短拒绝，无匹配返回 404 而非 500', async () => {
+    const short = await api('GET', `/api/deployments/${deployId.slice(0, 8)}`, { token: memberToken });
+    expect(short.status).toBe(200);
+    expect(short.body.id).toBe(deployId);
+
+    // 少于 8 位：拒绝，避免过短前缀命中一大片
+    const tooShort = await api('GET', `/api/deployments/${deployId.slice(0, 6)}`, { token: memberToken });
+    expect(tooShort.status).toBe(400);
+    expect(tooShort.body.error).toBe('VALIDATION_FAILED');
+
+    // 非 UUID 字符与无匹配前缀：此前会让 PG 的 uuid 语法错误冒泡成 500
+    expect((await api('GET', '/api/deployments/zzzzzzzz', { token: memberToken })).status).toBe(404);
+    expect((await api('GET', '/api/deployments/0123456789ab', { token: memberToken })).status).toBe(404);
+  });
+
+  it('短 ID 命中多条：409 提示改用完整 ID', async () => {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    // UUID 随机，构造不出天然碰撞，这里插一条与 deployId 同前缀的记录
+    const twin = `${deployId.slice(0, 8)}-dead-4bee-8000-000000000001`;
+    const src = (await pool.query('select project_id, triggered_by from deployment where id = $1', [deployId])).rows[0];
+    await pool.query('insert into deployment (id, project_id, triggered_by, status) values ($1, $2, $3, $4)', [
+      twin,
+      src.project_id,
+      src.triggered_by,
+      'success',
+    ]);
+
+    const r = await api('GET', `/api/deployments/${deployId.slice(0, 8)}`, { token: memberToken });
+    expect(r.status).toBe(409);
+    expect(r.body.error).toBe('AMBIGUOUS_ID');
+    expect(r.body.message).toContain('完整 ID');
+
+    await pool.query('delete from deployment where id = $1', [twin]);
+    await pool.end();
+  });
+
   it('Dokploy 构建失败 → failed 并附提示', async () => {
     const r = await api('POST', '/api/projects/crm-tool/deploy', { token: ownerToken, payload: { report: passingReport() } });
     mockAppStatus = 'error';

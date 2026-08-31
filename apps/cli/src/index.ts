@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { ApiError } from './client.js';
+import { ApiError, formatErrorDetails } from './client.js';
 import { login, logout, whoami } from './commands/auth.js';
 import { envList, envPull, envRequest, envRequests } from './commands/env.js';
 import { askCreate, askDelete, askList, askReply, askResolve, askShow, askTargets } from './commands/ask.js';
@@ -70,11 +70,11 @@ ask.command('list').description('我发起的与找我的求助').action(askList
 ask.command('show <id>').description('查看求助详情与对话（支持 ID 前缀）').action(askShow);
 ask
   .command('reply <id>')
-  .description('回复 / 追问')
+  .description('回复 / 追问（支持 ID 前缀）')
   .requiredOption('--message <message>', '内容')
   .action(askReply);
-ask.command('resolve <id>').description('标记已解决').action(askResolve);
-ask.command('delete <id>').description('删除求助（仅求助者/管理员；已沉淀为经验的不可删）').action(askDelete);
+ask.command('resolve <id>').description('标记已解决（支持 ID 前缀）').action(askResolve);
+ask.command('delete <id>').description('删除求助（支持 ID 前缀；仅求助者/管理员，已沉淀为经验的不可删）').action(askDelete);
 
 program
   .command('sync')
@@ -106,7 +106,7 @@ program
   .option('--dir <dir>', '代码目录（默认当前目录）')
   .option('--check <cmd>', '可选的本地预跑命令（如 "pnpm build"），非零退出则阻止部署')
   .action(deployRun);
-program.command('deploy-status <id>').description('查询部署状态').action(deployStatus);
+program.command('deploy-status <id>').description('查询部署状态（支持 ID 前缀）').action(deployStatus);
 program.command('deploy-list <project>').description('项目的部署历史').action(deployList);
 
 program
@@ -117,6 +117,8 @@ program
 program.parseAsync().catch((err: unknown) => {
   if (err instanceof ApiError) {
     console.error(`错误(${err.code}): ${err.message}`);
+    const details = formatErrorDetails(err.details);
+    if (details) console.error(details);
   } else {
     console.error(`错误: ${(err as Error).message}`);
   }

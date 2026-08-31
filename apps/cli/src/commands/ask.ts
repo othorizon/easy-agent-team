@@ -64,20 +64,9 @@ export async function askList(): Promise<void> {
   }
 }
 
-async function resolveId(api: Api, shortId: string): Promise<string> {
-  if (shortId.length >= 32) return shortId;
-  const all = [
-    ...(await api.request<HelpRequestInfo[]>('GET', '/api/help-requests/mine')),
-    ...(await api.request<HelpRequestInfo[]>('GET', '/api/help-requests/inbox')),
-  ];
-  const hit = all.find((r) => r.id.startsWith(shortId));
-  if (!hit) throw new Error(`找不到 ID 前缀为 ${shortId} 的求助`);
-  return hit.id;
-}
-
 export async function askShow(id: string): Promise<void> {
   const api = Api.fromSaved();
-  const r = await api.request<HelpRequestDetail>('GET', `/api/help-requests/${await resolveId(api, id)}`);
+  const r = await api.request<HelpRequestDetail>('GET', `/api/help-requests/${id}`);
   console.log(`[${STATUS_LABEL[r.status]}] ${r.title}`);
   console.log(`${r.requesterName} → ${r.helperName}${r.skillSlug ? `（skill: ${r.skillSlug}）` : ''}`);
   console.log(`\n问题：${r.description}`);
@@ -91,18 +80,18 @@ export async function askShow(id: string): Promise<void> {
 
 export async function askReply(id: string, opts: { message: string }): Promise<void> {
   const api = Api.fromSaved();
-  await api.request('POST', `/api/help-requests/${await resolveId(api, id)}/reply`, { content: opts.message });
+  await api.request('POST', `/api/help-requests/${id}/reply`, { content: opts.message });
   console.log('已回复');
 }
 
 export async function askResolve(id: string): Promise<void> {
   const api = Api.fromSaved();
-  await api.request('POST', `/api/help-requests/${await resolveId(api, id)}/resolve`, {});
+  await api.request('POST', `/api/help-requests/${id}/resolve`, {});
   console.log('已标记解决。被求助者可以在控制台把它沉淀为经验。');
 }
 
 export async function askDelete(id: string): Promise<void> {
   const api = Api.fromSaved();
-  await api.request('DELETE', `/api/help-requests/${await resolveId(api, id)}`);
+  await api.request('DELETE', `/api/help-requests/${id}`);
   console.log('已删除（求助与对话记录不可恢复）。');
 }

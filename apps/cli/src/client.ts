@@ -11,6 +11,27 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * 结构化错误细节的可读呈现：zod 校验用 path 定位字段，其余形状回退到紧凑 JSON。
+ * 服务端的 details 此前被丢弃，导致 VALIDATION_FAILED 只剩一句「请求参数不合法」。
+ */
+export function formatErrorDetails(details: unknown): string | null {
+  if (details === undefined || details === null) return null;
+  const items = Array.isArray(details) ? details : [details];
+  if (items.length === 0) return null;
+  return items
+    .map((item) => {
+      if (item && typeof item === 'object') {
+        const o = item as { path?: unknown; message?: unknown };
+        if (Array.isArray(o.path) && typeof o.message === 'string') {
+          return `  ${o.path.join('.') || '(根)'}: ${o.message}`;
+        }
+      }
+      return `  ${JSON.stringify(item)}`;
+    })
+    .join('\n');
+}
+
 export class Api {
   constructor(
     public readonly serverUrl: string,

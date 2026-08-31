@@ -6,11 +6,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { and, desc, eq, gt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, or, sql } from 'drizzle-orm';
 import { buildHelpFeishuCard, type HelpFeishuCardInput } from '@eat/shared';
 import type { CreateHelpRequest, HelpRequestDetail, HelpRequestInfo, HelpStatus } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
+import { resolveShortId } from '../common/short-id';
 import { loadConfig } from '../config';
 import { DB, type Db } from '../db/db.module';
 import { experiences, helpMessages, helperProfiles, helpRequests, skills, users } from '../db/schema';
@@ -31,10 +32,32 @@ export class HelpService {
     private readonly audit: AuditService,
   ) {}
 
-  private async getRow(id: string): Promise<HelpRow> {
+  private async getRow(rawId: string, user: AuthUser): Promise<HelpRow> {
+    const id = await this.resolveRequestId(rawId, user);
     const row = (await this.db.select().from(helpRequests).where(eq(helpRequests.id, id)).limit(1))[0];
     if (!row) throw new NotFoundException({ error: 'NOT_FOUND', message: '求助不存在' });
     return row;
+  }
+
+  /**
+   * CLI 列表展示的是 ID 前 8 位，这里把短 ID 还原成完整 ID。
+   * 匹配范围限定在可见范围内（求助双方 + 管理员，与 assertVisible 一致）：
+   * 放开范围会让短 ID 变成探测他人求助是否存在的手段；限定在「能列出来的」则会让
+   * 管理员对第三方求助的短 ID 失效，所以按可见性而非列表来过滤。
+   */
+  private async resolveRequestId(raw: string, user: AuthUser): Promise<string> {
+    return resolveShortId(raw, '求助', async (prefix) => {
+      const visible =
+        user.role === 'admin'
+          ? undefined
+          : or(eq(helpRequests.requesterId, user.id), eq(helpRequests.helperId, user.id));
+      const rows = await this.db
+        .select({ id: helpRequests.id })
+        .from(helpRequests)
+        .where(and(sql`${helpRequests.id}::text like ${prefix + '%'}`, visible))
+        .limit(2);
+      return rows.map((r) => r.id);
+    });
   }
 
   /** 可见性：求助双方 + 管理员（已拍板决策 #1） */
@@ -162,8 +185,9 @@ export class HelpService {
     return Promise.all(rows.map((r) => this.toInfo(r)));
   }
 
-  async detail(user: AuthUser, id: string): Promise<HelpRequestDetail> {
-    const row = await this.getRow(id);
+  async detail(user: AuthUser, rawId: string): Promise<HelpRequestDetail> {
+    const row = await this.getRow(rawId, user);
+    const id = row.id;
     this.assertVisible(row, user);
     const msgs = await this.db
       .select({ id: helpMessages.id, senderId: helpMessages.senderId, senderName: users.name, content: helpMessages.content, createdAt: helpMessages.createdAt })
@@ -177,8 +201,9 @@ export class HelpService {
     };
   }
 
-  async reply(user: AuthUser, id: string, content: string): Promise<HelpRequestDetail> {
-    const row = await this.getRow(id);
+  async reply(user: AuthUser, rawId: string, content: string): Promise<HelpRequestDetail> {
+    const row = await this.getRow(rawId, user);
+    const id = row.id;
     this.assertVisible(row, user);
     if (row.status === 'closed') {
       throw new ConflictException({ error: 'CONFLICT', message: '求助已关闭，无法回复' });
@@ -206,8 +231,9 @@ export class HelpService {
   }
 
   /** 求助者确认解决，或被求助者标记已解决 */
-  async resolve(user: AuthUser, id: string): Promise<HelpRequestInfo> {
-    const row = await this.getRow(id);
+  async resolve(user: AuthUser, rawId: string): Promise<HelpRequestInfo> {
+    const row = await this.getRow(rawId, user);
+    const id = row.id;
     this.assertVisible(row, user);
     if (row.requesterId !== user.id && row.helperId !== user.id) {
       throw new ForbiddenException({ error: 'FORBIDDEN', message: '仅求助双方可标记解决' });
@@ -217,12 +243,13 @@ export class HelpService {
     }
     await this.db.update(helpRequests).set({ status: 'resolved', updatedAt: sql`now()` }).where(eq(helpRequests.id, id));
     await this.audit.record({ actorId: user.id, action: 'help.resolved', targetType: 'help_request', targetId: id });
-    return this.toInfo(await this.getRow(id));
+    return this.toInfo(await this.getRow(id, user));
   }
 
   /** 删除求助：求助者或管理员；已沉淀为经验的不可删（经验库引用该求助） */
-  async remove(user: AuthUser, id: string): Promise<{ ok: true }> {
-    const row = await this.getRow(id);
+  async remove(user: AuthUser, rawId: string): Promise<{ ok: true }> {
+    const row = await this.getRow(rawId, user);
+    const id = row.id;
     this.assertVisible(row, user);
     if (row.requesterId !== user.id && user.role !== 'admin') {
       throw new ForbiddenException({ error: 'FORBIDDEN', message: '仅求助者或管理员可删除' });
@@ -245,8 +272,9 @@ export class HelpService {
   }
 
   /** 求助者撤销（仅 open 状态） */
-  async close(user: AuthUser, id: string): Promise<HelpRequestInfo> {
-    const row = await this.getRow(id);
+  async close(user: AuthUser, rawId: string): Promise<HelpRequestInfo> {
+    const row = await this.getRow(rawId, user);
+    const id = row.id;
     this.assertVisible(row, user);
     if (row.requesterId !== user.id) {
       throw new ForbiddenException({ error: 'FORBIDDEN', message: '仅求助者可撤销' });
@@ -256,6 +284,6 @@ export class HelpService {
     }
     await this.db.update(helpRequests).set({ status: 'closed', updatedAt: sql`now()` }).where(eq(helpRequests.id, id));
     await this.audit.record({ actorId: user.id, action: 'help.closed', targetType: 'help_request', targetId: id });
-    return this.toInfo(await this.getRow(id));
+    return this.toInfo(await this.getRow(id, user));
   }
 }

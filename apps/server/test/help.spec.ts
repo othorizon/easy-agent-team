@@ -191,6 +191,16 @@ describe('求助流程', () => {
     expect((await api('GET', `/api/help-requests/${requestId}`, { token: adminToken })).status).toBe(200);
   });
 
+  it('短 ID：双方与管理员可用，第三人 404（前缀不泄露他人求助）', async () => {
+    const short = requestId.slice(0, 8);
+    // 管理员既非求助者也非被求助者：前缀若只在「自己能列出来的」范围内匹配，这里会失效
+    expect((await api('GET', `/api/help-requests/${short}`, { token: requesterToken })).body.id).toBe(requestId);
+    expect((await api('GET', `/api/help-requests/${short}`, { token: adminToken })).body.id).toBe(requestId);
+    // 第三人对完整 ID 是 404，短 ID 也必须是 404，否则前缀成了探测求助是否存在的手段
+    expect((await api('GET', `/api/help-requests/${short}`, { token: thirdToken })).status).toBe(404);
+    expect((await api('GET', `/api/help-requests/${requestId.slice(0, 6)}`, { token: requesterToken })).status).toBe(400);
+  });
+
   it('多轮对话状态机：回复 answered → 追问 open → 回复 → 确认 resolved', async () => {
     const a1 = await api('POST', `/api/help-requests/${requestId}/reply`, {
       token: helperToken,
@@ -211,6 +221,17 @@ describe('求助流程', () => {
     expect(a2.body.messages).toHaveLength(3);
     const done = await api('POST', `/api/help-requests/${requestId}/resolve`, { token: requesterToken });
     expect(done.body.status).toBe('resolved');
+  });
+
+  it('短 ID 走写路径：回复挂到正确的求助上', async () => {
+    const before = (await api('GET', `/api/help-requests/${requestId}`, { token: requesterToken })).body.messages.length;
+    const r = await api('POST', `/api/help-requests/${requestId.slice(0, 8)}/reply`, {
+      token: helperToken,
+      payload: { content: '补充：退款单要看原单号' },
+    });
+    expect(r.status).toBe(201);
+    expect(r.body.id).toBe(requestId);
+    expect(r.body.messages).toHaveLength(before + 1);
   });
 
   it('skill 作者求助入口：allowHelp 的 skill 可被求助并路由给作者', async () => {

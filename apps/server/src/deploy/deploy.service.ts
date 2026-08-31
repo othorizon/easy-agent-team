@@ -25,6 +25,7 @@ import { FINGERPRINT_MIN_LENGTH } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
 import { decryptSecret, encryptSecret, sha256Hex } from '../common/crypto';
+import { resolveShortId } from '../common/short-id';
 import { DB, type Db } from '../db/db.module';
 import { deployments, dokploySettings, environments, envVariables, projectMembers, projects, users } from '../db/schema';
 import { DokployClient } from './dokploy.client';
@@ -280,9 +281,25 @@ export class DeployService {
     return Promise.all(rows.map((r) => this.toDeploymentInfo(r)));
   }
 
+  /**
+   * CLI 各处展示的都是 ID 前 8 位，这里把短 ID 还原成完整 ID。
+   * 部署记录对所有登录用户可见，故匹配范围即全部记录，与 getDeployment 的可见范围一致。
+   */
+  private async resolveDeploymentId(raw: string): Promise<string> {
+    return resolveShortId(raw, '部署记录', async (prefix) => {
+      const rows = await this.db
+        .select({ id: deployments.id })
+        .from(deployments)
+        .where(sql`${deployments.id}::text like ${prefix + '%'}`)
+        .limit(2);
+      return rows.map((r) => r.id);
+    });
+  }
+
   /** 查询部署：deploying 状态时向 Dokploy 拉取应用状态并刷新（按需轮询，不做后台任务） */
-  async getDeployment(user: AuthUser, id: string): Promise<DeploymentInfo> {
+  async getDeployment(user: AuthUser, rawId: string): Promise<DeploymentInfo> {
     void user;
+    const id = await this.resolveDeploymentId(rawId);
     let row = (await this.db.select().from(deployments).where(eq(deployments.id, id)).limit(1))[0];
     if (!row) throw new NotFoundException({ error: 'NOT_FOUND', message: '部署记录不存在' });
     if (row.status === 'deploying') {
