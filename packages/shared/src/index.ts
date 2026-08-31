@@ -11,3 +11,4 @@ export * from './db.js';
 export * from './deploy.js';
 export * from './install.js';
 export * from './platform-guide.js';
+export * from './version.js';

@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
+import { CLI_VERSION } from '@eat/shared';
 import type { DeploymentInfo, PrecheckReport, ProjectInfo, SecretFingerprint } from '@eat/shared';
 import { Api } from '../client.js';
 import { scanWorkspace } from '../scan.js';
@@ -49,7 +50,7 @@ async function runPrecheck(api: Api, dir: string, checkCmd?: string): Promise<Pr
     scannedFiles,
     findings,
     localCheck,
-    cliVersion: '0.1.0',
+    cliVersion: CLI_VERSION,
     ranAt: new Date().toISOString(),
   };
 }

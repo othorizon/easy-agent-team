@@ -14,7 +14,15 @@ import type {
   SyncSkill,
   UpdateSkillRequest,
 } from '@eat/shared';
-import { PLATFORM_GUIDE_SLUG, platformGuideSyncSkill, SKILL_FILE_MAX_BYTES, SKILL_TOTAL_MAX_BYTES } from '@eat/shared';
+import {
+  PLATFORM_GUIDE_SLUG,
+  PLATFORM_GUIDE_VERSION,
+  platformGuideSyncSkill,
+  SKILL_FILE_MAX_BYTES,
+  SKILL_TOTAL_MAX_BYTES,
+  skillBundleVersion,
+  type SkillBundleItem,
+} from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
 import { DB, type Db } from '../db/db.module';
@@ -325,6 +333,28 @@ export class SkillsService {
   }
 
   /** eat sync 的落地内容：（订阅 ∪ 模板−排除）且仍可见的 skill 当前版本 */
+  /**
+   * 该用户整套 Skill 的指纹（更新检测用，决策 26）：与 syncBundle 的可见性规则完全一致，
+   * 但只查 skills 表的 slug + currentVersion——不 join skill_versions、不读内容，
+   * 因此可以挂在每个 CLI 请求的响应头上。
+   */
+  async bundleVersion(user: AuthUser): Promise<string> {
+    const items: SkillBundleItem[] = [{ slug: PLATFORM_GUIDE_SLUG, version: PLATFORM_GUIDE_VERSION }];
+    const { subs, effective } = await this.effectiveSkillIds(user.id);
+    if (effective.size > 0) {
+      const rows = await this.db
+        .select()
+        .from(skills)
+        .where(inArray(skills.id, [...effective]));
+      for (const s of rows) {
+        if (s.slug === PLATFORM_GUIDE_SLUG || s.currentVersion <= 0) continue;
+        if (!this.canSee(s, user, subs)) continue;
+        items.push({ slug: s.slug, version: s.currentVersion });
+      }
+    }
+    return skillBundleVersion(items);
+  }
+
   async syncBundle(user: AuthUser): Promise<SyncSkill[]> {
     // 内置平台使用指南对所有用户始终下发（§10 决策 11）：不落库、不可退订，随平台版本更新
     const guide = platformGuideSyncSkill();

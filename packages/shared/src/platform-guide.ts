@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 4;
+export const PLATFORM_GUIDE_VERSION = 5;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -51,6 +51,16 @@ MCP 工具 \`trigger_deploy\` / \`get_deploy_status\` / \`get_deploy_logs\`（�
 | \`eat deploy [project]\` | 触发部署（自动前置检查） |
 | \`eat db list\` | 名下数据库账号 |
 | \`eat whoami\` | 当前身份；报错说明凭证失效，让用户重新 \`eat login\` |
+| \`eat self-update\` | 把 CLI 更新到平台当前分发的版本（跨平台同一条命令，不用重跑安装脚本） |
+
+## 看到更新提示时怎么办
+
+eat 命令偶尔会在 **stderr** 附一段 \`[eat] 有可用更新\` 的提示（同一个版本只提示一次）。它**不影响本次命令的结果**，标准输出始终是干净的，可以照常解析：
+
+- \`CLI x → y\`：执行 \`eat self-update\`。
+- \`团队 Skill 有变更\`：执行 \`eat sync\`——说明团队更新了能力或给你加/减了订阅，同步后你能用的 skill 才是最新的。
+
+**不要在任务中途打断手上的活去更新**：先把当前任务做完，或者在两个任务之间顺手执行。也不要因为看到提示就反复重试刚才的命令——它已经成功了。用户明确不想再看到这类提示时，让他们设置环境变量 \`EAT_NO_UPDATE_NOTIFIER=1\`。
 
 ## 安全准则
 

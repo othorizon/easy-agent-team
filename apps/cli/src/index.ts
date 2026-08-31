@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+import { CLI_VERSION } from '@eat/shared';
 import { ApiError, formatErrorDetails } from './client.js';
 import { login, logout, whoami } from './commands/auth.js';
 import { envList, envPull, envRequest, envRequests } from './commands/env.js';
@@ -6,15 +7,17 @@ import { askCreate, askDelete, askList, askReply, askResolve, askShow, askTarget
 import { dbInstances, dbList, dbRequest } from './commands/db.js';
 import { deployList, deployRun, deployStatus, projectsList, scanOnly } from './commands/deploy.js';
 import { skillList, skillPush, skillSubscribe, skillUnsubscribe } from './commands/skill.js';
+import { selfUpdate } from './commands/self-update.js';
 import { sync } from './commands/sync.js';
 import { startMcpServer } from './mcp.js';
+import { flushUpdateNotice } from './update.js';
 
 const program = new Command();
 
 program
   .name('eat')
   .description('easy-agent-team CLI：团队 AI 能力的拉取、同步与求助入口')
-  .version('0.1.0');
+  .version(CLI_VERSION);
 
 program
   .command('login')
@@ -110,9 +113,20 @@ program.command('deploy-status <id>').description('查询部署状态（支持 I
 program.command('deploy-list <project>').description('项目的部署历史').action(deployList);
 
 program
+  .command('self-update')
+  .description('把 eat CLI 更新到平台当前分发的版本（跨平台单命令，无需重跑安装脚本）')
+  .option('--server <url>', '平台地址（默认取已保存的登录地址或 EAT_SERVER）')
+  .option('--force', '即使版本未变也重新下载覆盖')
+  .action(selfUpdate);
+
+program
   .command('mcp')
   .description('启动 MCP server（stdio），把平台能力提供给本地 AI')
   .action(startMcpServer);
+
+if (process.argv[2] !== 'mcp') {
+  process.on('exit', flushUpdateNotice);
+}
 
 program.parseAsync().catch((err: unknown) => {
   if (err instanceof ApiError) {
