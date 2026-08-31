@@ -46,6 +46,8 @@ export function buildAgentInstallGuide(publicUrl: string): string {
 
 4. **验证**：\`eat whoami\` 应输出用户身份；失败则回到第 2 步重试。
 
+之后 CLI 或团队 Skill 有更新时，\`eat\` 命令会在 stderr 附一行提示（不影响命令结果，同一版本只提示一次）：CLI 更新执行 \`eat self-update\`（跨平台同一条命令，不用重跑本安装脚本），Skill 更新执行 \`eat sync\`。
+
 装好后你就可以直接执行 \`eat\` 命令使用平台全部能力（env / skill / ask / db / deploy 等），无需其他配置。
 
 注意：全程不要向用户索要密码，也不要试图绕过设备码授权；所有凭证只存放在 \`~/.eat/credentials.json\`。

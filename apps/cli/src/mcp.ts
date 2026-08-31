@@ -6,9 +6,11 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import * as path from 'node:path';
+import { CLI_VERSION } from '@eat/shared';
 import type { SecretFingerprint } from '@eat/shared';
-import { Api, ApiError } from './client.js';
+import { Api, ApiError, setClientTag } from './client.js';
 import { scanWorkspace } from './scan.js';
+import { takeUpdateNoticeForMcp } from './update.js';
 
 const TOOLS = [
   {
@@ -161,7 +163,12 @@ const TOOLS = [
 ] as const;
 
 function jsonResult(data: unknown) {
-  return { content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }] };
+  const content = [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }];
+  // 更新提示单独成块，不拼进 JSON 文本——调用方常把首块直接当结构化结果解析（决策 26）。
+  // stdio server 的 stderr 一般只进客户端日志，Agent 看不见，所以只能挂在工具返回里。
+  const notice = takeUpdateNoticeForMcp();
+  if (notice) content.push({ type: 'text' as const, text: notice });
+  return { content };
 }
 
 function errorResult(err: unknown) {
@@ -173,9 +180,10 @@ function errorResult(err: unknown) {
 }
 
 export async function startMcpServer(): Promise<void> {
+  setClientTag(`eat-mcp/${CLI_VERSION}`);
   const api = Api.fromSaved();
   const server = new Server(
-    { name: 'easy-agent-team', version: '0.1.0' },
+    { name: 'easy-agent-team', version: CLI_VERSION },
     { capabilities: { tools: {} } },
   );
 
@@ -256,7 +264,7 @@ export async function startMcpServer(): Promise<void> {
             passed: findings.length === 0,
             scannedFiles,
             findings,
-            cliVersion: '0.1.0',
+            cliVersion: CLI_VERSION,
             ranAt: new Date().toISOString(),
           };
           if (!report.passed) {

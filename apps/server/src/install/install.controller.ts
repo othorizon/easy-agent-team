@@ -1,7 +1,7 @@
 import { Controller, Get, Header, Res } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import * as fs from 'node:fs';
-import { buildAgentInstallGuide, buildMcpSetupGuide } from '@eat/shared';
+import { buildAgentInstallGuide, buildMcpSetupGuide, CLI_VERSION } from '@eat/shared';
 import { Public } from '../auth/auth.decorators';
 import { loadConfig } from '../config';
 
@@ -197,6 +197,17 @@ Install-EatCli
       .type('application/javascript; charset=utf-8')
       .header('content-disposition', 'attachment; filename="eat.js"')
       .send(fs.readFileSync(cliDistPath, 'utf8'));
+  }
+
+  /**
+   * 平台当前分发的 CLI 版本（决策 26）。免鉴权：给未登录状态与安装脚本用。
+   * 已登录的 CLI 走响应头搭车，不需要请求这里。
+   */
+  @Public()
+  @Get('install/version.json')
+  version() {
+    const { publicUrl } = loadConfig();
+    return { cli: CLI_VERSION, url: `${publicUrl}/install/eat.js` };
   }
 
   /** 给 AI Agent 看的安装指令（控制台安装页提供一键复制，也可直接 curl 本地址）。只装 CLI，不含 MCP（决策 20） */

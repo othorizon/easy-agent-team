@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { RenderedMcpConfig, SyncSkill } from '@eat/shared';
 import { Api } from '../client.js';
+import { markSkillsSynced } from '../update.js';
 
 interface EatMeta {
   slug: string;
@@ -270,6 +271,9 @@ export async function sync(opts: SyncOpts): Promise<void> {
     console.log(`  ${linkWord}到 ${linkRoot} 失败（${linkFailed}）；skill 已落地 ${target}，请把该目录加入你的 Agent skill 搜索路径`);
   }
   if (bundle.length === 0) console.log('  （没有订阅任何 skill；eat skill list 看看团队里有什么）');
+
+  // 本次落地的指纹记为基线：后续任何命令的响应头与它不一致即说明本地落后（决策 26）
+  markSkillsSynced();
 
   await syncMcpConfigs(api);
 }

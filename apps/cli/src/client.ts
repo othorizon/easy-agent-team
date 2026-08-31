@@ -1,4 +1,14 @@
+import { CLI_VERSION, CLIENT_HEADER } from '@eat/shared';
 import { loadCredentials } from './config.js';
+import { recordServerVersions } from './update.js';
+
+/** 请求里自报身份：服务端据此决定是否附带更新检测响应头（决策 26） */
+let clientTag = `eat-cli/${CLI_VERSION}`;
+
+/** MCP server 走同一个 Api，但身份标记不同，便于服务端侧区分来源 */
+export function setClientTag(tag: string): void {
+  clientTag = tag;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -55,12 +65,15 @@ export class Api {
         headers: {
           ...(body === undefined ? {} : { 'content-type': 'application/json' }),
           ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
+          [CLIENT_HEADER]: clientTag,
         },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch (err) {
       throw new ApiError(0, 'NETWORK_ERROR', `无法连接平台 ${this.serverUrl}：${(err as Error).message}`);
     }
+    // 更新检测搭车：响应头带回平台的 CLI 版本与该用户的 Skill 指纹，成功失败都记录
+    recordServerVersions(this.serverUrl, res.headers);
     const text = await res.text();
     const json = text ? (JSON.parse(text) as Record<string, unknown>) : {};
     if (!res.ok) {
