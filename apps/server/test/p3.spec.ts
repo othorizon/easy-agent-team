@@ -24,23 +24,38 @@ let memberId: string;
 const deployCalls: string[] = [];
 let mockAppStatus = 'running';
 /**
- * project.all 的真实形状：项目下挂 applications，同时还有 postgres / compose 等其他服务。
- * 清单接口只应取 applications，且要能扛住缺字段与非法条目。
+ * project.all 的真实形状：新版 Dokploy 把 applications 挂在 environments[] 下（真机实测），
+ * 老版本直接挂在项目下；两种都要认。响应里还有 postgres / compose 等其他服务，清单只应取 applications，
+ * 且要能扛住缺字段与非法条目。
  */
 let mockProjectAll: unknown = [
   {
     projectId: 'proj-1',
     name: '生产环境',
-    applications: [
-      { applicationId: 'app-crm-api', name: 'CRM 后端', appName: 'crm-api-7f3a', description: '对外 API' },
-      { applicationId: 'app-crm-web', name: 'CRM 前端', appName: 'crm-web-91bd' },
+    environments: [
+      {
+        environmentId: 'env-1',
+        name: 'production',
+        isDefault: true,
+        applications: [
+          { applicationId: 'app-crm-api', name: 'CRM 后端', appName: 'crm-api-7f3a', description: '对外 API' },
+          { applicationId: 'app-crm-web', name: 'CRM 前端', appName: 'crm-web-91bd' },
+        ],
+        postgres: [{ postgresId: 'pg-1', name: '主库' }],
+      },
+      {
+        environmentId: 'env-2',
+        name: 'staging',
+        isDefault: false,
+        applications: [{ applicationId: 'app-crm-api-staging', name: 'CRM 后端', appName: 'crm-api-stg-22c1' }],
+      },
     ],
-    postgres: [{ postgresId: 'pg-1', name: '主库' }],
   },
   {
+    // 老版本形状：applications 直接挂在项目下
     projectId: 'proj-2',
-    name: '测试环境',
-    applications: [{ applicationId: 'app-crm-api-staging', name: 'CRM 后端', appName: 'crm-api-stg-22c1' }],
+    name: '旧版项目',
+    applications: [{ applicationId: 'app-legacy', name: '遗留应用', appName: 'legacy-3f2c' }],
   },
   { projectId: 'proj-3', name: '空项目', compose: [{ composeId: 'c-1' }] },
 ];
@@ -180,10 +195,10 @@ describe('Dokploy 接入配置', () => {
 describe('Dokploy 应用清单（决策 27：建项目时快速填 application id）', () => {
   const defaultMock = mockProjectAll;
 
-  it('展平 project.all：只取 applications，带回所属项目名，缺字段有兜底', async () => {
+  it('展平 project.all：environments 与项目下的 applications 都取，带回所属项目名，缺字段有兜底', async () => {
     const res = await api('GET', '/api/dokploy/applications', { token: ownerToken });
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(3);
+    expect(res.body).toHaveLength(4);
     expect(res.body[0]).toEqual({
       applicationId: 'app-crm-api',
       name: 'CRM 后端',
@@ -199,8 +214,15 @@ describe('Dokploy 应用清单（决策 27：建项目时快速填 application i
       projectName: '生产环境',
       description: '',
     });
-    // 同名应用靠 appName + 所属项目区分（前端搜索因此要一并匹配 appName）
-    expect(res.body[2]).toMatchObject({ applicationId: 'app-crm-api-staging', name: 'CRM 后端', projectName: '测试环境' });
+    // 同名应用靠 appName + 所属项目区分（前端搜索因此要一并匹配 appName）；
+    // 非默认环境的应用在分组名上带出环境名，默认环境只显示项目名
+    expect(res.body[2]).toMatchObject({
+      applicationId: 'app-crm-api-staging',
+      name: 'CRM 后端',
+      projectName: '生产环境 · staging',
+    });
+    // 老版本形状（applications 直接挂项目下）仍然认
+    expect(res.body[3]).toMatchObject({ applicationId: 'app-legacy', projectName: '旧版项目' });
     // postgres / compose 等其他服务不出现在清单里
     expect(JSON.stringify(res.body)).not.toContain('pg-1');
     expect(JSON.stringify(res.body)).not.toContain('c-1');
@@ -214,7 +236,8 @@ describe('Dokploy 应用清单（决策 27：建项目时快速填 application i
   it('防御式解析：跳过缺 applicationId 的条目，响应不是数组时回空清单', async () => {
     mockProjectAll = [
       { name: 'P', applications: [{ name: '没有 id 的条目' }, { applicationId: '', name: '空 id' }, { applicationId: 'ok-1' }] },
-      { name: '坏项目', applications: '不是数组' },
+      { name: '坏项目', applications: '不是数组', environments: '也不是数组' },
+      { name: '坏环境', environments: [{ name: 'production', applications: '不是数组' }, null] },
     ];
     const res = await api('GET', '/api/dokploy/applications', { token: ownerToken });
     expect(res.status).toBe(200);
