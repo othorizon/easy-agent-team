@@ -8,9 +8,20 @@
  */
 import type { DokployApplication } from '@eat/shared';
 
-/** project.all 的响应形状（只取用得上的字段，其余忽略；真实响应还含 db/compose 等其他服务） */
+/**
+ * project.all 的响应形状（只取用得上的字段，其余忽略；真实响应还含 db/compose 等其他服务）。
+ * 注意 Dokploy 引入「环境」后，applications 从项目下挪到了 environments[] 下——
+ * 两种形状都要认（见 listApplications）。
+ */
 interface DokployProjectRow {
   name?: unknown;
+  applications?: unknown;
+  environments?: unknown;
+}
+
+interface DokployEnvironmentRow {
+  name?: unknown;
+  isDefault?: unknown;
   applications?: unknown;
 }
 
@@ -46,6 +57,11 @@ export class DokployClient {
   /**
    * 拉取 Dokploy 上的应用清单（决策 27）：project.all 一次就带回各项目及其 applications，
    * 不必按项目逐个再查。响应里还有 db / compose 等其他服务，这里只取 applications。
+   *
+   * 应用挂在哪一层取决于 Dokploy 版本：老版本直接挂在项目下（`project.applications`），
+   * 引入「环境」之后挂在 `project.environments[].applications`。两种都认，否则新版本上清单恒为空。
+   * 非默认环境的应用在分组名上带出环境名（`项目 · 环境`），免得同名应用分不清是哪套环境。
+   *
    * 防御式解析：形状对不上的条目直接跳过，不让一个异常条目毁掉整张清单。
    */
   async listApplications(): Promise<DokployApplication[]> {
@@ -59,10 +75,9 @@ export class DokployClient {
     const json: unknown = await res.json();
     if (!Array.isArray(json)) return [];
     const apps: DokployApplication[] = [];
-    for (const project of json as DokployProjectRow[]) {
-      const projectName = typeof project?.name === 'string' ? project.name : '';
-      if (!Array.isArray(project?.applications)) continue;
-      for (const raw of project.applications as Array<Record<string, unknown>>) {
+    const collect = (list: unknown, projectName: string): void => {
+      if (!Array.isArray(list)) return;
+      for (const raw of list as Array<Record<string, unknown>>) {
         const applicationId = raw?.applicationId;
         if (typeof applicationId !== 'string' || applicationId === '') continue;
         apps.push({
@@ -72,6 +87,17 @@ export class DokployClient {
           projectName,
           description: typeof raw.description === 'string' ? raw.description : '',
         });
+      }
+    };
+    for (const project of json as DokployProjectRow[]) {
+      const projectName = typeof project?.name === 'string' ? project.name : '';
+      collect(project?.applications, projectName);
+      if (Array.isArray(project?.environments)) {
+        for (const env of project.environments as DokployEnvironmentRow[]) {
+          const envName = typeof env?.name === 'string' ? env.name : '';
+          const label = env?.isDefault === true || envName === '' ? projectName : `${projectName} · ${envName}`;
+          collect(env?.applications, label);
+        }
       }
     }
     return apps;
