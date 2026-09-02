@@ -1,12 +1,14 @@
 {
   "name": "@eat/cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "easy-agent-team CLI（eat）与 MCP server",
   "type": "module",
   "bin": {
     "eat": "./dist/index.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",

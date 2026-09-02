@@ -1,6 +1,14 @@
-import type { CreateProjectRequest, DeploymentInfo, DokployApplication, ProjectInfo, UpdateProjectRequest } from '@eat/shared';
+import type {
+  BuildLogsResult,
+  CreateProjectRequest,
+  DeploymentInfo,
+  DokployApplication,
+  ProjectInfo,
+  RunLogsResult,
+  UpdateProjectRequest,
+} from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Pencil, Plus, Trash2, X } from 'lucide-react';
+import { Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
@@ -27,6 +35,9 @@ const STATUS_BADGE: Record<string, JSX.Element> = {
   failed: <Badge variant="destructive">失败</Badge>,
 };
 
+/** Dokploy 构建记录自己的状态取值 */
+const BUILD_STATUS: Record<string, string> = { running: '构建中', done: '成功', error: '失败', idle: '空闲' };
+
 interface UserRow {
   id: string;
   name: string;
@@ -39,6 +50,7 @@ export function ProjectsPage() {
   const [creating, setCreating] = useState(false);
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
   const [viewingSlug, setViewingSlug] = useState<string | null>(null);
+  const [logsOf, setLogsOf] = useState<{ slug: string; kind: LogKind } | null>(null);
 
   const projects = useQuery({ queryKey: ['projects'], queryFn: () => api<ProjectInfo[]>('GET', '/api/projects') });
   const users = useQuery({ queryKey: ['users'], queryFn: () => api<UserRow[]>('GET', '/api/users') });
@@ -249,7 +261,20 @@ export function ProjectsPage() {
                 </div>
               )}
               <div>
-                <h3 className="mb-2 text-sm font-semibold">部署历史</h3>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold">部署历史</h3>
+                  {/* 日志可能带出构建期注入的密钥，与部署同权限（服务端也这么校验） */}
+                  {viewing.canDeploy && (
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" onClick={() => setLogsOf({ slug: viewing.slug, kind: 'build' })}>
+                        构建日志
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => setLogsOf({ slug: viewing.slug, kind: 'run' })}>
+                        运行日志
+                      </Button>
+                    </div>
+                  )}
+                </div>
                 {deployments.isLoading ? (
                   <TableSkeleton rows={2} />
                 ) : (deployments.data ?? []).length === 0 ? (
@@ -287,7 +312,59 @@ export function ProjectsPage() {
           </DialogContent>
         </Dialog>
       )}
+
+      {logsOf && <LogsDialog slug={logsOf.slug} kind={logsOf.kind} onClose={() => setLogsOf(null)} />}
     </div>
+  );
+}
+
+type LogKind = 'build' | 'run';
+
+/**
+ * 构建日志 / 运行日志（决策 28）。两者形状不同但用法一致：都是「取最近 N 行」的一次性读取，
+ * 不做实时流——Dokploy 那边虽然是流式接口，平台侧统一收敛成一次读完。
+ */
+function LogsDialog({ slug, kind, onClose }: { slug: string; kind: LogKind; onClose: () => void }) {
+  const [tail, setTail] = useState(200);
+  const query = useQuery({
+    queryKey: ['logs', kind, slug, tail],
+    queryFn: () =>
+      api<BuildLogsResult | RunLogsResult>('GET', `/api/projects/${slug}/${kind === 'build' ? 'build-logs' : 'run-logs'}?tail=${tail}`),
+  });
+  const data = query.data;
+  const target =
+    data && 'deployment' in data
+      ? data.deployment && `构建 ${data.deployment.deploymentId}（${BUILD_STATUS[data.deployment.status] ?? data.deployment.status}）`
+      : data && data.container && `容器 ${data.container.containerId}（${data.container.state}）`;
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>
+            {kind === 'build' ? '构建日志' : '运行日志'} · <InlineCode>{slug}</InlineCode>
+          </DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span className="grow">{target || (query.isLoading ? '读取中…' : '暂无')}</span>
+          {[100, 200, 1000].map((n) => (
+            <Button key={n} variant={n === tail ? 'default' : 'outline'} size="sm" onClick={() => setTail(n)}>
+              {n} 行
+            </Button>
+          ))}
+          <Button variant="outline" size="sm" onClick={() => void query.refetch()} disabled={query.isFetching}>
+            <RefreshCw className={query.isFetching ? 'animate-spin' : undefined} />
+          </Button>
+        </div>
+        {query.isError ? (
+          <Empty text={(query.error as Error).message} className="py-8" />
+        ) : (
+          <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs leading-relaxed whitespace-pre-wrap break-all">
+            {query.isLoading ? '读取中…' : (data?.logs.trimEnd() || '(日志为空)')}
+          </pre>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 

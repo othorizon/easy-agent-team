@@ -57,6 +57,13 @@
       "when": 1787970268629,
       "tag": "0007_tired_victor_mancha",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788332917064,
+      "tag": "0008_dazzling_korvac",
+      "breakpoints": true
     }
   ]
 }

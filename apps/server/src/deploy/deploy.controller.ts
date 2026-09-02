@@ -1,11 +1,13 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import {
   createProjectSchema,
+  logsQuerySchema,
   testDokploySettingsSchema,
   triggerDeploySchema,
   updateDokploySettingsSchema,
   updateProjectSchema,
   type CreateProjectRequest,
+  type LogsQuery,
   type TestDokploySettingsRequest,
   type TriggerDeployRequest,
   type UpdateDokploySettingsRequest,
@@ -109,9 +111,36 @@ export class DeployController {
     return this.deploy.listDeployments(user, slug);
   }
 
+  /** 项目最近一次部署：CLI 的 `eat project status <slug>` 用它，不必先记住部署 ID */
+  @Get('projects/:slug/deployments/latest')
+  latestDeployment(@Param('slug') slug: string, @CurrentUser() user: AuthUser) {
+    return this.deploy.latestDeployment(user, slug);
+  }
+
   @Get('deployments/:id')
   getDeployment(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.deploy.getDeployment(user, id);
+  }
+
+  // ---------- 构建日志 / 运行日志（决策 28） ----------
+
+  /** 日志可能含构建期注入的密钥，仅项目成员可读（见 DeployService.buildLogs） */
+  @Get('projects/:slug/build-logs')
+  buildLogs(
+    @Param('slug') slug: string,
+    @Query(new ZodValidationPipe(logsQuerySchema)) query: LogsQuery,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.deploy.buildLogs(user, slug, query);
+  }
+
+  @Get('projects/:slug/run-logs')
+  runLogs(
+    @Param('slug') slug: string,
+    @Query(new ZodValidationPipe(logsQuerySchema)) query: LogsQuery,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.deploy.runLogs(user, slug, query);
   }
 
   // ---------- 密钥指纹清单（CLI 扫描用） ----------

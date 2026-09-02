@@ -10,10 +10,14 @@ import {
 } from '@nestjs/common';
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import type {
+  BuildLogsResult,
   ConnectionTestResult,
   CreateProjectRequest,
   DeploymentInfo,
   DokployApplication,
+  DokployDeployment,
+  LogsQuery,
+  RunLogsResult,
   DokploySettingsInfo,
   PrecheckReport,
   ProjectInfo,
@@ -33,6 +37,17 @@ import { DokployClient } from './dokploy.client';
 
 type ProjectRow = typeof projects.$inferSelect;
 type DeploymentRow = typeof deployments.$inferSelect;
+
+/** 绑不上 Dokploy 构建记录多久后回落到应用状态判定 */
+const BIND_TIMEOUT_MS = 10 * 60_000;
+/** 绑定时给两边时钟差留的余量 */
+const BIND_CLOCK_SKEW_MS = 5_000;
+/** 部署失败时读多少行构建日志、往 error 里留几行、最多留多少字符 */
+const FAILURE_LOG_TAIL = 100;
+const FAILURE_LOG_LINES = 12;
+const FAILURE_LOG_CHARS = 800;
+/** 构建日志接口回带多少条最近构建供切换 */
+const RECENT_BUILDS = 20;
 
 @Injectable()
 export class DeployService {
@@ -110,15 +125,20 @@ export class DeployService {
    */
   async listDokployApplications(): Promise<DokployApplication[]> {
     const client = await this.client();
+    return this.callDokploy(() => client.listApplications(), '拉取 Dokploy 应用清单失败');
+  }
+
+  /**
+   * 调 Dokploy 的统一错误包装：Node fetch 的网络错误只报 "fetch failed"，
+   * 真正的原因（ECONNREFUSED 等）在 cause 里，不带出来排查会很痛苦。
+   */
+  private async callDokploy<T>(fn: () => Promise<T>, note: string): Promise<T> {
     try {
-      return await client.listApplications();
+      return await fn();
     } catch (err) {
       const e = err as Error & { cause?: { message?: string } };
       const detail = e.cause?.message ? `${e.message}（${e.cause.message}）` : e.message;
-      throw new ServiceUnavailableException({
-        error: 'DOKPLOY_UNAVAILABLE',
-        message: `拉取 Dokploy 应用清单失败: ${detail}`,
-      });
+      throw new ServiceUnavailableException({ error: 'DOKPLOY_UNAVAILABLE', message: `${note}: ${detail}` });
     }
   }
 
@@ -254,6 +274,7 @@ export class DeployService {
       triggeredBy: row.triggeredBy,
       triggeredByName: trigger?.name ?? '(已删除)',
       error: row.error,
+      dokployDeploymentId: row.dokployDeploymentId,
       report: (row.report as DeploymentInfo['report']) ?? null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
@@ -316,32 +337,199 @@ export class DeployService {
     });
   }
 
-  /** 查询部署：deploying 状态时向 Dokploy 拉取应用状态并刷新（按需轮询，不做后台任务） */
+  /** 查询某次部署（按需刷新） */
   async getDeployment(user: AuthUser, rawId: string): Promise<DeploymentInfo> {
     void user;
     const id = await this.resolveDeploymentId(rawId);
-    let row = (await this.db.select().from(deployments).where(eq(deployments.id, id)).limit(1))[0];
+    const row = (await this.db.select().from(deployments).where(eq(deployments.id, id)).limit(1))[0];
     if (!row) throw new NotFoundException({ error: 'NOT_FOUND', message: '部署记录不存在' });
-    if (row.status === 'deploying') {
-      const [project] = await this.db.select().from(projects).where(eq(projects.id, row.projectId));
-      if (project) {
-        try {
-          const status = await (await this.client()).applicationStatus(project.dokployApplicationId);
-          if (status === 'done') {
-            await this.db.update(deployments).set({ status: 'success', updatedAt: sql`now()` }).where(eq(deployments.id, id));
-          } else if (status === 'error') {
-            await this.db
-              .update(deployments)
-              .set({ status: 'failed', error: 'Dokploy 构建/部署失败，详见 Dokploy 控制台该应用的部署日志', updatedAt: sql`now()` })
-              .where(eq(deployments.id, id));
-          }
-        } catch (err) {
-          this.logger.warn(`查询 Dokploy 状态失败: ${(err as Error).message}`);
-        }
-        row = (await this.db.select().from(deployments).where(eq(deployments.id, id)))[0];
-      }
+    return this.toDeploymentInfo(await this.refreshIfDeploying(row));
+  }
+
+  /** 项目最近一次部署（按需刷新）：`eat project status <slug>` 用它，省得先去记部署 ID */
+  async latestDeployment(user: AuthUser, slug: string): Promise<DeploymentInfo> {
+    void user;
+    const project = await this.getProject(slug);
+    const row = (
+      await this.db
+        .select()
+        .from(deployments)
+        .where(eq(deployments.projectId, project.id))
+        .orderBy(desc(deployments.createdAt))
+        .limit(1)
+    )[0];
+    if (!row) {
+      throw new NotFoundException({ error: 'NOT_FOUND', message: `项目 ${slug} 还没有部署记录（eat deploy ${slug} 触发一次）` });
     }
-    return this.toDeploymentInfo(row);
+    return this.toDeploymentInfo(await this.refreshIfDeploying(row));
+  }
+
+  /**
+   * deploying 状态时按需向 Dokploy 拉一次真实状态（不做后台轮询任务）。
+   *
+   * 状态以 Dokploy 的**构建记录**为准（决策 28）：application.applicationStatus 是「应用当前状态」，
+   * 同一应用被别人再次部署就会串味；构建记录一次部署一条，失败时还能顺着它读到真实报错。
+   * Dokploy 的部署是排队执行的，触发那一刻记录还没建出来，所以只能懒绑定——首次查到就记住。
+   */
+  private async refreshIfDeploying(row: DeploymentRow): Promise<DeploymentRow> {
+    if (row.status !== 'deploying') return row;
+    const [project] = await this.db.select().from(projects).where(eq(projects.id, row.projectId));
+    if (!project) return row;
+    try {
+      const client = await this.client();
+      const build = await this.bindBuild(client, row, project);
+      if (build?.status === 'done') {
+        await this.settleDeployment(row.id, 'success', null);
+      } else if (build?.status === 'error') {
+        await this.settleDeployment(row.id, 'failed', await this.buildFailureReason(client, build, project.slug));
+      } else if (!build && Date.now() - row.createdAt.getTime() > BIND_TIMEOUT_MS) {
+        // 长时间绑不上（Dokploy 记录被删、或换了不建构建记录的老版本）就回落到应用状态，
+        // 否则这条记录会永远停在 deploying
+        const status = await client.applicationStatus(project.dokployApplicationId);
+        if (status === 'done') {
+          await this.settleDeployment(row.id, 'success', null);
+        } else if (status === 'error') {
+          await this.settleDeployment(
+            row.id,
+            'failed',
+            `Dokploy 报告该应用构建失败，但没找到本次部署对应的构建记录（完整日志: eat project build-logs ${project.slug}）`,
+          );
+        }
+      }
+    } catch (err) {
+      // 查不到就维持原状，下次再查——按需刷新本就允许失败
+      this.logger.warn(`查询 Dokploy 状态失败: ${(err as Error).message}`);
+    }
+    return (await this.db.select().from(deployments).where(eq(deployments.id, row.id)))[0] ?? row;
+  }
+
+  /** 找出并记住本次部署对应的 Dokploy 构建记录 */
+  private async bindBuild(
+    client: DokployClient,
+    row: DeploymentRow,
+    project: ProjectRow,
+  ): Promise<DokployDeployment | undefined> {
+    const builds = await client.listDeployments(project.dokployApplicationId);
+    if (row.dokployDeploymentId) return builds.find((b) => b.deploymentId === row.dokployDeploymentId);
+    // 我们触发之后 Dokploy 建出来的第一条就是本次（留点余量给两边时钟差）
+    const floor = row.createdAt.getTime() - BIND_CLOCK_SKEW_MS;
+    const ours = builds
+      .map((b) => ({ build: b, at: Date.parse(b.createdAt) }))
+      .filter((x) => Number.isFinite(x.at) && x.at >= floor)
+      .sort((a, b) => a.at - b.at)[0]?.build;
+    if (!ours) return undefined;
+    await this.db
+      .update(deployments)
+      .set({ dokployDeploymentId: ours.deploymentId })
+      .where(eq(deployments.id, row.id));
+    return ours;
+  }
+
+  private async settleDeployment(id: string, status: 'success' | 'failed', error: string | null): Promise<void> {
+    await this.db.update(deployments).set({ status, error, updatedAt: sql`now()` }).where(eq(deployments.id, id));
+  }
+
+  /**
+   * 失败原因直接带上构建日志末尾几行（决策 28）：以前只写一句「详见 Dokploy 控制台」，
+   * 等于让人/Agent 自己去翻，排查一次要跳出平台。
+   */
+  private async buildFailureReason(
+    client: DokployClient,
+    build: DokployDeployment,
+    slug: string,
+  ): Promise<string> {
+    const head = `Dokploy 构建失败（完整日志: eat project build-logs ${slug}）`;
+    let logs = '';
+    try {
+      logs = await client.readDeploymentLogs(build.deploymentId, FAILURE_LOG_TAIL);
+    } catch (err) {
+      this.logger.warn(`读取 Dokploy 构建日志失败: ${(err as Error).message}`);
+    }
+    const tail = logs
+      .split('\n')
+      .map((l) => l.trimEnd())
+      .filter((l) => l !== '')
+      .slice(-FAILURE_LOG_LINES)
+      .join('\n');
+    if (!tail) return build.errorMessage ? `${head}: ${build.errorMessage}` : head;
+    const excerpt = tail.length > FAILURE_LOG_CHARS ? `…${tail.slice(-FAILURE_LOG_CHARS)}` : tail;
+    return `${head}，日志末尾:\n${excerpt}`;
+  }
+
+  // ---------- 构建日志 / 运行日志（决策 28） ----------
+
+  /** 日志可能带出构建期注入的密钥，比部署历史更敏感：只给项目成员/Owner/管理员 */
+  private async assertCanDeploy(project: ProjectRow, user: AuthUser, what: string): Promise<void> {
+    if (!(await this.canDeploy(project, user))) {
+      throw new ForbiddenException({ error: 'FORBIDDEN', message: `仅项目成员可${what}（找 Owner 把你加入项目）` });
+    }
+  }
+
+  /** 构建日志：默认看最近一次构建，`deploymentId` 可回看指定那次 */
+  async buildLogs(user: AuthUser, slug: string, query: LogsQuery): Promise<BuildLogsResult> {
+    const project = await this.getProject(slug);
+    await this.assertCanDeploy(project, user, '查看构建日志');
+    const client = await this.client();
+    const builds = await this.callDokploy(
+      () => client.listDeployments(project.dokployApplicationId),
+      '拉取 Dokploy 构建记录失败',
+    );
+    const target = query.deploymentId ? builds.find((b) => b.deploymentId === query.deploymentId) : builds[0];
+    if (query.deploymentId && !target) {
+      throw new NotFoundException({ error: 'NOT_FOUND', message: `Dokploy 上没有构建记录 ${query.deploymentId}` });
+    }
+    const logs = target
+      ? await this.callDokploy(
+          () => client.readDeploymentLogs(target.deploymentId, query.tail),
+          '读取 Dokploy 构建日志失败',
+        )
+      : '';
+    await this.audit.record({
+      actorId: user.id,
+      actorTokenId: user.tokenId,
+      action: 'deploy.build_logs_read',
+      targetType: 'project',
+      targetId: project.id,
+      meta: { deploymentId: target?.deploymentId ?? null, tail: query.tail },
+    });
+    return { projectSlug: project.slug, deployment: target ?? null, logs, recent: builds.slice(0, RECENT_BUILDS) };
+  }
+
+  /** 运行日志：默认看第一个运行中的容器，`containerId` 可指定副本 */
+  async runLogs(user: AuthUser, slug: string, query: LogsQuery): Promise<RunLogsResult> {
+    const project = await this.getProject(slug);
+    await this.assertCanDeploy(project, user, '查看运行日志');
+    const client = await this.client();
+    // 容器名前缀（appName）是 Dokploy 生成的，只有 application.one 里带
+    const appName = await this.callDokploy(
+      () => client.applicationAppName(project.dokployApplicationId),
+      '读取 Dokploy 应用详情失败',
+    );
+    if (!appName) {
+      throw new ServiceUnavailableException({
+        error: 'DOKPLOY_UNAVAILABLE',
+        message: 'Dokploy 上查不到该应用的容器名，确认项目绑定的 application id 是否正确',
+      });
+    }
+    const containers = await this.callDokploy(() => client.listContainers(appName), '拉取 Dokploy 容器清单失败');
+    const target = query.containerId
+      ? containers.find((c) => c.containerId === query.containerId)
+      : (containers.find((c) => c.state === 'running') ?? containers[0]);
+    if (query.containerId && !target) {
+      throw new NotFoundException({ error: 'NOT_FOUND', message: `该应用当前没有容器 ${query.containerId}` });
+    }
+    const logs = target
+      ? await this.callDokploy(() => client.containerLogs(target.containerId, query.tail), '读取 Dokploy 运行日志失败')
+      : '';
+    await this.audit.record({
+      actorId: user.id,
+      actorTokenId: user.tokenId,
+      action: 'deploy.run_logs_read',
+      targetType: 'project',
+      targetId: project.id,
+      meta: { containerId: target?.containerId ?? null, tail: query.tail },
+    });
+    return { projectSlug: project.slug, container: target ?? null, logs, containers };
   }
 
   // ---------- 密钥指纹清单（CLI 扫描用） ----------

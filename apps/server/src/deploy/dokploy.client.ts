@@ -4,9 +4,14 @@
  *   POST {apiUrl}/application.deploy   { applicationId }
  *   GET  {apiUrl}/application.one?applicationId=...  → { applicationStatus }
  *   GET  {apiUrl}/project.all          （只读；连通性测试与应用清单都用它）
+ *   GET  {apiUrl}/deployment.allByType?id=...&type=application  → 构建记录列表
+ *   GET  {apiUrl}/deployment.readLogs?deploymentId=...&tail=N   → 构建日志正文（决策 28）
+ *   GET  {apiUrl}/docker.getContainersByAppNameMatch?appName=... → 应用的容器
+ *   WS   {wsBase}/docker-container-logs?containerId=...          → 运行日志（决策 28）
  * 真实联调时如有出入，仅需在本文件校准。
  */
-import type { DokployApplication } from '@eat/shared';
+import type { DokployApplication, DokployContainer, DokployDeployment } from '@eat/shared';
+import { WebSocket } from 'ws';
 
 /**
  * project.all 的响应形状（只取用得上的字段，其余忽略；真实响应还含 db/compose 等其他服务）。
@@ -125,4 +130,130 @@ export class DokployClient {
     const status = json.applicationStatus;
     return status === 'idle' || status === 'running' || status === 'done' || status === 'error' ? status : 'unknown';
   }
+
+  // ---------- 构建日志 / 运行日志（决策 28） ----------
+
+  /**
+   * 某应用的构建记录列表（最新在前）。Dokploy 的一次「构建」= 一条 deployment 记录，
+   * 它比 application.applicationStatus 精确：后者是应用当前状态，同一应用被别人再次部署就会被覆盖。
+   */
+  async listDeployments(applicationId: string): Promise<DokployDeployment[]> {
+    const url = `${this.base}/deployment.allByType?id=${encodeURIComponent(applicationId)}&type=application`;
+    const json = await this.getJson(url, '拉取 Dokploy 构建记录失败');
+    if (!Array.isArray(json)) return [];
+    const out: DokployDeployment[] = [];
+    for (const raw of json as Array<Record<string, unknown>>) {
+      const deploymentId = raw?.deploymentId;
+      if (typeof deploymentId !== 'string' || deploymentId === '') continue;
+      const status = raw.status;
+      out.push({
+        deploymentId,
+        title: str(raw.title),
+        description: str(raw.description),
+        status: status === 'running' || status === 'done' || status === 'error' ? status : 'idle',
+        errorMessage: str(raw.errorMessage),
+        createdAt: str(raw.createdAt),
+      });
+    }
+    return out;
+  }
+
+  /** 某次构建的日志正文（Dokploy 侧就是对日志文件做 tail -n，tail 上限 10000） */
+  async readDeploymentLogs(deploymentId: string, tail: number): Promise<string> {
+    const url = `${this.base}/deployment.readLogs?deploymentId=${encodeURIComponent(deploymentId)}&tail=${tail}`;
+    const json = await this.getJson(url, '读取 Dokploy 构建日志失败');
+    return typeof json === 'string' ? json : '';
+  }
+
+  /** 应用当前的容器（appName 是 Dokploy 生成的容器名前缀，取自 application.one） */
+  async listContainers(appName: string): Promise<DokployContainer[]> {
+    const url = `${this.base}/docker.getContainersByAppNameMatch?appName=${encodeURIComponent(appName)}`;
+    const json = await this.getJson(url, '拉取 Dokploy 容器清单失败');
+    if (!Array.isArray(json)) return [];
+    const out: DokployContainer[] = [];
+    for (const raw of json as Array<Record<string, unknown>>) {
+      const containerId = raw?.containerId;
+      if (typeof containerId !== 'string' || containerId === '') continue;
+      out.push({ containerId, name: str(raw.name), state: str(raw.state), status: str(raw.status) });
+    }
+    return out;
+  }
+
+  /** 应用的容器名前缀（appName），运行日志要靠它找容器 */
+  async applicationAppName(applicationId: string): Promise<string> {
+    const url = `${this.base}/application.one?applicationId=${encodeURIComponent(applicationId)}`;
+    const json = await this.getJson(url, '读取 Dokploy 应用详情失败');
+    return str((json as Record<string, unknown>)?.appName);
+  }
+
+  /**
+   * 容器运行日志。Dokploy 只有 WebSocket 这一条路：v0.30.4 上把 tRPC router 全枚举过一遍，
+   * REST 侧没有任何读容器日志的过程（deployment.readLogs 读的是构建日志文件，跟容器无关）。
+   *
+   * 这里不做实时流：带上 tail=N 连上去，收完这一批就断开——服务端跑的是 `docker logs --follow`，
+   * 永远不会主动结束，所以边界得我们自己定：静默 IDLE_MS 收工，最多等 HARD_MS、最多收 MAX_BYTES。
+   */
+  async containerLogs(containerId: string, tail: number): Promise<string> {
+    const IDLE_MS = 800;
+    const HARD_MS = 15_000;
+    const MAX_BYTES = 2_000_000;
+    // WS 端点挂在 Dokploy 站点根上，不在 /api 下面
+    const url = new URL(`${this.base.replace(/\/api$/, '')}/docker-container-logs`.replace(/^http/, 'ws'));
+    url.searchParams.set('containerId', containerId);
+    url.searchParams.set('tail', String(tail));
+    url.searchParams.set('since', 'all');
+    // 鉴权靠 upgrade 请求头上的 x-api-key，Node 内置的 WHATWG WebSocket 不支持自定义头，故用 ws
+    const ws = new WebSocket(url, { headers: { 'x-api-key': this.conn.apiToken } });
+
+    const raw = await new Promise<string>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      let received = 0;
+      let idle: NodeJS.Timeout | undefined;
+      let settled = false;
+      const finish = (err?: Error): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(hard);
+        clearTimeout(idle);
+        ws.terminate();
+        // 多字节字符可能被切在两帧里，所以攒完再解码
+        if (err) reject(err);
+        else resolve(Buffer.concat(chunks).toString('utf8'));
+      };
+      const hard = setTimeout(() => finish(), HARD_MS);
+      ws.on('message', (data: Buffer) => {
+        chunks.push(data);
+        received += data.length;
+        if (received > MAX_BYTES) {
+          finish();
+          return;
+        }
+        clearTimeout(idle);
+        idle = setTimeout(() => finish(), IDLE_MS);
+      });
+      // 容器一直没输出时也得收工，不能干等到硬超时
+      ws.on('open', () => {
+        idle = setTimeout(() => finish(), Math.max(IDLE_MS, 2000));
+      });
+      // 4000+ 是 Dokploy 自己的拒绝码（参数非法 / 无权限），要如实报出来而不是当成正常收尾
+      ws.on('close', (code: number, reason: Buffer) =>
+        finish(code >= 4000 ? new Error(`Dokploy 拒绝读取（${code} ${reason.toString() || '无权限或参数非法'}）`) : undefined),
+      );
+      ws.on('error', (err: Error) => finish(err));
+    });
+
+    // 服务端是在 pty 里跑 docker logs，行尾是 \r\n
+    const text = raw.replace(/\r\n/g, '\n');
+    return text.length > MAX_BYTES ? `（日志过长，只保留末尾）\n${text.slice(-MAX_BYTES)}` : text;
+  }
+
+  private async getJson(url: string, failNote: string): Promise<unknown> {
+    const res = await fetch(url, { headers: this.headers(), signal: AbortSignal.timeout(20_000) });
+    if (!res.ok) {
+      throw new Error(`${failNote}（HTTP ${res.status}）: ${(await res.text()).slice(0, 200)}`);
+    }
+    return res.json();
+  }
 }
+
+const str = (v: unknown): string => (typeof v === 'string' ? v : '');

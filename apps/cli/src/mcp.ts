@@ -6,7 +6,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import * as path from 'node:path';
-import { CLI_VERSION } from '@eat/shared';
+import { CLI_VERSION, LOG_TAIL_DEFAULT, LOG_TAIL_MAX } from '@eat/shared';
 import type { SecretFingerprint } from '@eat/shared';
 import { Api, ApiError, setClientTag } from './client.js';
 import { scanWorkspace } from './scan.js';
@@ -151,16 +151,53 @@ const TOOLS = [
   {
     name: 'get_deploy_status',
     description:
-      '查询部署状态。status=failed 时 error 字段说明原因（构建失败请查看 Dokploy 该应用的部署日志，修复代码后重新 trigger_deploy）。缺省 deploymentId 时传 project 可列出项目的部署历史。',
+      '查询部署状态。status=failed 时 error 字段已经带上 Dokploy 构建日志末尾的真实报错——据此改代码后重新 trigger_deploy；要看完整日志用 get_build_logs。传 project 看该项目最近一次部署，传 deploymentId 看指定那次，两个都不传则报错。',
     inputSchema: {
       type: 'object',
       properties: {
-        deploymentId: { type: 'string', description: '部署 ID' },
-        project: { type: 'string', description: '项目 slug（列历史用）' },
+        project: { type: 'string', description: '项目 slug（看最近一次部署）' },
+        deploymentId: { type: 'string', description: '部署 ID（看指定那次）' },
+        history: { type: 'boolean', description: '传 true 并带 project，列出该项目的部署历史' },
       },
     },
   },
+  {
+    name: 'get_build_logs',
+    description:
+      '读 Dokploy 上的构建日志——部署失败时排查的第一手材料（依赖装不上、编译报错、镜像拉不动都在这里）。默认最近一次构建；recent 里有最近的构建记录，可用 deploymentId 回看某次。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: { type: 'string', description: '项目 slug（list_projects 查看）' },
+        tail: { type: 'number', description: `日志行数，默认 ${LOG_TAIL_DEFAULT}，上限 ${LOG_TAIL_MAX}` },
+        deploymentId: { type: 'string', description: 'Dokploy 构建记录 id（默认最近一次）' },
+      },
+      required: ['project'],
+    },
+  },
+  {
+    name: 'get_run_logs',
+    description:
+      '读应用容器的运行日志——构建成功但服务不正常时看这个（进程启动失败、接口 500、连不上依赖）。默认第一个运行中的容器；containers 里是全部副本，可用 containerId 指定。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: { type: 'string', description: '项目 slug（list_projects 查看）' },
+        tail: { type: 'number', description: `日志行数，默认 ${LOG_TAIL_DEFAULT}，上限 ${LOG_TAIL_MAX}` },
+        containerId: { type: 'string', description: '容器 id（默认第一个运行中的）' },
+      },
+      required: ['project'],
+    },
+  },
 ] as const;
+
+/** 日志类工具的查询串：tail 与「指定某次/某个」的可选参数 */
+function logQuery(args: Record<string, unknown>, pick: 'deploymentId' | 'containerId'): URLSearchParams {
+  const q = new URLSearchParams();
+  if (typeof args.tail === 'number') q.set('tail', String(args.tail));
+  if (typeof args[pick] === 'string') q.set(pick, args[pick]);
+  return q;
+}
 
 function jsonResult(data: unknown) {
   const content = [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }];
@@ -288,10 +325,20 @@ export async function startMcpServer(): Promise<void> {
           if (args.deploymentId) {
             return jsonResult(await api.request('GET', `/api/deployments/${args.deploymentId as string}`));
           }
-          if (args.project) {
-            return jsonResult(await api.request('GET', `/api/projects/${args.project as string}/deployments`));
-          }
-          return errorResult(new Error('需要 deploymentId 或 project 参数'));
+          if (!args.project) return errorResult(new Error('需要 project 或 deploymentId 参数'));
+          const slug = args.project as string;
+          const path = args.history ? `/api/projects/${slug}/deployments` : `/api/projects/${slug}/deployments/latest`;
+          return jsonResult(await api.request('GET', path));
+        }
+        case 'get_build_logs': {
+          return jsonResult(
+            await api.request('GET', `/api/projects/${args.project as string}/build-logs?${logQuery(args, 'deploymentId')}`),
+          );
+        }
+        case 'get_run_logs': {
+          return jsonResult(
+            await api.request('GET', `/api/projects/${args.project as string}/run-logs?${logQuery(args, 'containerId')}`),
+          );
         }
         default:
           return errorResult(new Error(`未知工具: ${req.params.name}`));

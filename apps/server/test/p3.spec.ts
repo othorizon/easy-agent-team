@@ -1,4 +1,4 @@
-/** P3 端到端测试：Dokploy 接入（mock）/ 项目与成员 / 部署门禁与状态刷新 / 密钥指纹清单 */
+/** P3 端到端测试：Dokploy 接入（mock）/ 项目与成员 / 部署门禁与状态刷新 / 构建与运行日志 / 密钥指纹清单 */
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? 'postgres://dev@127.0.0.1:5433/eat_test';
 
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -9,6 +9,7 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import * as http from 'node:http';
 import * as path from 'node:path';
 import { Pool } from 'pg';
+import { WebSocketServer } from 'ws';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
 import * as schema from '../src/db/schema';
@@ -59,7 +60,19 @@ let mockProjectAll: unknown = [
   },
   { projectId: 'proj-3', name: '空项目', compose: [{ composeId: 'c-1' }] },
 ];
+/**
+ * 构建记录（决策 28）：部署状态以它为准而不是 applicationStatus——后者是「应用当前状态」，
+ * 同一应用被别人再次部署就会串味。createdAt 由用例按需设置成「触发之后」才能被绑上。
+ */
+let mockBuilds: Array<Record<string, unknown>> = [];
+let mockBuildLogs = '';
+let mockAppName = 'crm-tool-app-7f3a';
+let mockContainers: Array<Record<string, unknown>> = [];
+let mockContainerLog = '';
+/** 记录 Dokploy 收到的日志读取参数，用来断言 tail / 指定 id 有没有透传下去 */
+const logCalls: Array<Record<string, string>> = [];
 let dokployServer: http.Server;
+let dokployWss: WebSocketServer;
 let dokployUrl: string;
 
 async function api(
@@ -119,10 +132,40 @@ beforeAll(async () => {
     if (req.method === 'GET' && req.url?.startsWith('/api/application.one')) {
       res
         .writeHead(200, { 'content-type': 'application/json' })
-        .end(JSON.stringify({ applicationStatus: mockAppStatus }));
+        .end(JSON.stringify({ applicationStatus: mockAppStatus, appName: mockAppName }));
+      return;
+    }
+    if (req.method === 'GET' && req.url?.startsWith('/api/deployment.allByType')) {
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(mockBuilds));
+      return;
+    }
+    if (req.method === 'GET' && req.url?.startsWith('/api/deployment.readLogs')) {
+      const q = new URL(req.url, 'http://x').searchParams;
+      logCalls.push({ kind: 'build', deploymentId: q.get('deploymentId') ?? '', tail: q.get('tail') ?? '' });
+      // Dokploy 的 readLogs 返回的是一个 JSON 字符串，不是对象
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(mockBuildLogs));
+      return;
+    }
+    if (req.method === 'GET' && req.url?.startsWith('/api/docker.getContainersByAppNameMatch')) {
+      const q = new URL(req.url, 'http://x').searchParams;
+      logCalls.push({ kind: 'containers', appName: q.get('appName') ?? '' });
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(mockContainers));
       return;
     }
     res.writeHead(404).end();
+  });
+
+  // 运行日志：Dokploy 只有 WebSocket 这一条路（REST 侧没有对应过程），mock 也得是 WS
+  dokployWss = new WebSocketServer({ server: dokployServer, path: '/docker-container-logs' });
+  dokployWss.on('connection', (socket, req) => {
+    const q = new URL(req.url ?? '', 'http://x').searchParams;
+    logCalls.push({ kind: 'run', containerId: q.get('containerId') ?? '', tail: q.get('tail') ?? '' });
+    if (req.headers['x-api-key'] !== 'dok-token-abcdef123456') {
+      socket.close(4003, 'Not authorized');
+      return;
+    }
+    // 真实服务端是 pty 里的 docker logs --follow：发完这批就不再说话，客户端靠静默超时收工
+    socket.send(mockContainerLog);
   });
   dokployUrl = await new Promise<string>((resolve) =>
     dokployServer.listen(0, '127.0.0.1', () =>
@@ -147,6 +190,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app?.close();
+  dokployWss?.close();
   dokployServer?.close();
 });
 
@@ -324,16 +368,34 @@ describe('部署门禁与状态', () => {
     expect(deployCalls).toEqual(['app-123']);
   });
 
-  it('状态刷新：running 保持 deploying，done 变 success', async () => {
-    mockAppStatus = 'running';
+  it('状态以 Dokploy 构建记录为准：绑定本次构建，running 保持 deploying，done 变 success', async () => {
+    // 触发之前就存在的旧构建不能被认成本次
+    mockBuilds = [
+      { deploymentId: 'build-old', title: '上一次', status: 'error', createdAt: new Date(Date.now() - 3600_000).toISOString() },
+      { deploymentId: 'build-mine', title: 'Manual deployment', status: 'running', createdAt: new Date().toISOString() },
+    ];
     let d = await api('GET', `/api/deployments/${deployId}`, { token: memberToken });
     expect(d.body.status).toBe('deploying');
-    mockAppStatus = 'done';
+    expect(d.body.dokployDeploymentId).toBe('build-mine');
+
+    mockBuilds = [{ ...mockBuilds[1], status: 'done' }, mockBuilds[0]];
     d = await api('GET', `/api/deployments/${deployId}`, { token: memberToken });
     expect(d.body.status).toBe('success');
     const list = await api('GET', '/api/projects/crm-tool/deployments', { token: ownerToken });
     expect(list.body[0].status).toBe('success');
     expect(list.body[0].report.passed).toBe(true);
+  });
+
+  it('最近一次部署：不用记部署 ID 也能查状态，没部署过回 404', async () => {
+    const latest = await api('GET', '/api/projects/crm-tool/deployments/latest', { token: memberToken });
+    expect(latest.status).toBe(200);
+    expect(latest.body.id).toBe(deployId);
+    await api('POST', '/api/projects', {
+      token: ownerToken,
+      payload: { slug: 'never-deployed', name: '没部署过', dokployApplicationId: 'app-none' },
+    });
+    const none = await api('GET', '/api/projects/never-deployed/deployments/latest', { token: ownerToken });
+    expect(none.status).toBe(404);
   });
 
   it('短 ID 查询：前 8 位可查，过短拒绝，无匹配返回 404 而非 500', async () => {
@@ -372,12 +434,92 @@ describe('部署门禁与状态', () => {
     await pool.end();
   });
 
-  it('Dokploy 构建失败 → failed 并附提示', async () => {
+  it('构建失败 → failed，error 直接带上构建日志末尾的真实报错（决策 28）', async () => {
     const r = await api('POST', '/api/projects/crm-tool/deploy', { token: ownerToken, payload: { report: passingReport() } });
-    mockAppStatus = 'error';
+    mockBuilds = [{ deploymentId: 'build-fail', title: 'Manual deployment', status: 'error', createdAt: new Date().toISOString() }];
+    mockBuildLogs = 'Initializing deployment\nnpm ERR! code E404\nnpm ERR! 404 Not Found - GET https://registry/foo\n\n❌ 构建失败\n';
     const d = await api('GET', `/api/deployments/${r.body.id}`, { token: ownerToken });
     expect(d.body.status).toBe('failed');
-    expect(d.body.error).toContain('Dokploy');
+    // 不再是「详见 Dokploy 控制台」那种打发人的文案
+    expect(d.body.error).toContain('npm ERR! 404 Not Found');
+    expect(d.body.error).toContain('eat project build-logs crm-tool');
+    expect(d.body.dokployDeploymentId).toBe('build-fail');
+  });
+
+  it('绑不上构建记录时先维持 deploying，超时才回落到应用状态', async () => {
+    const r = await api('POST', '/api/projects/crm-tool/deploy', { token: ownerToken, payload: { report: passingReport() } });
+    mockBuilds = [];
+    mockAppStatus = 'done';
+    // Dokploy 的部署是排队执行的，记录还没建出来时不能拿应用状态当结论
+    expect((await api('GET', `/api/deployments/${r.body.id}`, { token: ownerToken })).body.status).toBe('deploying');
+
+    // 但也不能永远卡着：把创建时间改老，走回落分支
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    await pool.query("update deployment set created_at = now() - interval '30 minutes' where id = $1", [r.body.id]);
+    await pool.end();
+    expect((await api('GET', `/api/deployments/${r.body.id}`, { token: ownerToken })).body.status).toBe('success');
+  });
+});
+
+describe('构建日志与运行日志（决策 28）', () => {
+  beforeAll(() => {
+    mockBuilds = [
+      { deploymentId: 'build-2', title: 'Manual deployment', status: 'done', createdAt: '2026-09-02T07:00:00.000Z' },
+      { deploymentId: 'build-1', title: '上一次', status: 'error', errorMessage: 'boom', createdAt: '2026-09-02T06:00:00.000Z' },
+    ];
+    mockBuildLogs = 'Initializing deployment\nBuild finished\n';
+    mockContainers = [
+      { containerId: 'c-stopped', name: 'crm-tool.0', state: 'exited', status: 'Exited (1)' },
+      { containerId: 'c-running', name: 'crm-tool.1', state: 'running', status: 'Up 3 minutes' },
+    ];
+    mockContainerLog = '2026-09-02T07:01:00Z listening on :3000\r\n';
+    logCalls.length = 0;
+  });
+
+  it('构建日志：默认最近一次，带回最近构建列表，tail 透传', async () => {
+    const r = await api('GET', '/api/projects/crm-tool/build-logs?tail=50', { token: memberToken });
+    expect(r.status).toBe(200);
+    expect(r.body.deployment.deploymentId).toBe('build-2');
+    expect(r.body.logs).toContain('Build finished');
+    expect(r.body.recent).toHaveLength(2);
+    expect(logCalls.at(-1)).toEqual({ kind: 'build', deploymentId: 'build-2', tail: '50' });
+  });
+
+  it('构建日志：可回看指定那次，指定不存在的构建回 404', async () => {
+    const r = await api('GET', '/api/projects/crm-tool/build-logs?deploymentId=build-1', { token: memberToken });
+    expect(r.body.deployment.deploymentId).toBe('build-1');
+    expect(logCalls.at(-1)?.tail).toBe('200');
+    const missing = await api('GET', '/api/projects/crm-tool/build-logs?deploymentId=nope', { token: memberToken });
+    expect(missing.status).toBe(404);
+  });
+
+  it('运行日志：默认取运行中的容器，行尾 \\r\\n 归一', async () => {
+    const r = await api('GET', '/api/projects/crm-tool/run-logs?tail=20', { token: memberToken });
+    expect(r.status).toBe(200);
+    expect(r.body.container.containerId).toBe('c-running');
+    expect(r.body.containers).toHaveLength(2);
+    expect(r.body.logs).toBe('2026-09-02T07:01:00Z listening on :3000\n');
+    expect(logCalls.at(-1)).toEqual({ kind: 'run', containerId: 'c-running', tail: '20' });
+  });
+
+  it('运行日志：没有容器时不报错，回 container=null（应用可能还没部署成功）', async () => {
+    mockContainers = [];
+    const r = await api('GET', '/api/projects/crm-tool/run-logs', { token: memberToken });
+    expect(r.status).toBe(200);
+    expect(r.body.container).toBeNull();
+    expect(r.body.logs).toBe('');
+  });
+
+  it('日志可能带出构建期注入的密钥：非项目成员一律 403', async () => {
+    expect((await api('GET', '/api/projects/crm-tool/build-logs', { token: outsiderToken })).status).toBe(403);
+    expect((await api('GET', '/api/projects/crm-tool/run-logs', { token: outsiderToken })).status).toBe(403);
+    expect((await api('GET', '/api/projects/crm-tool/build-logs')).status).toBe(401);
+  });
+
+  it('tail 超出范围按 VALIDATION_FAILED 拒绝，不透传给 Dokploy', async () => {
+    const r = await api('GET', '/api/projects/crm-tool/build-logs?tail=99999', { token: memberToken });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe('VALIDATION_FAILED');
   });
 });
 
