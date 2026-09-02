@@ -10,10 +10,14 @@ import {
 } from '@nestjs/common';
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import type {
+  BuildLogsResult,
   ConnectionTestResult,
   CreateProjectRequest,
   DeploymentInfo,
   DokployApplication,
+  DokployDeployment,
+  LogsQuery,
+  RunLogsResult,
   DokploySettingsInfo,
   PrecheckReport,
   ProjectInfo,
@@ -110,15 +114,20 @@ export class DeployService {
    */
   async listDokployApplications(): Promise<DokployApplication[]> {
     const client = await this.client();
+    return this.callDokploy(() => client.listApplications(), '拉取 Dokploy 应用清单失败');
+  }
+
+  /**
+   * 调 Dokploy 的统一错误包装：Node fetch 的网络错误只报 "fetch failed"，
+   * 真正的原因（ECONNREFUSED 等）在 cause 里，不带出来排查会很痛苦。
+   */
+  private async callDokploy<T>(fn: () => Promise<T>, note: string): Promise<T> {
     try {
-      return await client.listApplications();
+      return await fn();
     } catch (err) {
       const e = err as Error & { cause?: { message?: string } };
       const detail = e.cause?.message ? `${e.message}（${e.cause.message}）` : e.message;
-      throw new ServiceUnavailableException({
-        error: 'DOKPLOY_UNAVAILABLE',
-        message: `拉取 Dokploy 应用清单失败: ${detail}`,
-      });
+      throw new ServiceUnavailableException({ error: 'DOKPLOY_UNAVAILABLE', message: `${note}: ${detail}` });
     }
   }
 
@@ -254,6 +263,7 @@ export class DeployService {
       triggeredBy: row.triggeredBy,
       triggeredByName: trigger?.name ?? '(已删除)',
       error: row.error,
+      dokployDeploymentId: row.dokployDeploymentId,
       report: (row.report as DeploymentInfo['report']) ?? null,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),

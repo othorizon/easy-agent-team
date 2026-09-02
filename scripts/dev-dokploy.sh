@@ -30,16 +30,15 @@ die() { echo "[dev-dokploy] 错误: $*" >&2; exit 1; }
 
 # ---------- docker 守护进程 ----------
 # 云端容器默认没起 dockerd（docker CLI 有、socket 没有），但内核允许我们自己拉起来。
-ensure_dockerd() {
-  if docker info >/dev/null 2>&1; then return; fi
-  [ "$(id -u)" = "0" ] || die "需要 root 才能启动 dockerd"
-  log "启动 dockerd..."
-  # 容器网络出站要转发，默认是关的
-  sysctl -w net.ipv4.ip_forward=1 >/dev/null
-  # 镜像拉取要走出站代理（CA 已在系统信任库里，不需要额外配置）
-  if [ -n "${HTTPS_PROXY:-}" ] && [ ! -f /etc/docker/daemon.json ]; then
-    mkdir -p /etc/docker
-    cat > /etc/docker/daemon.json <<EOF
+# 镜像拉取要走出站代理（代理 CA 已在系统信任库里，不用额外配置）。
+# 代理端口每个会话都可能变（容器重建就换一个），daemon.json 里留着旧端口会让
+# 镜像拉取报 "proxyconnect ... connection refused"，所以每次都按当前环境重写。
+# 返回 0 表示配置有变化。
+write_docker_proxy_config() {
+  [ -n "${HTTPS_PROXY:-}" ] || return 1
+  mkdir -p /etc/docker
+  local tmp=/etc/docker/daemon.json.new
+  cat > "$tmp" <<EOF
 {
   "proxies": {
     "http-proxy": "${HTTP_PROXY:-$HTTPS_PROXY}",
@@ -48,10 +47,40 @@ ensure_dockerd() {
   }
 }
 EOF
+  if [ -f /etc/docker/daemon.json ] && cmp -s "$tmp" /etc/docker/daemon.json; then
+    rm -f "$tmp"
+    return 1
   fi
+  mv "$tmp" /etc/docker/daemon.json
+  return 0
+}
+
+ensure_dockerd() {
+  local proxy_changed=0
+  if [ "$(id -u)" = "0" ]; then
+    write_docker_proxy_config && proxy_changed=1 || true
+  fi
+  if docker info >/dev/null 2>&1; then
+    if [ "$proxy_changed" = "0" ]; then return; fi
+    # 代理不是可热加载的配置项，只能重启 dockerd；swarm 状态在磁盘上，服务会自行恢复
+    log "出站代理地址变了，重启 dockerd 刷新镜像拉取代理..."
+    pkill -x dockerd || true
+    for _ in $(seq 1 30); do
+      docker info >/dev/null 2>&1 || break
+      sleep 1
+    done
+  fi
+  [ "$(id -u)" = "0" ] || die "需要 root 才能启动 dockerd"
+  log "启动 dockerd..."
+  # 容器网络出站要转发，默认是关的
+  sysctl -w net.ipv4.ip_forward=1 >/dev/null
+  mkdir -p "$STATE_DIR"
   nohup dockerd > "$STATE_DIR/dockerd.log" 2>&1 &
   for _ in $(seq 1 30); do
-    docker info >/dev/null 2>&1 && { log "dockerd 就绪"; return; }
+    if docker info >/dev/null 2>&1; then
+      log "dockerd 就绪"
+      return
+    fi
     sleep 2
   done
   die "dockerd 启动超时，见 $STATE_DIR/dockerd.log"

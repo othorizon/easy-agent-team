@@ -4,9 +4,14 @@
  *   POST {apiUrl}/application.deploy   { applicationId }
  *   GET  {apiUrl}/application.one?applicationId=...  → { applicationStatus }
  *   GET  {apiUrl}/project.all          （只读；连通性测试与应用清单都用它）
+ *   GET  {apiUrl}/deployment.allByType?id=...&type=application  → 构建记录列表
+ *   GET  {apiUrl}/deployment.readLogs?deploymentId=...&tail=N   → 构建日志正文（决策 28）
+ *   GET  {apiUrl}/docker.getContainersByAppNameMatch?appName=... → 应用的容器
+ *   WS   {wsBase}/docker-container-logs?containerId=...          → 运行日志（决策 28）
  * 真实联调时如有出入，仅需在本文件校准。
  */
-import type { DokployApplication } from '@eat/shared';
+import type { DokployApplication, DokployContainer, DokployDeployment } from '@eat/shared';
+import { readWebSocketOnce } from './ws-tail';
 
 /**
  * project.all 的响应形状（只取用得上的字段，其余忽略；真实响应还含 db/compose 等其他服务）。
@@ -125,4 +130,100 @@ export class DokployClient {
     const status = json.applicationStatus;
     return status === 'idle' || status === 'running' || status === 'done' || status === 'error' ? status : 'unknown';
   }
+
+  // ---------- 构建日志 / 运行日志（决策 28） ----------
+
+  /**
+   * 某应用的构建记录列表（最新在前）。Dokploy 的一次「构建」= 一条 deployment 记录，
+   * 它比 application.applicationStatus 精确：后者是应用当前状态，同一应用被别人再次部署就会被覆盖。
+   */
+  async listDeployments(applicationId: string): Promise<DokployDeployment[]> {
+    const url = `${this.base}/deployment.allByType?id=${encodeURIComponent(applicationId)}&type=application`;
+    const json = await this.getJson(url, '拉取 Dokploy 构建记录失败');
+    if (!Array.isArray(json)) return [];
+    const out: DokployDeployment[] = [];
+    for (const raw of json as Array<Record<string, unknown>>) {
+      const deploymentId = raw?.deploymentId;
+      if (typeof deploymentId !== 'string' || deploymentId === '') continue;
+      const status = raw.status;
+      out.push({
+        deploymentId,
+        title: str(raw.title),
+        description: str(raw.description),
+        status: status === 'running' || status === 'done' || status === 'error' ? status : 'idle',
+        errorMessage: str(raw.errorMessage),
+        createdAt: str(raw.createdAt),
+      });
+    }
+    return out;
+  }
+
+  /** 某次构建的日志正文（Dokploy 侧就是对日志文件做 tail -n，tail 上限 10000） */
+  async readDeploymentLogs(deploymentId: string, tail: number): Promise<string> {
+    const url = `${this.base}/deployment.readLogs?deploymentId=${encodeURIComponent(deploymentId)}&tail=${tail}`;
+    const json = await this.getJson(url, '读取 Dokploy 构建日志失败');
+    return typeof json === 'string' ? json : '';
+  }
+
+  /** 应用当前的容器（appName 是 Dokploy 生成的容器名前缀，取自 application.one） */
+  async listContainers(appName: string): Promise<DokployContainer[]> {
+    const url = `${this.base}/docker.getContainersByAppNameMatch?appName=${encodeURIComponent(appName)}`;
+    const json = await this.getJson(url, '拉取 Dokploy 容器清单失败');
+    if (!Array.isArray(json)) return [];
+    const out: DokployContainer[] = [];
+    for (const raw of json as Array<Record<string, unknown>>) {
+      const containerId = raw?.containerId;
+      if (typeof containerId !== 'string' || containerId === '') continue;
+      out.push({ containerId, name: str(raw.name), state: str(raw.state), status: str(raw.status) });
+    }
+    return out;
+  }
+
+  /** 应用的容器名前缀（appName），运行日志要靠它找容器 */
+  async applicationAppName(applicationId: string): Promise<string> {
+    const url = `${this.base}/application.one?applicationId=${encodeURIComponent(applicationId)}`;
+    const json = await this.getJson(url, '读取 Dokploy 应用详情失败');
+    return str((json as Record<string, unknown>)?.appName);
+  }
+
+  /**
+   * 容器运行日志。Dokploy 只有 WebSocket 这一条路（REST 侧没有对应过程，v0.30.4 实测确认），
+   * 而且服务端固定用 `docker logs --follow`，永远不会主动结束——所以这里读的是「最近 tail 行」
+   * 这一批：收完静默 IDLE_MS 就断开，最多等 HARD_MS、最多收 MAX_BYTES。不做实时流。
+   */
+  async containerLogs(containerId: string, tail: number): Promise<string> {
+    const IDLE_MS = 800;
+    const HARD_MS = 15_000;
+    const MAX_BYTES = 2_000_000;
+    // WS 端点挂在 Dokploy 站点根上，不在 /api 下面
+    const url = new URL(`${this.base.replace(/\/api$/, '')}/docker-container-logs`.replace(/^http/, 'ws'));
+    url.searchParams.set('containerId', containerId);
+    url.searchParams.set('tail', String(tail));
+    url.searchParams.set('since', 'all');
+    let raw: string;
+    try {
+      raw = await readWebSocketOnce({
+        url: url.toString(),
+        headers: { 'x-api-key': this.conn.apiToken },
+        idleMs: IDLE_MS,
+        hardMs: HARD_MS,
+        maxBytes: MAX_BYTES,
+      });
+    } catch (err) {
+      throw new Error(`读取 Dokploy 运行日志失败: ${(err as Error).message}`);
+    }
+    // 服务端是在 pty 里跑 docker logs，行尾是 \r\n
+    const text = raw.replace(/\r\n/g, '\n');
+    return text.length > MAX_BYTES ? `（日志过长，只保留末尾）\n${text.slice(-MAX_BYTES)}` : text;
+  }
+
+  private async getJson(url: string, failNote: string): Promise<unknown> {
+    const res = await fetch(url, { headers: this.headers(), signal: AbortSignal.timeout(20_000) });
+    if (!res.ok) {
+      throw new Error(`${failNote}（HTTP ${res.status}）: ${(await res.text()).slice(0, 200)}`);
+    }
+    return res.json();
+  }
 }
+
+const str = (v: unknown): string => (typeof v === 'string' ? v : '');

@@ -1,0 +1,1 @@
+ALTER TABLE "deployment" ADD COLUMN "dokploy_deployment_id" text;

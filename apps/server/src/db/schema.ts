@@ -510,6 +510,11 @@ export const deployments = pgTable(
     status: text('status', { enum: ['deploying', 'success', 'failed'] })
       .notNull()
       .default('deploying'),
+    /**
+     * Dokploy 那边对应的构建记录 id（决策 28）。触发时 Dokploy 还没建出记录（部署是排队执行的），
+     * 所以是首次查状态时按时间绑定；绑上之后状态与日志都以这条构建记录为准。
+     */
+    dokployDeploymentId: text('dokploy_deployment_id'),
     report: jsonb('report').$type<Record<string, unknown>>(),
     error: text('error'),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
