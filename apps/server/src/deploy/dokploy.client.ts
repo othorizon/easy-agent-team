@@ -11,7 +11,7 @@
  * 真实联调时如有出入，仅需在本文件校准。
  */
 import type { DokployApplication, DokployContainer, DokployDeployment } from '@eat/shared';
-import { readWebSocketOnce } from './ws-tail';
+import { WebSocket } from 'ws';
 
 /**
  * project.all 的响应形状（只取用得上的字段，其余忽略；真实响应还含 db/compose 等其他服务）。
@@ -187,9 +187,11 @@ export class DokployClient {
   }
 
   /**
-   * 容器运行日志。Dokploy 只有 WebSocket 这一条路（REST 侧没有对应过程，v0.30.4 实测确认），
-   * 而且服务端固定用 `docker logs --follow`，永远不会主动结束——所以这里读的是「最近 tail 行」
-   * 这一批：收完静默 IDLE_MS 就断开，最多等 HARD_MS、最多收 MAX_BYTES。不做实时流。
+   * 容器运行日志。Dokploy 只有 WebSocket 这一条路：v0.30.4 上把 tRPC router 全枚举过一遍，
+   * REST 侧没有任何读容器日志的过程（deployment.readLogs 读的是构建日志文件，跟容器无关）。
+   *
+   * 这里不做实时流：带上 tail=N 连上去，收完这一批就断开——服务端跑的是 `docker logs --follow`，
+   * 永远不会主动结束，所以边界得我们自己定：静默 IDLE_MS 收工，最多等 HARD_MS、最多收 MAX_BYTES。
    */
   async containerLogs(containerId: string, tail: number): Promise<string> {
     const IDLE_MS = 800;
@@ -200,18 +202,46 @@ export class DokployClient {
     url.searchParams.set('containerId', containerId);
     url.searchParams.set('tail', String(tail));
     url.searchParams.set('since', 'all');
-    let raw: string;
-    try {
-      raw = await readWebSocketOnce({
-        url: url.toString(),
-        headers: { 'x-api-key': this.conn.apiToken },
-        idleMs: IDLE_MS,
-        hardMs: HARD_MS,
-        maxBytes: MAX_BYTES,
+    // 鉴权靠 upgrade 请求头上的 x-api-key，Node 内置的 WHATWG WebSocket 不支持自定义头，故用 ws
+    const ws = new WebSocket(url, { headers: { 'x-api-key': this.conn.apiToken } });
+
+    const raw = await new Promise<string>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      let received = 0;
+      let idle: NodeJS.Timeout | undefined;
+      let settled = false;
+      const finish = (err?: Error): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(hard);
+        clearTimeout(idle);
+        ws.terminate();
+        // 多字节字符可能被切在两帧里，所以攒完再解码
+        if (err) reject(err);
+        else resolve(Buffer.concat(chunks).toString('utf8'));
+      };
+      const hard = setTimeout(() => finish(), HARD_MS);
+      ws.on('message', (data: Buffer) => {
+        chunks.push(data);
+        received += data.length;
+        if (received > MAX_BYTES) {
+          finish();
+          return;
+        }
+        clearTimeout(idle);
+        idle = setTimeout(() => finish(), IDLE_MS);
       });
-    } catch (err) {
-      throw new Error(`读取 Dokploy 运行日志失败: ${(err as Error).message}`);
-    }
+      // 容器一直没输出时也得收工，不能干等到硬超时
+      ws.on('open', () => {
+        idle = setTimeout(() => finish(), Math.max(IDLE_MS, 2000));
+      });
+      // 4000+ 是 Dokploy 自己的拒绝码（参数非法 / 无权限），要如实报出来而不是当成正常收尾
+      ws.on('close', (code: number, reason: Buffer) =>
+        finish(code >= 4000 ? new Error(`Dokploy 拒绝读取（${code} ${reason.toString() || '无权限或参数非法'}）`) : undefined),
+      );
+      ws.on('error', (err: Error) => finish(err));
+    });
+
     // 服务端是在 pty 里跑 docker logs，行尾是 \r\n
     const text = raw.replace(/\r\n/g, '\n');
     return text.length > MAX_BYTES ? `（日志过长，只保留末尾）\n${text.slice(-MAX_BYTES)}` : text;
