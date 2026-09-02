@@ -104,8 +104,10 @@ main "$@"
 
   /**
    * Windows 安装脚本（PowerShell 5.1+）。与 install.sh 一一对应：
-   * 下载 eat.js → 生成 shim 三件套（eat.cmd / eat.ps1 / eat，对齐 npm cmd-shim 的做法，
-   * 因为 Windows 上建软链需要管理员或开发者模式）→ 写用户级 PATH（不用 setx：它会把 PATH 截断到 1024 字符）。
+   * 下载 eat.js → 生成 shim 两件套（eat.cmd / eat，用 shim 而非软链是因为 Windows 建软链需要
+   * 管理员或开发者模式）→ 写用户级 PATH（不用 setx：它会把 PATH 截断到 1024 字符）。
+   * 故意不生成 eat.ps1（决策 29）：它会抢在 eat.cmd 前面被 PowerShell 选中，然后撞上默认的
+   * ExecutionPolicy=Restricted，正是 npm.ps1 那个著名报错。
    * 全部逻辑包进函数、末行才调用：irm | iex 下载被截断时解析即失败，不会执行半截脚本。
    */
   @Public()
@@ -142,12 +144,14 @@ function Install-EatCli {
   $ProgressPreference = 'SilentlyContinue'
   Invoke-WebRequest -UseBasicParsing -Uri "$server/install/eat.js" -OutFile (Join-Path $binDir 'eat.js')
 
-  # —— shim 三件套：cmd.exe / PowerShell / Git Bash 各一个入口 ——
-  # eat.cmd 也是 MCP 客户端与 shell:true 子进程能拉起的入口；.ps1 必须显式传退出码，否则门禁命令会被误判成功
+  # —— shim 两件套：eat.cmd（cmd.exe / PowerShell / 子进程通用）+ eat（Git Bash）——
+  # 这里刻意不生成 eat.ps1（决策 29）：PowerShell 解析命令时 .ps1 的优先级高于 PATHEXT 里的 .cmd，
+  # 而 Windows PowerShell 5.1 默认 ExecutionPolicy=Restricted 会拒绝执行任何 .ps1 文件——
+  # 一旦落了 eat.ps1，它就会挡住本来完全可用的 eat.cmd，用户只会看到 npm.ps1 那个著名报错。
+  # 不落 .ps1，PowerShell 自然回落到 eat.cmd：执行策略只管脚本文件，管不着 .cmd/.exe，用户零操作。
+  # 退出码没有损失：批处理把 node 的 errorlevel 作为自身退出码返回，$LASTEXITCODE 拿到的仍是真值。
   $cmdShim = '@node "%~dp0eat.js" %*', ''
   [IO.File]::WriteAllText((Join-Path $binDir 'eat.cmd'), ($cmdShim -join "\`r\`n"))
-  $ps1Shim = '#!/usr/bin/env pwsh', '& node (Join-Path $PSScriptRoot ''eat.js'') @args', 'exit $LASTEXITCODE', ''
-  [IO.File]::WriteAllText((Join-Path $binDir 'eat.ps1'), ($ps1Shim -join "\`r\`n"))
   $shShim = '#!/bin/sh', 'exec node "$(dirname "$0")/eat.js" "$@"', ''
   [IO.File]::WriteAllText((Join-Path $binDir 'eat'), ($shShim -join "\`n"))
 
@@ -171,7 +175,8 @@ function Install-EatCli {
   } else {
     Write-Host "$binDir 已在用户 PATH 中，无需重复添加。"
   }
-  Write-Host '已生成 shim：eat.cmd（cmd/子进程）、eat.ps1（PowerShell）、eat（Git Bash）。'
+  Write-Host '已生成 shim：eat.cmd（cmd / PowerShell / 子进程通用）、eat（Git Bash）。'
+  Write-Host '提示：AI 客户端（Claude Code 等）若在安装前就已启动，它拉起的终端继承的是旧 PATH，需重启客户端后 eat 才可见。'
   Write-Host ''
   Write-Host '下一步：'
   Write-Host "  1. eat login --server $server    # 浏览器完成设备码授权"

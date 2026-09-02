@@ -239,17 +239,18 @@ describe('CLI 自托管分发', () => {
     expect(r.body).toContain('/install.ps1'); // 指到 Windows 入口
   });
 
-  it('install.ps1 免鉴权：Windows 安装脚本含 shim 三件套与用户级 PATH（决策 24）', async () => {
+  it('install.ps1 免鉴权：Windows 安装脚本含 shim 两件套与用户级 PATH（决策 24、29）', async () => {
     const r = await api('GET', '/install.ps1');
     expect(r.status).toBe(200);
     expect(String(r.headers['content-type'])).toContain('text/plain');
     expect(r.body).toContain('/install/eat.js');
     expect(r.body).toContain('eat login --server');
-    // shim 三件套：cmd.exe / PowerShell / Git Bash
+    // shim 两件套：eat.cmd（cmd / PowerShell / 子进程）+ eat（Git Bash）
     expect(r.body).toContain("'@node \"%~dp0eat.js\" %*'");
-    expect(r.body).toContain('eat.cmd');
-    expect(r.body).toContain('eat.ps1');
-    expect(r.body).toContain('exit $LASTEXITCODE'); // .ps1 shim 必须透传退出码
+    expect(r.body).toContain("Join-Path $binDir 'eat.cmd'");
+    expect(r.body).toContain("Join-Path $binDir 'eat'");
+    // 决策 29：绝不能落 eat.ps1——它会抢在 eat.cmd 前面被 PowerShell 选中，撞上 Restricted 执行策略
+    expect(r.body).not.toMatch(/Join-Path \$binDir 'eat\.ps1'/);
     // PATH 写用户级环境变量，绝不能用 setx（超过 1024 字符会被截断）
     expect(r.body).toContain("[Environment]::SetEnvironmentVariable('Path'");
     expect(r.body).not.toMatch(/^\s*setx\b/m); // 注释里可以提它，但不能真的调用

@@ -5,6 +5,7 @@
  * 给 Agent 的安装流程只装 CLI（决策 20）：有终端环境时 CLI 覆盖全部能力；
  * MCP 是给没有 shell 的 AI 客户端的接入方式，配置指引独立在 buildMcpSetupGuide。
  * 安装入口按平台成对提供（决策 24）：install.sh 与 install.ps1，指令里要求 Agent 先判断平台再选。
+ * Windows 上只有 eat.cmd / eat 两个 shim（决策 29），指令里要写清楚「不要自己造 eat.ps1」。
  */
 export function buildAgentInstallGuide(publicUrl: string): string {
   return `# 安装 easy-agent-team CLI（eat）—— 给 AI Agent 的指令
@@ -29,8 +30,13 @@ export function buildAgentInstallGuide(publicUrl: string): string {
 
    两个脚本等价：把 CLI 装到 \`~/.eat/bin\`（Windows 为 \`%USERPROFILE%\\.eat\\bin\`）并自动配置 PATH——
    类 Unix 上软链到 \`~/.local/bin\`（以及可写时的 \`/usr/local/bin\`）并幂等写入 shell 配置（zsh 的 \`~/.zshenv\`、bash 的 \`~/.bashrc\` 等）；
-   Windows 上生成 \`eat.cmd\` / \`eat.ps1\` / \`eat\` 三个入口并写入用户级 PATH（新开终端生效）。
-   当前会话如找不到命令：类 Unix 执行 \`export PATH="$HOME/.eat/bin:$PATH"\`，PowerShell 执行 \`$env:Path = "$HOME\\.eat\\bin;$env:Path"\`，或直接用完整路径调用。
+   Windows 上生成 \`eat.cmd\`（cmd / PowerShell / 子进程通用）与 \`eat\`（Git Bash）两个入口并写入用户级 PATH（新开终端生效）。
+   **Windows 上没有也不要自己造 \`eat.ps1\`**：PowerShell 选命令时 \`.ps1\` 优先于 \`.cmd\`，而它默认的 ExecutionPolicy 是 Restricted，
+   落了 \`.ps1\` 只会让 \`eat\` 报「无法加载文件……因为在此系统上禁止运行脚本」；\`.cmd\` 不受执行策略约束，PowerShell 里直接敲 \`eat\` 即可。
+   当前会话如找不到命令：类 Unix 执行 \`export PATH="$HOME/.eat/bin:$PATH"\`，PowerShell 执行 \`$env:Path = "$HOME\\.eat\\bin;$env:Path"\`，或直接用完整路径调用
+   （Windows 兜底：\`cmd /c eat <子命令>\` 或 \`node "%USERPROFILE%\\.eat\\bin\\eat.js" <子命令>\`）。
+   注意：安装写的是**用户级** PATH，只对新进程生效——如果你（AI 客户端）在安装前就已启动，你拉起的终端继承的仍是旧 PATH，
+   这不是安装失败：本次会话用上面的临时 PATH 或完整路径继续，并告诉用户重启客户端后即可直接用 \`eat\`。
 
 2. **登录**（设备码授权，需要用户参与）：
    \`\`\`sh

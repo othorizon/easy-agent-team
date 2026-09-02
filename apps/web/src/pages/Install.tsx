@@ -159,11 +159,14 @@ export function InstallPage() {
               />
               <p className="mt-4 border-t pt-4 text-sm leading-relaxed text-muted-foreground">
                 安装脚本会把 CLI 放到 <InlineCode>%USERPROFILE%\.eat\bin</InlineCode>，生成{' '}
-                <InlineCode>eat.cmd</InlineCode>（cmd 与子进程）、<InlineCode>eat.ps1</InlineCode>（PowerShell）、
-                <InlineCode>eat</InlineCode>（Git Bash）三个入口，并把该目录写入用户级 PATH（新开终端生效）。
+                <InlineCode>eat.cmd</InlineCode>（cmd / PowerShell / 子进程通用）与 <InlineCode>eat</InlineCode>
+                （Git Bash）两个入口，并把该目录写入用户级 PATH（新开终端生效）。
+                这里不生成 <InlineCode>eat.ps1</InlineCode>：PowerShell 选命令时 <InlineCode>.ps1</InlineCode> 优先于{' '}
+                <InlineCode>.cmd</InlineCode>，会撞上默认「禁止运行脚本」的执行策略；
+                <InlineCode>.cmd</InlineCode> 不受该策略约束，PowerShell 里直接敲 <InlineCode>eat</InlineCode> 即可。
                 当前窗口找不到命令时执行{' '}
-                <InlineCode>$env:Path = &quot;$HOME\.eat\bin;$env:Path&quot;</InlineCode>。卸载：删除{' '}
-                <InlineCode>%USERPROFILE%\.eat</InlineCode> 目录，并从用户 PATH 中移除该项。
+                <InlineCode>$env:Path = &quot;$HOME\.eat\bin;$env:Path&quot;</InlineCode>；AI 客户端若在安装前就已启动，
+                需重启它才能继承新 PATH。卸载：删除 <InlineCode>%USERPROFILE%\.eat</InlineCode> 目录，并从用户 PATH 中移除该项。
               </p>
             </TabsContent>
           </Tabs>

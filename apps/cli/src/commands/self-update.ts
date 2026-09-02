@@ -35,7 +35,7 @@ export interface SelfUpdateOpts {
 /**
  * 自更新（决策 26）：重新拉取 /install/eat.js 覆盖本地产物。
  * 单命令跨平台——Agent 不必先判断操作系统再选 install.sh / install.ps1。
- * 只换 eat.js：PATH 与 shim（eat / eat.cmd / eat.ps1）由安装脚本落地，不随版本变化。
+ * 只换 eat.js：PATH 与 shim（类 Unix 的 eat，Windows 的 eat.cmd / eat）由安装脚本落地，不随版本变化。
  */
 export async function selfUpdate(opts: SelfUpdateOpts): Promise<void> {
   const server = resolveServerUrl(opts.server);
