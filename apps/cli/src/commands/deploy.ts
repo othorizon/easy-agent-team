@@ -32,7 +32,7 @@ async function resolveProject(api: Api, slug?: string): Promise<ProjectInfo> {
   const projects = await api.request<ProjectInfo[]>('GET', '/api/projects');
   if (slug) {
     const p = projects.find((x) => x.slug === slug);
-    if (!p) throw new Error(`项目 ${slug} 不存在（eat projects 查看）`);
+    if (!p) throw new Error(`项目 ${slug} 不存在（eat project list 查看）`);
     return p;
   }
   const deployable = projects.filter((p) => p.canDeploy);

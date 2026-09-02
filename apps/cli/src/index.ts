@@ -145,37 +145,6 @@ project
   .option('--list', '只列出当前容器')
   .action(runLogs);
 
-/**
- * 旧命令保留一轮（决策 28）：平台指南、AGENT.md、Agent 记忆里都还留着旧写法，
- * 直接删会让已装好的环境突然报错。隐藏不进 --help，执行时在 stderr 提示新写法。
- */
-const renamed = (oldForm: string, newForm: string): void => {
-  console.error(`提示: \`${oldForm}\` 已改名为 \`${newForm}\`，旧写法这一版仍可用。`);
-};
-program
-  .command('projects', { hidden: true })
-  .action(async () => {
-    renamed('eat projects', 'eat project list');
-    await projectList();
-  });
-/**
- * 这个旧命令没法再兼容了（决策 30）：部署记录改以 Dokploy 为准之后，查一次部署必须带项目，
- * 光有一个 ID 定位不到（Dokploy 的构建记录 id 不能反查出属于哪个项目）。给出新写法即可。
- */
-program
-  .command('deploy-status <id>', { hidden: true })
-  .action((id: string) => {
-    console.error(`\`eat deploy-status <id>\` 已停用：现在查部署要带项目。`);
-    console.error(`新写法: eat project status <project> --deployment ${id}`);
-    process.exitCode = 1;
-  });
-program
-  .command('deploy-list <project>', { hidden: true })
-  .action(async (slug: string) => {
-    renamed('eat deploy-list <project>', 'eat project deployments <project>');
-    await projectDeployments(slug, {});
-  });
-
 program
   .command('self-update')
   .description('把 eat CLI 更新到平台当前分发的版本（跨平台单命令，无需重跑安装脚本）')
