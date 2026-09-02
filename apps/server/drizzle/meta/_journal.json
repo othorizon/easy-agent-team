@@ -64,6 +64,13 @@
       "when": 1788332917064,
       "tag": "0008_dazzling_korvac",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788353578661,
+      "tag": "0009_outstanding_gauntlet",
+      "breakpoints": true
     }
   ]
 }

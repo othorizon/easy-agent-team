@@ -1,14 +1,21 @@
 /**
  * Dokploy API 客户端（挂载式：平台不自建部署系统）。
  * 端点基于 Dokploy REST API（x-api-key 认证）：
- *   POST {apiUrl}/application.deploy   { applicationId }
- *   GET  {apiUrl}/application.one?applicationId=...  → { applicationStatus }
+ *   POST {apiUrl}/application.deploy   { applicationId, title?, description? }（决策 30）
+ *   GET  {apiUrl}/application.one?applicationId=...  → { appName }（找容器用）
  *   GET  {apiUrl}/project.all          （只读；连通性测试与应用清单都用它）
- *   GET  {apiUrl}/deployment.allByType?id=...&type=application  → 构建记录列表
+ *   GET  {apiUrl}/deployment.allByType?id=...&type=application  → 构建记录列表（每应用最多 10 条，见下）
+ *   GET  {apiUrl}/deployment.queueList → 部署队列里的任务（构建记录还没建出来时的唯一去处，决策 30）
  *   GET  {apiUrl}/deployment.readLogs?deploymentId=...&tail=N   → 构建日志正文（决策 28）
  *   GET  {apiUrl}/docker.getContainersByAppNameMatch?appName=... → 应用的容器
  *   WS   {wsBase}/docker-container-logs?containerId=...          → 运行日志（决策 28）
  * 真实联调时如有出入，仅需在本文件校准。
+ *
+ * 两条来自 Dokploy 源码（对 v0.30.4 逐处核对）的硬约束，决定了平台侧的做法（决策 30）：
+ *   1. deploy 的 title / description 会被原样写进构建记录并持久化，**但 v0.25.0 才加**；
+ *      更早的版本 zod 会把这两个键静默丢掉（不报错），此时只能回落到按时间推断认领。
+ *   2. Dokploy 每建一条构建记录就调 removeLastTenDeployments，**每个应用只保留最近 10 条**，
+ *      超出的连日志文件一起删；硬编码不可配。所以部署历史的长期留存只能靠平台侧元数据。
  */
 import type { DokployApplication, DokployContainer, DokployDeployment } from '@eat/shared';
 import { WebSocket } from 'ws';
@@ -35,7 +42,16 @@ export interface DokployConn {
   apiToken: string;
 }
 
-export type DokployAppStatus = 'idle' | 'running' | 'done' | 'error' | 'unknown';
+/** Dokploy 部署队列里的一个任务（deployment.queueList 的一行，只取用得上的字段） */
+export interface DokployQueueJob {
+  applicationId: string;
+  title: string;
+  description: string;
+  /** BullMQ 的任务状态：waiting / delayed / active / completed / failed / paused */
+  state: string;
+  /** 入队时间（毫秒） */
+  timestamp: number;
+}
 
 export class DokployClient {
   constructor(private readonly conn: DokployConn) {}
@@ -108,27 +124,21 @@ export class DokployClient {
     return apps;
   }
 
-  async deploy(applicationId: string): Promise<void> {
+  /**
+   * 触发部署。tag 会写进构建记录的 title / description 并被 Dokploy 持久化（决策 30）：
+   * 平台靠 description 里的标记精确认领「这条构建记录是哪次平台部署」，不必再按时间猜。
+   * 注意响应体是空的——Dokploy 只把任务塞进队列，构建记录要等队列执行时才建出来。
+   */
+  async deploy(applicationId: string, tag?: { title: string; description: string }): Promise<void> {
     const res = await fetch(`${this.base}/application.deploy`, {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ applicationId }),
+      body: JSON.stringify({ applicationId, ...(tag ?? {}) }),
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
       throw new Error(`Dokploy 部署触发失败（HTTP ${res.status}）: ${(await res.text()).slice(0, 300)}`);
     }
-  }
-
-  async applicationStatus(applicationId: string): Promise<DokployAppStatus> {
-    const res = await fetch(`${this.base}/application.one?applicationId=${encodeURIComponent(applicationId)}`, {
-      headers: this.headers(),
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!res.ok) return 'unknown';
-    const json = (await res.json()) as { applicationStatus?: string };
-    const status = json.applicationStatus;
-    return status === 'idle' || status === 'running' || status === 'done' || status === 'error' ? status : 'unknown';
   }
 
   // ---------- 构建日志 / 运行日志（决策 28） ----------
@@ -150,9 +160,40 @@ export class DokployClient {
         deploymentId,
         title: str(raw.title),
         description: str(raw.description),
-        status: status === 'running' || status === 'done' || status === 'error' ? status : 'idle',
+        // Dokploy 的 deploymentStatus 枚举就是这四个；认不出的当作构建中，别自作主张判死
+        status:
+          status === 'running' || status === 'done' || status === 'error' || status === 'cancelled'
+            ? status
+            : 'running',
         errorMessage: str(raw.errorMessage),
         createdAt: str(raw.createdAt),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Dokploy 部署队列里的任务（决策 30）。触发到构建记录建出来之间有个空窗——部署是排队执行的，
+   * `createDeployment` 要等队列真的开始处理这个任务才调用——这个端点是那段时间里唯一能看到
+   * 「这次部署存在」的地方，`data` 就是入队时的 DeploymentJob，带着我们写进去的 title/description。
+   *
+   * 两个注意点：① 它是**组织级全量**，不按应用过滤，调用方自己筛 applicationId；
+   * ② 任务入队时带了 removeOnComplete/removeOnFail，跑完即从队列消失（那时构建记录已经有了）。
+   */
+  async queueList(): Promise<DokployQueueJob[]> {
+    const json = await this.getJson(`${this.base}/deployment.queueList`, '拉取 Dokploy 部署队列失败');
+    if (!Array.isArray(json)) return [];
+    const out: DokployQueueJob[] = [];
+    for (const raw of json as Array<Record<string, unknown>>) {
+      const data = (raw?.data ?? {}) as Record<string, unknown>;
+      const applicationId = data.applicationId;
+      if (typeof applicationId !== 'string' || applicationId === '') continue;
+      out.push({
+        applicationId,
+        title: str(data.titleLog),
+        description: str(data.descriptionLog),
+        state: str(raw.state),
+        timestamp: typeof raw.timestamp === 'number' ? raw.timestamp : 0,
       });
     }
     return out;

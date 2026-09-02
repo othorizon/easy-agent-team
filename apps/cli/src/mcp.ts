@@ -151,14 +151,16 @@ const TOOLS = [
   {
     name: 'get_deploy_status',
     description:
-      '查询部署状态。status=failed 时 error 字段已经带上 Dokploy 构建日志末尾的真实报错——据此改代码后重新 trigger_deploy；要看完整日志用 get_build_logs。传 project 看该项目最近一次部署，传 deploymentId 看指定那次，两个都不传则报错。',
+      '查询部署状态。status 取值 queued=排队中 / running=构建中 / done=成功 / error=失败 / cancelled=已取消 / archived=构建记录已被 Dokploy 清理。status=error 时 error 字段已带上构建日志末尾的真实报错——据此改代码后重新 trigger_deploy；要看完整日志用 get_build_logs。platform 为 null 表示这次是在 Dokploy 侧直接触发的、没经过平台的密钥扫描门禁。必须传 project；再传 deploymentId 看指定那次。',
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '项目 slug（看最近一次部署）' },
-        deploymentId: { type: 'string', description: '部署 ID（看指定那次）' },
-        history: { type: 'boolean', description: '传 true 并带 project，列出该项目的部署历史' },
+        project: { type: 'string', description: '项目 slug（list_projects 查看）' },
+        deploymentId: { type: 'string', description: '看指定那次：Dokploy 构建记录 id 或平台元数据 id 都行' },
+        history: { type: 'boolean', description: '传 true 列出该项目的部署历史' },
+        all: { type: 'boolean', description: '与 history 同用：列出平台完整历史，含 Dokploy 已清理构建记录的那些' },
       },
+      required: ['project'],
     },
   },
   {
@@ -322,12 +324,14 @@ export async function startMcpServer(): Promise<void> {
           return jsonResult(await api.request('POST', `/api/projects/${args.project as string}/deploy`, { report }));
         }
         case 'get_deploy_status': {
-          if (args.deploymentId) {
-            return jsonResult(await api.request('GET', `/api/deployments/${args.deploymentId as string}`));
-          }
-          if (!args.project) return errorResult(new Error('需要 project 或 deploymentId 参数'));
+          if (!args.project) return errorResult(new Error('需要 project 参数（部署记录以 Dokploy 为准，查询必须带项目）'));
           const slug = args.project as string;
-          const path = args.history ? `/api/projects/${slug}/deployments` : `/api/projects/${slug}/deployments/latest`;
+          const base = `/api/projects/${slug}/deployments`;
+          const path = args.deploymentId
+            ? `${base}/${encodeURIComponent(args.deploymentId as string)}`
+            : args.history
+              ? `${base}${args.all ? '?all=1' : ''}`
+              : `${base}/latest`;
           return jsonResult(await api.request('GET', path));
         }
         case 'get_build_logs': {

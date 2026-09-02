@@ -1,6 +1,6 @@
 {
   "name": "@eat/cli",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "easy-agent-team CLI（eat）与 MCP server",
   "type": "module",
   "bin": {

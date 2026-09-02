@@ -12,9 +12,19 @@ import type {
 import { Api } from '../client.js';
 import { scanWorkspace } from '../scan.js';
 
-const STATUS_LABEL: Record<string, string> = { deploying: '部署中', success: '成功', failed: '失败' };
-/** Dokploy 构建记录自己的状态取值 */
-const BUILD_LABEL: Record<string, string> = { running: '构建中', done: '成功', error: '失败', idle: '空闲' };
+/** 部署记录状态（决策 30：queued/archived 是平台补的，其余直接是 Dokploy 构建记录的取值） */
+const STATUS_LABEL: Record<string, string> = {
+  queued: '排队中',
+  running: '构建中',
+  done: '成功',
+  error: '失败',
+  cancelled: '已取消',
+  archived: '已归档',
+};
+/** 已经跑完、再查也不会变的状态 */
+const SETTLED = new Set(['done', 'error', 'cancelled']);
+/** Dokploy 构建记录自己的状态取值（build-logs 用） */
+const BUILD_LABEL: Record<string, string> = { running: '构建中', done: '成功', error: '失败', cancelled: '已取消' };
 const when = (iso: string): string => (iso ? iso.slice(0, 16).replace('T', ' ') : '');
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -82,66 +92,80 @@ export async function deployRun(slug: string | undefined, opts: { dir?: string; 
   }
   console.log(`检查通过，触发部署 ${project.slug} → Dokploy(${project.dokployApplicationId}) ...`);
   let dep = await api.request<DeploymentInfo>('POST', `/api/projects/${project.slug}/deploy`, { report });
-  if (dep.status === 'failed') {
-    console.error(`部署触发失败: ${dep.error}`);
-    process.exitCode = 1;
-    return;
-  }
-  // 短轮询等待结果，超时则交给 status 命令
+  // 触发失败服务端直接报错，走不到这里；这里拿到的必然是「已排进 Dokploy 队列」
+  const metaId = dep.platform?.id;
+  // 短轮询等待结果：按平台元数据 id 查，服务端会把它跟 Dokploy 的构建记录对上（决策 30）
   const deadline = Date.now() + 60_000;
-  while (dep.status === 'deploying' && Date.now() < deadline) {
+  while (!SETTLED.has(dep.status) && metaId && Date.now() < deadline) {
     await sleep(3000);
-    dep = await api.request<DeploymentInfo>('GET', `/api/deployments/${dep.id}`);
+    dep = await api.request<DeploymentInfo>('GET', `/api/projects/${project.slug}/deployments/${metaId}`);
     process.stdout.write('.');
   }
   console.log('');
-  if (dep.status === 'deploying') {
-    console.log(`仍在部署中，稍后查询: eat project status ${project.slug}`);
-  } else if (dep.status === 'success') {
-    console.log(`部署成功（${dep.id}）`);
-  } else {
+  if (dep.status === 'done') {
+    console.log(`部署成功（构建 ${dep.deploymentId ?? '-'}）`);
+  } else if (dep.status === 'error') {
     console.error(`部署失败: ${dep.error ?? '未知原因'}`);
     console.error(`完整构建日志: eat project build-logs ${project.slug}`);
     process.exitCode = 1;
+  } else if (dep.status === 'cancelled') {
+    console.error('部署已被取消');
+    process.exitCode = 1;
+  } else {
+    console.log(`仍在${STATUS_LABEL[dep.status] ?? dep.status}，稍后查询: eat project status ${project.slug}`);
   }
 }
 
-/** 打印一条部署记录（状态 + 失败原因） */
-function printDeployment(dep: DeploymentInfo): void {
-  console.log(
-    `[${STATUS_LABEL[dep.status]}] ${dep.projectSlug}（部署 ${dep.id.slice(0, 8)}，触发人 ${dep.triggeredByName}，${when(dep.createdAt)}）`,
-  );
-  if (dep.error) console.log(`原因: ${dep.error}`);
-  if (dep.status === 'failed') console.log(`完整构建日志: eat project build-logs ${dep.projectSlug}`);
+/** 一行里说清这次部署是谁发起的、有没有过平台的密钥扫描门禁（决策 30） */
+function originNote(dep: DeploymentInfo): string {
+  if (!dep.platform) return 'Dokploy 侧触发 ⚠ 未经平台密钥扫描';
+  const who = `${dep.platform.triggeredByName}（eat 平台）`;
+  return dep.platform.claim === 'inferred' ? `${who} ⚠ 归属按时间推断，未必准确` : who;
 }
 
-/** 项目最近一次部署的状态；--deployment 查指定那次（兼收完整 ID 与 8 位短 ID） */
+/** 打印一条部署记录（状态 + 来源 + 失败原因） */
+function printDeployment(dep: DeploymentInfo): void {
+  const id = dep.deploymentId ?? dep.platform?.id ?? '-';
+  console.log(`[${STATUS_LABEL[dep.status] ?? dep.status}] ${dep.projectSlug}（${id}，${when(dep.createdAt)}）`);
+  console.log(`来源: ${originNote(dep)}`);
+  const report = dep.platform?.report;
+  if (report) console.log(`检查: 扫描 ${report.scannedFiles} 个文件 / ${report.findings.length} 个问题`);
+  if (dep.status === 'archived') {
+    console.log('说明: Dokploy 已清理掉这次的构建记录（每个应用只留最近 10 次），只剩平台侧元数据');
+  }
+  if (dep.error) console.log(`原因: ${dep.error}`);
+  if (dep.status === 'error') console.log(`完整构建日志: eat project build-logs ${dep.projectSlug}`);
+}
+
+/** 项目最近一次部署的状态；--deployment 查指定那次（兼收 Dokploy 构建 id 与平台元数据 id，支持前缀） */
 export async function projectStatus(slug: string, opts: { deployment?: string }): Promise<void> {
   const api = Api.fromSaved();
-  const dep = opts.deployment
-    ? await api.request<DeploymentInfo>('GET', `/api/deployments/${opts.deployment}`)
-    : await api.request<DeploymentInfo>('GET', `/api/projects/${slug}/deployments/latest`);
-  printDeployment(dep);
+  const path = opts.deployment
+    ? `/api/projects/${slug}/deployments/${encodeURIComponent(opts.deployment)}`
+    : `/api/projects/${slug}/deployments/latest`;
+  printDeployment(await api.request<DeploymentInfo>('GET', path));
 }
 
-/** 老命令 eat deploy-status <id> 的实现，保留一轮 */
-export async function deployStatus(id: string): Promise<void> {
+export async function projectDeployments(slug: string, opts: { all?: boolean }): Promise<void> {
   const api = Api.fromSaved();
-  printDeployment(await api.request<DeploymentInfo>('GET', `/api/deployments/${id}`));
-}
-
-export async function projectDeployments(slug: string): Promise<void> {
-  const api = Api.fromSaved();
-  const rows = await api.request<DeploymentInfo[]>('GET', `/api/projects/${slug}/deployments`);
+  const rows = await api.request<DeploymentInfo[]>(
+    'GET',
+    `/api/projects/${slug}/deployments${opts.all ? '?all=1' : ''}`,
+  );
   if (rows.length === 0) {
     console.log(`暂无部署记录（eat deploy ${slug} 触发一次）`);
     return;
   }
   for (const d of rows) {
-    console.log(
-      `${when(d.createdAt)}  [${STATUS_LABEL[d.status]}] ${d.id.slice(0, 8)} by ${d.triggeredByName}${d.error ? ' — ' + d.error.split('\n')[0] : ''}`,
-    );
+    const id = (d.deploymentId ?? d.platform?.id ?? '-').slice(0, 8);
+    const err = d.error ? ` — ${d.error.split('\n')[0]}` : '';
+    console.log(`${when(d.createdAt)}  [${STATUS_LABEL[d.status] ?? d.status}] ${id.padEnd(8)}  ${originNote(d)}${err}`);
   }
+  console.log(
+    opts.all
+      ? '\n已归档 = Dokploy 那边的构建记录已被清理，只剩平台侧元数据（谁触发的、扫描报告）'
+      : `\n共 ${rows.length} 条。Dokploy 每个应用只保留最近 10 次构建；看平台完整历史用: eat project deployments ${slug} --all`,
+  );
 }
 
 export async function projectList(): Promise<void> {

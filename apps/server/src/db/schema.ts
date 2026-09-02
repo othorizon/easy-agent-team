@@ -496,10 +496,19 @@ export const projectMembers = pgTable(
   (t) => [uniqueIndex('project_member_idx').on(t.projectId, t.userId)],
 );
 
-/** 部署记录；CLI 端检查报告存 report（决策 #8：不建平台侧 runner） */
+/**
+ * 部署元数据（决策 30）。部署记录本身与其状态**一律以 Dokploy 的构建记录为准**，这张表只存
+ * Dokploy 那边没有的业务信息：谁触发的、带了什么 CLI 前置检查报告（决策 #8）。
+ * 刻意不存 status / error——那些实时读 Dokploy，在库里存一份必然过期（旧实现就卡在这上面）。
+ *
+ * 行只增不删：Dokploy 每个应用只保留最近 10 条构建记录（removeLastTenDeployments，硬编码不可配），
+ * 超出的连构建日志一起删掉；而「谁在什么时候带着什么扫描报告部署了生产」是平台的合规记录，
+ * 不能跟着一起消失，所以元数据留着，列表里显示为 archived。
+ */
 export const deployments = pgTable(
   'deployment',
   {
+    /** 触发时由服务端显式生成，并以 `eat:<id>` 写进 Dokploy 构建记录的 description 供精确认领 */
     id: uuid('id').primaryKey().defaultRandom(),
     projectId: uuid('project_id')
       .notNull()
@@ -507,20 +516,18 @@ export const deployments = pgTable(
     triggeredBy: uuid('triggered_by')
       .notNull()
       .references(() => users.id),
-    status: text('status', { enum: ['deploying', 'success', 'failed'] })
-      .notNull()
-      .default('deploying'),
     /**
-     * Dokploy 那边对应的构建记录 id（决策 28）。触发时 Dokploy 还没建出记录（部署是排队执行的），
-     * 所以是首次查状态时按时间绑定；绑上之后状态与日志都以这条构建记录为准。
+     * 认领到的 Dokploy 构建记录 id。触发时 Dokploy 还没建出记录（部署是排队执行的），
+     * 首次读到就回写；唯一索引保证一条构建记录不会被两行元数据同时认领。
      */
     dokployDeploymentId: text('dokploy_deployment_id'),
     report: jsonb('report').$type<Record<string, unknown>>(),
-    error: text('error'),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('deployment_project_idx').on(t.projectId)],
+  (t) => [
+    index('deployment_project_idx').on(t.projectId),
+    uniqueIndex('deployment_dokploy_idx').on(t.dokployDeploymentId),
+  ],
 );
 
 export const auditLogs = pgTable(

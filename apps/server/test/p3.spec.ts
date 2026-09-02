@@ -22,8 +22,8 @@ let outsiderToken: string;
 let memberId: string;
 
 // mock Dokploy
-const deployCalls: string[] = [];
-let mockAppStatus = 'running';
+/** Dokploy 收到的 application.deploy 请求体（决策 30 后还要断言认领标记有没有带上） */
+const deployCalls: Array<Record<string, string>> = [];
 /**
  * project.all 的真实形状：新版 Dokploy 把 applications 挂在 environments[] 下（真机实测），
  * 老版本直接挂在项目下；两种都要认。响应里还有 postgres / compose 等其他服务，清单只应取 applications，
@@ -61,10 +61,12 @@ let mockProjectAll: unknown = [
   { projectId: 'proj-3', name: '空项目', compose: [{ composeId: 'c-1' }] },
 ];
 /**
- * 构建记录（决策 28）：部署状态以它为准而不是 applicationStatus——后者是「应用当前状态」，
- * 同一应用被别人再次部署就会串味。createdAt 由用例按需设置成「触发之后」才能被绑上。
+ * 构建记录（决策 28 / 30）：部署记录与状态的唯一事实源。description 里的 `eat:<id>` 标记
+ * 是平台认领「这条构建记录属于哪次平台部署」的依据；Dokploy 侧直接触发的没有这个标记。
  */
 let mockBuilds: Array<Record<string, unknown>> = [];
+/** Dokploy 的部署队列（决策 30）：构建记录还没建出来的那段时间里唯一能看到这次部署的地方 */
+let mockQueue: Array<Record<string, unknown>> = [];
 let mockBuildLogs = '';
 let mockAppName = 'crm-tool-app-7f3a';
 let mockContainers: Array<Record<string, unknown>> = [];
@@ -116,7 +118,7 @@ beforeAll(async () => {
       let body = '';
       req.on('data', (c) => (body += c));
       req.on('end', () => {
-        deployCalls.push(JSON.parse(body).applicationId);
+        deployCalls.push(JSON.parse(body) as Record<string, string>);
         res.writeHead(200, { 'content-type': 'application/json' }).end('{}');
       });
       return;
@@ -132,11 +134,17 @@ beforeAll(async () => {
     if (req.method === 'GET' && req.url?.startsWith('/api/application.one')) {
       res
         .writeHead(200, { 'content-type': 'application/json' })
-        .end(JSON.stringify({ applicationStatus: mockAppStatus, appName: mockAppName }));
+        .end(JSON.stringify({ appName: mockAppName }));
+      return;
+    }
+    if (req.method === 'GET' && req.url?.startsWith('/api/deployment.queueList')) {
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(mockQueue));
       return;
     }
     if (req.method === 'GET' && req.url?.startsWith('/api/deployment.allByType')) {
-      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(mockBuilds));
+      // 构建记录是按应用查的：mockBuilds 都属于 app-123，别的应用一律空清单
+      const id = new URL(req.url, 'http://x').searchParams.get('id');
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(id === 'app-123' ? mockBuilds : []));
       return;
     }
     if (req.method === 'GET' && req.url?.startsWith('/api/deployment.readLogs')) {
@@ -331,8 +339,14 @@ describe('项目与成员', () => {
   });
 });
 
-describe('部署门禁与状态', () => {
-  let deployId: string;
+describe('部署门禁与部署记录（决策 30）', () => {
+  let metaId: string;
+  const iso = (offsetMs = 0) => new Date(Date.now() + offsetMs).toISOString();
+  const ageAllDeployments = async (interval: string) => {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    await pool.query(`update deployment set created_at = now() - interval '${interval}'`);
+    await pool.end();
+  };
 
   it('无报告 / 报告未通过 / 非成员，三种拒绝', async () => {
     const noReport = await api('POST', '/api/projects/crm-tool/deploy', { token: memberToken, payload: {} });
@@ -357,39 +371,88 @@ describe('部署门禁与状态', () => {
     expect(deployCalls).toHaveLength(0);
   });
 
-  it('成员携带通过报告部署成功，Dokploy 收到调用', async () => {
+  it('触发部署：Dokploy 收到带认领标记的调用，记录先是「排队中」', async () => {
+    mockBuilds = [];
+    mockQueue = [];
     const r = await api('POST', '/api/projects/crm-tool/deploy', {
       token: memberToken,
       payload: { report: passingReport() },
     });
     expect(r.status).toBe(201);
-    expect(r.body.status).toBe('deploying');
-    deployId = r.body.id;
-    expect(deployCalls).toEqual(['app-123']);
+    // 构建记录要等 Dokploy 的队列执行到才建出来，此刻只可能是排队中
+    expect(r.body.status).toBe('queued');
+    expect(r.body.deploymentId).toBeNull();
+    expect(r.body.origin).toBe('platform');
+    metaId = r.body.platform.id;
+
+    expect(deployCalls).toHaveLength(1);
+    expect(deployCalls[0].applicationId).toBe('app-123');
+    // 标记必须原样带给 Dokploy——整条认领链路都挂在它上面（决策 30）
+    expect(deployCalls[0].description).toBe(`eat:${metaId}`);
+    expect(deployCalls[0].title).toContain('组员');
   });
 
-  it('状态以 Dokploy 构建记录为准：绑定本次构建，running 保持 deploying，done 变 success', async () => {
-    // 触发之前就存在的旧构建不能被认成本次
-    mockBuilds = [
-      { deploymentId: 'build-old', title: '上一次', status: 'error', createdAt: new Date(Date.now() - 3600_000).toISOString() },
-      { deploymentId: 'build-mine', title: 'Manual deployment', status: 'running', createdAt: new Date().toISOString() },
+  it('排队阶段：从 Dokploy 的部署队列里看到自己刚触发的那次，别的应用不串味', async () => {
+    mockQueue = [
+      {
+        data: { applicationId: 'app-123', titleLog: 'eat · 组员 · crm-tool', descriptionLog: `eat:${metaId}` },
+        state: 'waiting',
+        timestamp: Date.now(),
+      },
+      { data: { applicationId: 'app-other', titleLog: '别人的项目', descriptionLog: '' }, state: 'waiting', timestamp: Date.now() },
     ];
-    let d = await api('GET', `/api/deployments/${deployId}`, { token: memberToken });
-    expect(d.body.status).toBe('deploying');
-    expect(d.body.dokployDeploymentId).toBe('build-mine');
-
-    mockBuilds = [{ ...mockBuilds[1], status: 'done' }, mockBuilds[0]];
-    d = await api('GET', `/api/deployments/${deployId}`, { token: memberToken });
-    expect(d.body.status).toBe('success');
-    const list = await api('GET', '/api/projects/crm-tool/deployments', { token: ownerToken });
-    expect(list.body[0].status).toBe('success');
-    expect(list.body[0].report.passed).toBe(true);
+    const list = await api('GET', '/api/projects/crm-tool/deployments', { token: memberToken });
+    expect(list.body).toHaveLength(1);
+    expect(list.body[0].status).toBe('queued');
+    expect(list.body[0].platform.id).toBe(metaId);
   });
 
-  it('最近一次部署：不用记部署 ID 也能查状态，没部署过回 404', async () => {
+  it('构建记录出现后靠标记精确认领；同时刻在 Dokploy 侧触发的部署也列出来，且不被张冠李戴', async () => {
+    mockQueue = [];
+    mockBuilds = [
+      // 同一时刻还有一次在 Dokploy 控制台点的部署：按时间猜的老做法正是在这里认错人
+      { deploymentId: 'build-console', title: 'Manual deployment', description: '', status: 'running', createdAt: iso() },
+      {
+        deploymentId: 'build-mine',
+        title: 'eat · 组员 · crm-tool',
+        description: `eat:${metaId}`,
+        status: 'running',
+        createdAt: iso(),
+      },
+    ];
+    const list = await api('GET', '/api/projects/crm-tool/deployments', { token: memberToken });
+    expect(list.body).toHaveLength(2);
+
+    const mine = list.body.find((d: Record<string, never>) => d.deploymentId === 'build-mine');
+    expect(mine.origin).toBe('platform');
+    expect(mine.platform.id).toBe(metaId);
+    expect(mine.platform.claim).toBe('tagged');
+    expect(mine.platform.triggeredByName).toBe('组员');
+    expect(mine.platform.report.passed).toBe(true);
+
+    const fromConsole = list.body.find((d: Record<string, never>) => d.deploymentId === 'build-console');
+    expect(fromConsole.origin).toBe('dokploy');
+    expect(fromConsole.platform).toBeNull();
+  });
+
+  it('状态直接用 Dokploy 的取值，cancelled 不再被显示成「空闲」', async () => {
+    mockBuilds = [{ ...mockBuilds[1], status: 'done' }, { ...mockBuilds[0], status: 'cancelled' }];
+    const list = await api('GET', '/api/projects/crm-tool/deployments', { token: ownerToken });
+    expect(list.body.map((d: Record<string, never>) => d.status).sort()).toEqual(['cancelled', 'done']);
+  });
+
+  it('最近一次部署：Dokploy 构建 id 与平台元数据 id 都能查，都支持前 8 位；没部署过回 404', async () => {
     const latest = await api('GET', '/api/projects/crm-tool/deployments/latest', { token: memberToken });
     expect(latest.status).toBe(200);
-    expect(latest.body.id).toBe(deployId);
+    expect(latest.body.platform.id).toBe(metaId);
+
+    const byBuildId = await api('GET', '/api/projects/crm-tool/deployments/build-mine', { token: memberToken });
+    expect(byBuildId.body.deploymentId).toBe('build-mine');
+    const byMetaId = await api('GET', `/api/projects/crm-tool/deployments/${metaId}`, { token: memberToken });
+    expect(byMetaId.body.deploymentId).toBe('build-mine');
+    const byShortMetaId = await api('GET', `/api/projects/crm-tool/deployments/${metaId.slice(0, 8)}`, { token: memberToken });
+    expect(byShortMetaId.body.deploymentId).toBe('build-mine');
+
     await api('POST', '/api/projects', {
       token: ownerToken,
       payload: { slug: 'never-deployed', name: '没部署过', dokployApplicationId: 'app-none' },
@@ -398,66 +461,120 @@ describe('部署门禁与状态', () => {
     expect(none.status).toBe(404);
   });
 
-  it('短 ID 查询：前 8 位可查，过短拒绝，无匹配返回 404 而非 500', async () => {
-    const short = await api('GET', `/api/deployments/${deployId.slice(0, 8)}`, { token: memberToken });
-    expect(short.status).toBe(200);
-    expect(short.body.id).toBe(deployId);
-
-    // 少于 8 位：拒绝，避免过短前缀命中一大片
-    const tooShort = await api('GET', `/api/deployments/${deployId.slice(0, 6)}`, { token: memberToken });
+  it('查单条的边界：过短 400、无匹配 404、命中多条 409', async () => {
+    const tooShort = await api('GET', `/api/projects/crm-tool/deployments/${metaId.slice(0, 6)}`, { token: memberToken });
     expect(tooShort.status).toBe(400);
     expect(tooShort.body.error).toBe('VALIDATION_FAILED');
+    expect((await api('GET', '/api/projects/crm-tool/deployments/zzzzzzzz', { token: memberToken })).status).toBe(404);
 
-    // 非 UUID 字符与无匹配前缀：此前会让 PG 的 uuid 语法错误冒泡成 500
-    expect((await api('GET', '/api/deployments/zzzzzzzz', { token: memberToken })).status).toBe(404);
-    expect((await api('GET', '/api/deployments/0123456789ab', { token: memberToken })).status).toBe(404);
-  });
-
-  it('短 ID 命中多条：409 提示改用完整 ID', async () => {
+    // UUID 随机，构造不出天然碰撞，这里插一条与 metaId 同前缀的元数据
     const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-    // UUID 随机，构造不出天然碰撞，这里插一条与 deployId 同前缀的记录
-    const twin = `${deployId.slice(0, 8)}-dead-4bee-8000-000000000001`;
-    const src = (await pool.query('select project_id, triggered_by from deployment where id = $1', [deployId])).rows[0];
-    await pool.query('insert into deployment (id, project_id, triggered_by, status) values ($1, $2, $3, $4)', [
+    const twin = `${metaId.slice(0, 8)}-dead-4bee-8000-000000000001`;
+    const src = (await pool.query('select project_id, triggered_by from deployment where id = $1', [metaId])).rows[0];
+    await pool.query('insert into deployment (id, project_id, triggered_by) values ($1, $2, $3)', [
       twin,
       src.project_id,
       src.triggered_by,
-      'success',
     ]);
-
-    const r = await api('GET', `/api/deployments/${deployId.slice(0, 8)}`, { token: memberToken });
-    expect(r.status).toBe(409);
-    expect(r.body.error).toBe('AMBIGUOUS_ID');
-    expect(r.body.message).toContain('完整 ID');
-
+    const dup = await api('GET', `/api/projects/crm-tool/deployments/${metaId.slice(0, 8)}`, { token: memberToken });
+    expect(dup.status).toBe(409);
+    expect(dup.body.error).toBe('AMBIGUOUS_ID');
     await pool.query('delete from deployment where id = $1', [twin]);
     await pool.end();
   });
 
-  it('构建失败 → failed，error 直接带上构建日志末尾的真实报错（决策 28）', async () => {
-    const r = await api('POST', '/api/projects/crm-tool/deploy', { token: ownerToken, payload: { report: passingReport() } });
-    mockBuilds = [{ deploymentId: 'build-fail', title: 'Manual deployment', status: 'error', createdAt: new Date().toISOString() }];
+  it('构建失败：error 带上构建日志末尾的真实报错，但日志只给项目成员看（决策 28）', async () => {
+    mockBuilds = [
+      {
+        deploymentId: 'build-mine',
+        title: 'eat · 组员 · crm-tool',
+        description: `eat:${metaId}`,
+        status: 'error',
+        errorMessage: 'boom',
+        createdAt: iso(),
+      },
+    ];
     mockBuildLogs = 'Initializing deployment\nnpm ERR! code E404\nnpm ERR! 404 Not Found - GET https://registry/foo\n\n❌ 构建失败\n';
-    const d = await api('GET', `/api/deployments/${r.body.id}`, { token: ownerToken });
-    expect(d.body.status).toBe('failed');
+    const asMember = await api('GET', '/api/projects/crm-tool/deployments/latest', { token: memberToken });
+    expect(asMember.body.status).toBe('error');
     // 不再是「详见 Dokploy 控制台」那种打发人的文案
-    expect(d.body.error).toContain('npm ERR! 404 Not Found');
-    expect(d.body.error).toContain('eat project build-logs crm-tool');
-    expect(d.body.dokployDeploymentId).toBe('build-fail');
+    expect(asMember.body.error).toContain('npm ERR! 404 Not Found');
+    expect(asMember.body.error).toContain('eat project build-logs crm-tool');
+
+    // 日志可能带出构建期注入的密钥：非项目成员只看得到 Dokploy 记录上那句 errorMessage
+    const asOutsider = await api('GET', '/api/projects/crm-tool/deployments/latest', { token: outsiderToken });
+    expect(asOutsider.body.status).toBe('error');
+    expect(asOutsider.body.error).toBe('boom');
   });
 
-  it('绑不上构建记录时先维持 deploying，超时才回落到应用状态', async () => {
-    const r = await api('POST', '/api/projects/crm-tool/deploy', { token: ownerToken, payload: { report: passingReport() } });
+  it('老版本 Dokploy 丢掉标记时，回落到按时间推断认领，并标注 inferred', async () => {
+    // 把已有元数据推老，让它们落在推断时间窗之外，避免旧记录来抢这条构建
+    await ageAllDeployments('2 hours');
     mockBuilds = [];
-    mockAppStatus = 'done';
-    // Dokploy 的部署是排队执行的，记录还没建出来时不能拿应用状态当结论
-    expect((await api('GET', `/api/deployments/${r.body.id}`, { token: ownerToken })).body.status).toBe('deploying');
+    mockQueue = [];
+    const r = await api('POST', '/api/projects/crm-tool/deploy', { token: ownerToken, payload: { report: passingReport() } });
+    // 老版本 Dokploy（< v0.25.0）不认 title/description，建出来的记录没有标记
+    mockBuilds = [{ deploymentId: 'build-untagged', title: 'Manual deployment', description: '', status: 'done', createdAt: iso(1000) }];
 
-    // 但也不能永远卡着：把创建时间改老，走回落分支
-    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-    await pool.query("update deployment set created_at = now() - interval '30 minutes' where id = $1", [r.body.id]);
-    await pool.end();
-    expect((await api('GET', `/api/deployments/${r.body.id}`, { token: ownerToken })).body.status).toBe('success');
+    const one = await api('GET', `/api/projects/crm-tool/deployments/${r.body.platform.id}`, { token: ownerToken });
+    expect(one.body.deploymentId).toBe('build-untagged');
+    expect(one.body.status).toBe('done');
+    // 归属是猜的，如实标出来，让 CLI / 控制台能提示用户
+    expect(one.body.platform.claim).toBe('inferred');
+  });
+
+  it('Dokploy 清理掉构建记录后：默认视图看不到，--all 仍能看到平台侧历史', async () => {
+    await ageAllDeployments('3 hours');
+    // 再补一次「刚部署完就被清理」：认领过的元数据不能因为「刚触发不久」又被退回成排队中
+    mockBuilds = [];
+    mockQueue = [];
+    const fresh = await api('POST', '/api/projects/crm-tool/deploy', { token: ownerToken, payload: { report: passingReport() } });
+    mockBuilds = [
+      {
+        deploymentId: 'build-fresh',
+        title: 'eat · 项目主 · crm-tool',
+        description: `eat:${fresh.body.platform.id}`,
+        status: 'done',
+        createdAt: iso(),
+      },
+    ];
+    // 先查一次让它完成认领（dokploy_deployment_id 回写），再模拟 Dokploy 的清理
+    await api('GET', '/api/projects/crm-tool/deployments', { token: memberToken });
+    // Dokploy 每个应用只留最近 10 条，更早的构建记录连日志一起被删掉
+    mockBuilds = [];
+
+    const def = await api('GET', '/api/projects/crm-tool/deployments', { token: memberToken });
+    expect(def.body).toHaveLength(0);
+
+    const all = await api('GET', '/api/projects/crm-tool/deployments?all=1', { token: memberToken });
+    expect(all.body.length).toBeGreaterThan(0);
+    expect(all.body.every((d: Record<string, never>) => d.status === 'archived')).toBe(true);
+    // 「谁触发的、带了什么扫描报告」是平台的合规记录，不能跟着 Dokploy 的清理一起消失
+    const mine = all.body.find((d: Record<string, never>) => d.platform.id === metaId);
+    expect(mine.platform.triggeredByName).toBe('组员');
+    expect(mine.platform.report.passed).toBe(true);
+    expect(mine.deploymentId).toBe('build-mine');
+    // 「最近一次部署」此时要说清是被清理了，而不是「还没部署过」——后者会误导人再部署一次
+    const latest = await api('GET', '/api/projects/crm-tool/deployments/latest', { token: memberToken });
+    expect(latest.status).toBe(404);
+    expect(latest.body.message).toContain('--all');
+
+    // 刚认领完就被清理的那条也归档，而不是退回排队中
+    const justCleaned = all.body.find((d: Record<string, never>) => d.platform.id === fresh.body.platform.id);
+    expect(justCleaned.status).toBe('archived');
+    expect(justCleaned.deploymentId).toBe('build-fresh');
+  });
+
+  it('认领过的元数据不再去认领别人的构建：Dokploy 侧的部署不会被冒认成平台部署', async () => {
+    // 承上：Dokploy 的构建记录已被清空，平台元数据全是「认领过、构建记录已没了」的状态。
+    // 此时有人在 Dokploy 侧点了一次部署——按时间推断的老做法会让上面那条元数据把它认走
+    mockBuilds = [
+      { deploymentId: 'build-console-late', title: 'Manual deployment', description: '', status: 'done', createdAt: iso() },
+    ];
+    const list = await api('GET', '/api/projects/crm-tool/deployments', { token: memberToken });
+    const row = list.body.find((d: Record<string, never>) => d.deploymentId === 'build-console-late');
+    expect(row.origin).toBe('dokploy');
+    expect(row.platform).toBeNull();
   });
 });
 

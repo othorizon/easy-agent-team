@@ -99,35 +99,83 @@ export const triggerDeploySchema = z.object({
 });
 export type TriggerDeployRequest = z.infer<typeof triggerDeploySchema>;
 
-export const deploymentStatusSchema = z.enum(['deploying', 'success', 'failed']);
+/**
+ * 一条部署记录的状态（决策 30：以 Dokploy 为准）。
+ * running / done / error / cancelled 直接是 Dokploy 构建记录的取值，平台不再自己维护一套；
+ * 另有两个平台补充的状态：
+ *   queued    = 已提交给 Dokploy、还在它的部署队列里排队，构建记录尚未建出；
+ *   archived  = Dokploy 已按「每个应用只留最近 10 条」把构建记录清理掉，只剩平台侧元数据。
+ */
+export const deploymentStatusSchema = z.enum(['queued', 'running', 'done', 'error', 'cancelled', 'archived']);
 export type DeploymentStatus = z.infer<typeof deploymentStatusSchema>;
 
-export const deploymentInfoSchema = z.object({
+/** 部署来源：platform=经 eat 平台触发（带密钥扫描报告）/ dokploy=直接在 Dokploy 侧触发，未经平台门禁 */
+export const deploymentOriginSchema = z.enum(['platform', 'dokploy']);
+export type DeploymentOrigin = z.infer<typeof deploymentOriginSchema>;
+
+/**
+ * 平台为一次部署附加的业务元数据（决策 30）——Dokploy 的构建记录上没有这些信息。
+ * claim 说明这份元数据是怎么跟构建记录对上的：
+ *   tagged   = 触发时写进 Dokploy description 的标记精确匹配（Dokploy ≥ v0.25.0），可靠；
+ *   inferred = 按触发时间就近推断（老版本 Dokploy、或本次改造之前的历史记录），可能张冠李戴；
+ *   none     = 还没跟任何构建记录关联——要么刚触发、Dokploy 还没把记录建出来（queued），
+ *              要么记录已被 Dokploy 清理（archived）。这两种情况下归属都是确定的，
+ *              因为这行本来就是从平台元数据长出来的。
+ */
+export const deploymentMetaSchema = z.object({
   id: z.string(),
-  projectSlug: z.string(),
-  status: deploymentStatusSchema,
   triggeredBy: z.string(),
   triggeredByName: z.string(),
-  error: z.string().nullable(),
-  /** 对应的 Dokploy 构建记录 id（触发后首次查状态时绑定；绑不上为 null） */
-  dokployDeploymentId: z.string().nullable(),
   report: precheckReportSchema.nullable(),
+  claim: z.enum(['tagged', 'inferred', 'none']),
+  /** 平台侧触发时间；Dokploy 构建记录自己的时间在外层 createdAt */
+  triggeredAt: z.string(),
+});
+export type DeploymentMeta = z.infer<typeof deploymentMetaSchema>;
+
+/**
+ * 一条部署记录：主体是 Dokploy 的构建记录，platform 是平台能补上的元数据。
+ * platform 为 null 即「直接在 Dokploy 侧触发、没经过平台的密钥扫描门禁」。
+ */
+export const deploymentInfoSchema = z.object({
+  projectSlug: z.string(),
+  /** Dokploy 构建记录 id；排队中、以及记录已被 Dokploy 清理时为 null */
+  deploymentId: z.string().nullable(),
+  status: deploymentStatusSchema,
+  origin: deploymentOriginSchema,
+  /** 构建记录标题：平台触发的带 eat 前缀，Dokploy 侧触发的是 Manual deployment */
+  title: z.string(),
+  /** 失败原因：列表里是构建记录上的 errorMessage，查单条时会补上构建日志末尾几行（决策 28） */
+  error: z.string().nullable(),
   createdAt: z.string(),
-  updatedAt: z.string(),
+  platform: deploymentMetaSchema.nullable(),
 });
 export type DeploymentInfo = z.infer<typeof deploymentInfoSchema>;
+
+/**
+ * 部署历史查询。默认（all=false）以 Dokploy 的构建记录为准，只有它还留着的那些（最多 10 条）；
+ * all=true 改以平台元数据为主干列出全部历史，Dokploy 已清理的显示为 archived。
+ */
+export const deploymentsQuerySchema = z.object({
+  all: z
+    .string()
+    .optional()
+    .transform((v) => v === '' || v === 'true' || v === '1'),
+});
+export type DeploymentsQuery = z.infer<typeof deploymentsQuerySchema>;
 
 // ---------- 构建日志 / 运行日志（决策 28） ----------
 
 /**
- * Dokploy 上的一次构建记录。status 用的是 Dokploy 自己的取值
- * （running=构建中 / done=成功 / error=失败），不是平台侧的 deploying|success|failed。
+ * Dokploy 上的一次构建记录。status 用的是 Dokploy 自己的取值——它的 deploymentStatus 枚举
+ * 就是 running=构建中 / done=成功 / error=失败 / cancelled=被取消这四个，没有别的
+ * （曾经写成 idle，那是 application.applicationStatus 的取值，被取消的构建会被错显示成「空闲」）。
  */
 export const dokployDeploymentSchema = z.object({
   deploymentId: z.string(),
   title: z.string(),
   description: z.string(),
-  status: z.enum(['running', 'done', 'error', 'idle']),
+  status: z.enum(['running', 'done', 'error', 'cancelled']),
   errorMessage: z.string(),
   createdAt: z.string(),
 });

@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 6;
+export const PLATFORM_GUIDE_VERSION = 7;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -48,6 +48,8 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 
 日志读到的报错是排查依据，改完代码重新 \`eat deploy\` 即可；日志可能带出构建期注入的密钥，不要把整段日志贴进求助或提交里。
 
+部署状态与历史都以 Dokploy 为准：\`status\` 取值是 \`queued\`(排队中) / \`running\`(构建中) / \`done\`(成功) / \`error\`(失败) / \`cancelled\`(已取消) / \`archived\`(构建记录已被 Dokploy 清理)。\`eat project deployments <project>\` 列出的是 Dokploy 上还留着的最近 10 次构建——**其中可能有人绕开平台、直接在 Dokploy 侧触发的部署**，这些记录的 \`platform\` 为 null、没有密钥扫描报告，排查问题时要把它们算进来；加 \`--all\` 看平台侧的完整历史。
+
 ## CLI 速查
 
 | 命令 | 用途 |
@@ -57,7 +59,7 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 | \`eat skill push <dir>\` | 把本地写好的 skill 上传到平台纳管分享 |
 | \`eat ask create / show / reply\` | 求助的 CLI 入口 |
 | \`eat deploy [project]\` | 触发部署（自动前置检查） |
-| \`eat project list / status / deployments\` | 项目清单 / 最近一次部署状态 / 部署历史 |
+| \`eat project list / status / deployments\` | 项目清单 / 最近一次部署状态 / 部署历史（\`--all\` 看完整历史） |
 | \`eat project build-logs / run-logs <project>\` | 构建日志 / 运行日志（排查部署与线上问题的第一手材料） |
 | \`eat db list\` | 名下数据库账号 |
 | \`eat whoami\` | 当前身份；报错说明凭证失效，让用户重新 \`eat login\` |

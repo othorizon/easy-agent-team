@@ -29,14 +29,38 @@ import { TableSkeleton } from '../components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { formatDateTime } from '../lib/utils';
 
+/** 部署状态（决策 30：queued/archived 是平台补的，其余直接是 Dokploy 构建记录的取值） */
 const STATUS_BADGE: Record<string, JSX.Element> = {
-  deploying: <Badge>部署中</Badge>,
-  success: <Badge variant="success">成功</Badge>,
-  failed: <Badge variant="destructive">失败</Badge>,
+  queued: <Badge>排队中</Badge>,
+  running: <Badge>构建中</Badge>,
+  done: <Badge variant="success">成功</Badge>,
+  error: <Badge variant="destructive">失败</Badge>,
+  cancelled: <Badge variant="outline">已取消</Badge>,
+  archived: <Badge variant="outline">已归档</Badge>,
 };
 
 /** Dokploy 构建记录自己的状态取值 */
-const BUILD_STATUS: Record<string, string> = { running: '构建中', done: '成功', error: '失败', idle: '空闲' };
+const BUILD_STATUS: Record<string, string> = { running: '构建中', done: '成功', error: '失败', cancelled: '已取消' };
+
+/**
+ * 一次部署是谁发起的（决策 30）。platform 为 null 就是「有人绕过平台、直接在 Dokploy 侧触发」——
+ * 这种部署没经过密钥扫描门禁，要显眼地标出来，这也是把 Dokploy 侧记录一起列出来的意义所在。
+ */
+function OriginCell({ d }: { d: DeploymentInfo }) {
+  if (!d.platform) {
+    return (
+      <span className="flex items-center gap-1">
+        <Badge variant="destructive">Dokploy 侧</Badge>
+      </span>
+    );
+  }
+  return (
+    <span className="text-muted-foreground" title={d.platform.claim === 'inferred' ? '归属按触发时间推断，未必准确' : undefined}>
+      {d.platform.triggeredByName}
+      {d.platform.claim === 'inferred' && ' ⚠'}
+    </span>
+  );
+}
 
 interface UserRow {
   id: string;
@@ -51,6 +75,8 @@ export function ProjectsPage() {
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
   const [viewingSlug, setViewingSlug] = useState<string | null>(null);
   const [logsOf, setLogsOf] = useState<{ slug: string; kind: LogKind } | null>(null);
+  /** 默认只看 Dokploy 上还留着的（每个应用最近 10 次），打开看平台侧完整历史（决策 30） */
+  const [allHistory, setAllHistory] = useState(false);
 
   const projects = useQuery({ queryKey: ['projects'], queryFn: () => api<ProjectInfo[]>('GET', '/api/projects') });
   const users = useQuery({ queryKey: ['users'], queryFn: () => api<UserRow[]>('GET', '/api/users') });
@@ -60,8 +86,9 @@ export function ProjectsPage() {
   const editingProject = editingSlug ? (projects.data ?? []).find((p) => p.slug === editingSlug) ?? null : null;
 
   const deployments = useQuery({
-    queryKey: ['deployments', viewingSlug],
-    queryFn: () => api<DeploymentInfo[]>('GET', `/api/projects/${viewingSlug}/deployments`),
+    queryKey: ['deployments', viewingSlug, allHistory],
+    queryFn: () =>
+      api<DeploymentInfo[]>('GET', `/api/projects/${viewingSlug}/deployments${allHistory ? '?all=1' : ''}`),
     enabled: viewingSlug !== null,
     refetchInterval: 10_000,
   });
@@ -263,17 +290,22 @@ export function ProjectsPage() {
               <div>
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-sm font-semibold">部署历史</h3>
-                  {/* 日志可能带出构建期注入的密钥，与部署同权限（服务端也这么校验） */}
-                  {viewing.canDeploy && (
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm" onClick={() => setLogsOf({ slug: viewing.slug, kind: 'build' })}>
-                        构建日志
-                      </Button>
-                      <Button variant="outline" size="sm" onClick={() => setLogsOf({ slug: viewing.slug, kind: 'run' })}>
-                        运行日志
-                      </Button>
-                    </div>
-                  )}
+                  <div className="flex gap-2">
+                    <Button variant={allHistory ? 'default' : 'outline'} size="sm" onClick={() => setAllHistory((v) => !v)}>
+                      {allHistory ? '只看 Dokploy 现存' : '显示全部历史'}
+                    </Button>
+                    {/* 日志可能带出构建期注入的密钥，与部署同权限（服务端也这么校验） */}
+                    {viewing.canDeploy && (
+                      <>
+                        <Button variant="outline" size="sm" onClick={() => setLogsOf({ slug: viewing.slug, kind: 'build' })}>
+                          构建日志
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => setLogsOf({ slug: viewing.slug, kind: 'run' })}>
+                          运行日志
+                        </Button>
+                      </>
+                    )}
+                  </div>
                 </div>
                 {deployments.isLoading ? (
                   <TableSkeleton rows={2} />
@@ -285,19 +317,25 @@ export function ProjectsPage() {
                       <TableRow>
                         <TableHead className="w-36">时间</TableHead>
                         <TableHead className="w-20">状态</TableHead>
-                        <TableHead className="w-24">触发人</TableHead>
+                        <TableHead className="w-28">来源</TableHead>
                         <TableHead>检查</TableHead>
                         <TableHead>备注</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {(deployments.data ?? []).map((d) => (
-                        <TableRow key={d.id}>
+                        <TableRow key={d.deploymentId ?? d.platform?.id}>
                           <TableCell className="text-muted-foreground">{formatDateTime(d.createdAt)}</TableCell>
                           <TableCell>{STATUS_BADGE[d.status]}</TableCell>
-                          <TableCell className="text-muted-foreground">{d.triggeredByName}</TableCell>
+                          <TableCell>
+                            <OriginCell d={d} />
+                          </TableCell>
                           <TableCell className="text-muted-foreground">
-                            {d.report ? `扫描 ${d.report.scannedFiles} 文件 / ${d.report.findings.length} 问题` : '—'}
+                            {d.platform?.report
+                              ? `扫描 ${d.platform.report.scannedFiles} 文件 / ${d.platform.report.findings.length} 问题`
+                              : d.platform
+                                ? '—'
+                                : '未经平台扫描'}
                           </TableCell>
                           <TableCell className="max-w-48 truncate text-muted-foreground" title={d.error ?? undefined}>
                             {d.error ?? '—'}
@@ -307,6 +345,11 @@ export function ProjectsPage() {
                     </TableBody>
                   </Table>
                 )}
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {allHistory
+                    ? '「已归档」= Dokploy 那边的构建记录已被清理，只剩平台侧元数据（谁触发的、扫描报告）。'
+                    : 'Dokploy 每个应用只保留最近 10 次构建；更早的部署点「显示全部历史」查看。'}
+                </p>
               </div>
             </div>
           </DialogContent>

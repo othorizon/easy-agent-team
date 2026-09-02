@@ -7,7 +7,7 @@
  * 更新检测走响应头搭车（决策 26）：CLI 的联网命令本就要请求平台，服务端在响应里
  * 顺带回传当前 CLI 版本与该用户的 Skill 集合指纹，不额外发探测请求、不需要检查节流。
  */
-export const CLI_VERSION = '0.3.0';
+export const CLI_VERSION = '0.4.0';
 
 /** CLI 在请求里自报身份，服务端据此决定是否附带更新头（控制台请求不必付这份开销） */
 export const CLIENT_HEADER = 'x-eat-client';

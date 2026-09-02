@@ -1,12 +1,14 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import {
   createProjectSchema,
+  deploymentsQuerySchema,
   logsQuerySchema,
   testDokploySettingsSchema,
   triggerDeploySchema,
   updateDokploySettingsSchema,
   updateProjectSchema,
   type CreateProjectRequest,
+  type DeploymentsQuery,
   type LogsQuery,
   type TestDokploySettingsRequest,
   type TriggerDeployRequest,
@@ -106,9 +108,17 @@ export class DeployController {
     return this.deploy.deploy(user, slug, body.report);
   }
 
+  /**
+   * 部署历史（决策 30）：默认以 Dokploy 的构建记录为准（它只留最近 10 条），
+   * `?all=1` 改以平台元数据为主干列出全部历史，含 Dokploy 已清理掉的。
+   */
   @Get('projects/:slug/deployments')
-  listDeployments(@Param('slug') slug: string, @CurrentUser() user: AuthUser) {
-    return this.deploy.listDeployments(user, slug);
+  listDeployments(
+    @Param('slug') slug: string,
+    @Query(new ZodValidationPipe(deploymentsQuerySchema)) query: DeploymentsQuery,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.deploy.listDeployments(user, slug, query);
   }
 
   /** 项目最近一次部署：CLI 的 `eat project status <slug>` 用它，不必先记住部署 ID */
@@ -117,9 +127,14 @@ export class DeployController {
     return this.deploy.latestDeployment(user, slug);
   }
 
-  @Get('deployments/:id')
-  getDeployment(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.deploy.getDeployment(user, id);
+  /**
+   * 查某一次部署。路由必须排在 `latest` 之后（Nest 按声明顺序匹配）。
+   * id 可以是 Dokploy 构建记录 id，也可以是平台元数据 id——构建记录被 Dokploy 清理后
+   * 只剩后者，两个 ID 空间都得认（决策 30）。
+   */
+  @Get('projects/:slug/deployments/:id')
+  getDeployment(@Param('slug') slug: string, @Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.deploy.getDeployment(user, slug, id);
   }
 
   // ---------- 构建日志 / 运行日志（决策 28） ----------

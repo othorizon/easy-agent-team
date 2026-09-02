@@ -8,7 +8,6 @@ import { dbInstances, dbList, dbRequest } from './commands/db.js';
 import {
   buildLogs,
   deployRun,
-  deployStatus,
   projectDeployments,
   projectList,
   projectStatus,
@@ -126,7 +125,11 @@ project
   .description('项目最近一次部署的状态与失败原因')
   .option('--deployment <id>', '查看指定的某次部署（支持 ID 前缀）')
   .action(projectStatus);
-project.command('deployments <project>').description('项目的部署历史').action(projectDeployments);
+project
+  .command('deployments <project>')
+  .description('项目的部署历史（默认 Dokploy 上还留着的最近 10 次，含在 Dokploy 侧直接触发的）')
+  .option('--all', '改列平台侧的完整历史，含 Dokploy 已清理掉构建记录的那些')
+  .action(projectDeployments);
 project
   .command('build-logs <project>')
   .description('读 Dokploy 上的构建日志（部署失败先看它，能看到真实报错）')
@@ -155,17 +158,22 @@ program
     renamed('eat projects', 'eat project list');
     await projectList();
   });
+/**
+ * 这个旧命令没法再兼容了（决策 30）：部署记录改以 Dokploy 为准之后，查一次部署必须带项目，
+ * 光有一个 ID 定位不到（Dokploy 的构建记录 id 不能反查出属于哪个项目）。给出新写法即可。
+ */
 program
   .command('deploy-status <id>', { hidden: true })
-  .action(async (id: string) => {
-    renamed('eat deploy-status <id>', 'eat project status <project>');
-    await deployStatus(id);
+  .action((id: string) => {
+    console.error(`\`eat deploy-status <id>\` 已停用：现在查部署要带项目。`);
+    console.error(`新写法: eat project status <project> --deployment ${id}`);
+    process.exitCode = 1;
   });
 program
   .command('deploy-list <project>', { hidden: true })
   .action(async (slug: string) => {
     renamed('eat deploy-list <project>', 'eat project deployments <project>');
-    await projectDeployments(slug);
+    await projectDeployments(slug, {});
   });
 
 program
