@@ -20,9 +20,9 @@ flowchart TB
         direction LR
         P["团队成员<br/>开发 / 运营 / 新人"]
         AI["本地 AI<br/>Claude Code 等"]
-        CLI["eat CLI<br/>13 个命令"]
-        MCPS["MCP Server<br/>15 个工具 · eat mcp"]
-        WEB["Web 控制台<br/>16 个页面"]
+        CLI["eat CLI"]
+        MCPS["MCP Server<br/>eat mcp"]
+        WEB["Web 控制台"]
         P -->|"提需求"| AI
         P -->|"浏览器"| WEB
         AI -->|"跑命令"| CLI
@@ -32,27 +32,22 @@ flowchart TB
     U ==>|"HTTPS REST · Token 鉴权"| S
 
     subgraph S["平台服务：NestJS + Fastify 单体（一个容器）"]
-        M1["认证 · 设备码<br/>开放注册 · 用户管理"]
-        M2["环境变量 · 资源级授权<br/>申请审批"]
-        M3["Skill · 订阅<br/>角色模板 · MCP 配置分发"]
-        M4["求助 · 经验沉淀<br/>平台 AI"]
-        M5["数据库账号分配<br/>部署编排与门禁"]
-        M6["审计日志 · Webhook<br/>CLI 自托管分发"]
-        M1 ~~~ M4
-        M2 ~~~ M5
-        M3 ~~~ M6
+        API["API 层<br/>zod 契约校验 · 资源级权限"]
+        DOM["领域模块<br/>能力分发 · 人机协作 · 资源交付"]
+        INF["平台基建<br/>信封加密 · 审计 · Webhook 投递 · 控制台与 CLI 托管"]
+        API --> DOM --> INF
     end
 
     S --> PG[("PostgreSQL<br/>业务数据 + 审计")]
-    S --> DOK["Dokploy API<br/>触发部署 / 构建记录 / 日志"]
-    S --> TDB[("团队数据库实例<br/>PostgreSQL / MySQL")]
-    S --> IM["飞书群机器人<br/>求助卡片通知"]
-    S --> LLM["OpenAI 范式 AI 网关<br/>把求助整理成经验"]
+    S --> DOK["Dokploy<br/>部署与日志"]
+    S --> TDB[("团队数据库实例")]
+    S --> IM["群机器人 webhook<br/>求助通知"]
+    S --> LLM["AI 网关<br/>OpenAI 接口范式"]
 ```
 
-- **单体 + 单库**：REST API 与后台工作（webhook 带退避的重试投递、部署状态按需刷新）都在同一个 NestJS 进程里，业务数据与审计全落一个 PostgreSQL——不引入 Redis、不起独立 worker。控制台构建产物由后端静态托管，部署仍是一个容器。
+- **单体 + 单库**：REST API 与后台工作都在同一个 NestJS 进程里，业务数据与审计全落一个 PostgreSQL——不引入 Redis、不起独立 worker。控制台构建产物由后端静态托管，部署仍是一个容器。
 - **三端一套契约**：请求/响应用 zod 定义在 `packages/shared`，server 校验、CLI 与前端复用同一份类型，三端类型一致由编译器保证。
-- **AI 是一等用户**：所有面向人的能力（查配置、要权限、问问题、看日志、触发部署）都有对应的 MCP 工具，AI 可以自助完成，无需人转述。
+- **AI 是一等用户**：面向人的能力都有对应的 MCP 工具，AI 可以自助完成，无需人转述。
 - **元数据公开、取值受控**：AI 默认能看见「有哪些配置、各是干什么的」，但取值需要授权；无权限时返回可执行的申请引导，而不是无声失败。
 
 ## 功能清单
@@ -74,19 +69,19 @@ flowchart TB
 | 敏感 / 非敏感 | 敏感值信封加密存储（AES-256-GCM + KEK）；非敏感值明文存储，有读取权限者清单/控制台直接可见 |
 | 资源级授权 | 授权到「用户 × 单个变量」或「用户 × 整个环境」，可设有效期，Owner 与管理员可管 |
 | 申请审批 | 无权限拉取时引导发起申请，Owner 审批；CLI / MCP / 控制台三端可查状态 |
-| 取值下发 | `eat env pull <环境>` 按权限拉取并写入 `./.env` |
+| 取值下发 | `eat env pull` 按权限拉取并写入 `./.env` |
 | 读取审计 | 敏感值的每次读取落审计日志 |
 
 ### Skill 管理与分发
 
 | 能力 | 说明 |
 |---|---|
-| 纳管与版本 | `eat skill push <目录>` 上传，首次创建、再次推送服务端自动出新版本 |
+| 纳管与版本 | `eat skill push` 上传，首次创建、再次推送服务端自动出新版本 |
 | 可见性与订阅 | 三档可见性（团队可见 / 授权可见 / 私有）控制谁能看到；成员订阅后随同步落地 |
 | 本地同步 | `eat sync` 实际文件落 `~/.agents/skills/`，逐个软链到 `~/.claude/skills/`（Windows 改为复制实文件） |
-| 安装范围 | 默认 `--global`；`--project` 装到当前项目（`./.agents/skills/` + 相对软链），`--dir` 自定义目录，三者互斥 |
+| 安装范围 | 默认装全局，也可只装到当前项目（`./.agents/skills/` + 相对软链）或指定自定义目录 |
 | 内置平台指南 | 每个成员自动注入 `eat-platform-guide` Skill 并排在首位，让本地 AI 认识平台能力与正确用法 |
-| 更新提示 | 服务端在响应头搭车下发 CLI 版本与 per-user Skill 指纹，CLI/MCP 侧提示「有新版」；`eat self-update` 一条命令升级 |
+| 更新提示 | 服务端在响应头搭车下发 CLI 版本与 per-user Skill 指纹，CLI / MCP 侧提示「有新版」；`eat self-update` 一条命令升级 |
 
 ### MCP 配置分发
 
@@ -110,32 +105,32 @@ flowchart TB
 | 可求助登记 | 用户自助登记能力描述 + 接收求助 / 接收回复两个开关 |
 | 飞书通知 | 飞书群自定义机器人 webhook（支持加签，密钥由用户粘贴），消息是卡片：含「查看请求」按钮与「发送给 Agent」代码块 |
 | 多轮对话 | 求助 → 回复 → 追问 → 标记解决，CLI / MCP / 控制台三端都能读写 |
-| 防骚扰 | 每用户每小时求助次数限流（`EAT_HELP_RATE_LIMIT`，默认 10） |
+| 防骚扰 | 每用户每小时求助次数限流（可配，见 `EAT_HELP_RATE_LIMIT`） |
 
 ### 经验沉淀
 
 | 能力 | 说明 |
 |---|---|
 | 经验即 Skill | 求助解决后由平台 AI 把对话整理成结构化经验，以 Skill 形式分发订阅 |
-| 自助检索 | MCP `search_experiences` 让 AI 先翻经验库，同样的问题不问第二遍 |
+| 自助检索 | AI 可以先检索经验库，同样的问题不问第二遍 |
 
 ### 数据库账号分配
 
 | 能力 | 说明 |
 |---|---|
-| 实例登记 | 管理员登记团队数据库实例（PostgreSQL / MySQL），管理员凭证加密存储 |
-| 真实建库建号 | 成员申请 → 审批 → 平台真实建库、建专属账号并授权（PostgreSQL 已支持自动化，MySQL 暂缓） |
+| 实例登记 | 管理员登记团队数据库实例，管理员凭证加密存储 |
+| 真实建库建号 | 成员申请 → 审批 → 平台在实例上真实建库、建专属账号并授权（PostgreSQL） |
 | 凭证下发 | 凭证自动生成为一组环境变量，仅 `DB_PASSWORD` 敏感，整组默认只授权给申请人 |
 
 ### 部署托管（Dokploy）
 
 | 能力 | 说明 |
 |---|---|
-| 项目挂载 | 建项目时可直接从 Dokploy 搜索选择已有应用（按项目分组、匹配应用名/容器名/id），Dokploy 未配置时降级为手填 |
+| 项目挂载 | 建项目时可直接从 Dokploy 搜索选择已有应用，Dokploy 未配置时降级为手填 |
 | 成员管理 | 项目成员制，日志与部署权限收敛到成员并落审计 |
-| 部署门禁 | `eat deploy` 先在本地做密钥扫描（通用规则 + **平台密钥指纹匹配** + `.env` 误提交），报告随部署请求上送，不通过不部署；`--check "pnpm build"` 可加一条本地预跑命令，非零退出即拦下 |
-| 状态透传 | 部署状态以 Dokploy 构建记录为准并懒绑定；失败时把构建日志末尾直接写进错误，平台里就能看到真实报错 |
-| 日志读取 | `eat project build-logs`（构建失败先看它）与 `eat project run-logs`（构建成功但服务不正常时看它），控制台同样可看 |
+| 部署门禁 | `eat deploy` 先在本地做密钥扫描（通用规则 + **平台密钥指纹匹配** + `.env` 误提交），报告随部署请求上送，不通过不部署；还可选配一条本地预跑命令，非零退出即拦下 |
+| 状态透传 | 部署状态以 Dokploy 的构建记录为准；失败时把构建日志末尾直接写进错误，平台里就能看到真实报错 |
+| 日志读取 | 构建日志（部署失败先看它）与容器运行日志（构建成功但服务不正常时看它），CLI 与控制台都能读 |
 
 ### 安全与审计
 
@@ -148,12 +143,14 @@ flowchart TB
 
 ### 三端接入
 
-| 入口 | 内容 |
+上面各模块的能力，在三个入口上都能用：
+
+| 入口 | 说明 |
 |---|---|
-| Web 控制台 | 16 个页面：环境变量 / Skill / MCP 配置 / 角色模板 / 求助 / 权限申请 / 数据库 / 部署项目 / 安装 CLI / 设备授权 / 用户 / 系统设置 等；桌面侧边栏 + 移动端抽屉，手机可用 |
-| eat CLI | 13 个命令：`login` `logout` `whoami` `env` `skill` `ask` `sync` `db` `scan` `deploy` `project` `self-update` `mcp` |
-| MCP Server | 15 个工具：`list_env_variables` `get_env_values` `request_access` `get_access_request_status` `search_experiences` `list_helpers` `create_help_request` `get_help_request` `reply_help_request` `delete_help_request` `list_projects` `trigger_deploy` `get_deploy_status` `get_build_logs` `get_run_logs` |
-| CLI 分发 | 平台自托管、不发 npm：`/install.sh`（macOS/Linux）、`/install.ps1`（Windows）、`/install/eat.js`、`/install/AGENT.md`、`/install/MCP.md`；Windows 全链路兼容 |
+| Web 控制台 | 管理、授权与审批的图形入口；桌面侧边栏 + 移动端抽屉布局，手机上也能用 |
+| eat CLI | 成员与本地 AI 的主通道，命令按模块分组；完整命令与参数以 `eat --help` 为准 |
+| MCP Server | `eat mcp` 起 stdio server，把平台能力做成工具交给本地 AI 自助调用；完整工具清单以 MCP 客户端里列出的为准 |
+| CLI 分发 | 平台自托管、不发 npm registry：一条命令安装（见下方「快速开始」），版本天然与平台一致，升级即重装；macOS / Linux / Windows 全链路兼容 |
 
 ## 快速开始
 
@@ -177,17 +174,15 @@ eat login --server http://<平台地址>
 
 ## 环境变量配置
 
-完整示例见 [.env.example](.env.example)（复制为 `.env` 填写；`.env` 不入库，被平台的密钥扫描拦截，`.env.example` 除外）。
+配置项以 [.env.example](.env.example) 为准（复制为 `.env` 填写；`.env` 不入库，被平台的密钥扫描拦截，`.env.example` 除外）。三个必填项：
 
-| 变量 | 必填 | 说明 |
-|---|---|---|
-| `DATABASE_URL` | ✅ | PostgreSQL 连接串（本地开发默认 `postgres://dev@127.0.0.1:5433/eat_dev`） |
-| `EAT_KEK` | 生产 ✅ | 值加密主密钥，base64 的 32 字节：`openssl rand -base64 32`。**丢失即密文不可恢复，务必备份**；开发环境缺省用内置的不安全默认值 |
-| `EAT_PUBLIC_URL` | 生产 ✅ | 平台对外地址（设备码授权页、webhook 链接以此拼接） |
-| `PORT` | | 服务端口，默认 3000 |
-| `EAT_ADMIN_EMAIL` / `EAT_ADMIN_PASSWORD` | 建议 | 种子创建的初始管理员（默认 `admin@example.com` / `admin12345`，生产务必显式设置） |
-| `EAT_SKIP_SEED` | | 设为 `1` 跳过启动种子 |
-| `EAT_HELP_RATE_LIMIT` | | 每用户每小时求助上限，默认 10 |
+| 变量 | 说明 |
+|---|---|
+| `DATABASE_URL` | PostgreSQL 连接串，生产必须指向持久化实例 |
+| `EAT_KEK` | 值加密主密钥，base64 的 32 字节：`openssl rand -base64 32`。**丢失即密文不可恢复，务必备份**；开发环境缺省用内置的不安全默认值 |
+| `EAT_PUBLIC_URL` | 平台对外地址，设备码授权页与 webhook 链接以此拼接 |
+
+其余均为可选项（服务端口、初始管理员、种子开关、求助限流等），默认值与说明都在 `.env.example` 里。
 
 使用方式：Docker 用 `--env-file .env`；本地直跑用 `node --env-file=.env apps/server/dist/main.js`（Node 20.6+ 原生支持）。
 
@@ -197,5 +192,5 @@ eat login --server http://<平台地址>
 
 ## 文档
 
-- [产品设计文档](docs/product-design.md) —— 完整的产品设计：角色、功能模块、权限模型、数据模型、API / CLI / MCP 设计、技术架构与路线图（含全部决策记录）。
-- [部署文档](docs/deployment.md) —— Dockerfile 构建、Dokploy 部署步骤、环境变量、备份、CLI 分发与自举。
+- [产品设计文档](docs/product-design.md) —— 产品与技术设计的唯一事实源，含权限模型、数据模型、接口设计与全部决策记录。
+- [部署文档](docs/deployment.md) —— 镜像构建、Dokploy 部署步骤、备份与 CLI 自举分发。
