@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 5;
+export const PLATFORM_GUIDE_VERSION = 6;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -36,9 +36,17 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 
 \`eat db list\` 查看用户名下已分配的账号；凭证以环境变量形式下发，按上面的环境变量流程取值。需要新账号时，引导用户在控制台「数据库」页申请。
 
-### 部署
+### 部署与日志
 
-MCP 工具 \`trigger_deploy\` / \`get_deploy_status\` / \`get_deploy_logs\`（或 \`eat deploy [project]\`）。部署前 CLI 会自动做密钥扫描，报告不过会被拒绝——按报告修复后重试，**不要绕过检查**。
+\`eat deploy [project]\`（MCP: \`trigger_deploy\`）触发部署。部署前 CLI 会自动做密钥扫描，报告不过会被拒绝——按报告修复后重试，**不要绕过检查**。
+
+部署完是否成功、失败在哪，按这个顺序查，不要让用户自己去开 Dokploy 控制台：
+
+1. \`eat project status <project>\`（MCP: \`get_deploy_status\`）——失败时 \`error\` 里已经带着构建日志末尾的真实报错；
+2. \`eat project build-logs <project>\`（MCP: \`get_build_logs\`）——**构建**日志，依赖装不上、编译报错、镜像拉不动看这里；
+3. \`eat project run-logs <project>\`（MCP: \`get_run_logs\`）——**运行**日志，构建成功但服务不正常（进程起不来、接口 500、连不上依赖）看这里。
+
+日志读到的报错是排查依据，改完代码重新 \`eat deploy\` 即可；日志可能带出构建期注入的密钥，不要把整段日志贴进求助或提交里。
 
 ## CLI 速查
 
@@ -49,6 +57,8 @@ MCP 工具 \`trigger_deploy\` / \`get_deploy_status\` / \`get_deploy_logs\`（�
 | \`eat skill push <dir>\` | 把本地写好的 skill 上传到平台纳管分享 |
 | \`eat ask create / show / reply\` | 求助的 CLI 入口 |
 | \`eat deploy [project]\` | 触发部署（自动前置检查） |
+| \`eat project list / status / deployments\` | 项目清单 / 最近一次部署状态 / 部署历史 |
+| \`eat project build-logs / run-logs <project>\` | 构建日志 / 运行日志（排查部署与线上问题的第一手材料） |
 | \`eat db list\` | 名下数据库账号 |
 | \`eat whoami\` | 当前身份；报错说明凭证失效，让用户重新 \`eat login\` |
 | \`eat self-update\` | 把 CLI 更新到平台当前分发的版本（跨平台同一条命令，不用重跑安装脚本） |

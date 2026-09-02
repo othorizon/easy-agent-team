@@ -1,11 +1,20 @@
 import { Command } from 'commander';
-import { CLI_VERSION } from '@eat/shared';
+import { CLI_VERSION, LOG_TAIL_DEFAULT } from '@eat/shared';
 import { ApiError, formatErrorDetails } from './client.js';
 import { login, logout, whoami } from './commands/auth.js';
 import { envList, envPull, envRequest, envRequests } from './commands/env.js';
 import { askCreate, askDelete, askList, askReply, askResolve, askShow, askTargets } from './commands/ask.js';
 import { dbInstances, dbList, dbRequest } from './commands/db.js';
-import { deployList, deployRun, deployStatus, projectsList, scanOnly } from './commands/deploy.js';
+import {
+  buildLogs,
+  deployRun,
+  deployStatus,
+  projectDeployments,
+  projectList,
+  projectStatus,
+  runLogs,
+  scanOnly,
+} from './commands/deploy.js';
 import { skillList, skillPush, skillSubscribe, skillUnsubscribe } from './commands/skill.js';
 import { selfUpdate } from './commands/self-update.js';
 import { sync } from './commands/sync.js';
@@ -98,19 +107,66 @@ db
   .action(dbRequest);
 db.command('list').description('我的数据库分配与凭证环境').action(dbList);
 
-program.command('projects').description('查看部署项目与自己的成员身份').action(projectsList);
 program
   .command('scan [dir]')
   .description('本地密钥扫描（通用规则 + 平台密钥指纹 + .env 误提交），不部署')
   .action(scanOnly);
+// deploy 留在顶层：最高频，且做成 `project deploy` 会与 `project <slug>` 形式的参数打架
 program
   .command('deploy [project]')
   .description('部署项目：本地前置检查通过后触发 Dokploy 部署')
   .option('--dir <dir>', '代码目录（默认当前目录）')
   .option('--check <cmd>', '可选的本地预跑命令（如 "pnpm build"），非零退出则阻止部署')
   .action(deployRun);
-program.command('deploy-status <id>').description('查询部署状态（支持 ID 前缀）').action(deployStatus);
-program.command('deploy-list <project>').description('项目的部署历史').action(deployList);
+
+const project = program.command('project').description('部署项目：清单、部署状态、构建日志、运行日志');
+project.command('list').description('查看部署项目与自己的成员身份').action(projectList);
+project
+  .command('status <project>')
+  .description('项目最近一次部署的状态与失败原因')
+  .option('--deployment <id>', '查看指定的某次部署（支持 ID 前缀）')
+  .action(projectStatus);
+project.command('deployments <project>').description('项目的部署历史').action(projectDeployments);
+project
+  .command('build-logs <project>')
+  .description('读 Dokploy 上的构建日志（部署失败先看它，能看到真实报错）')
+  .option('--tail <n>', `日志行数（默认 ${LOG_TAIL_DEFAULT}）`)
+  .option('--deployment <id>', '指定某次构建（默认最近一次）')
+  .option('--list', '只列出最近的构建记录')
+  .action(buildLogs);
+project
+  .command('run-logs <project>')
+  .description('读应用容器的运行日志（构建成功但服务不正常时看它）')
+  .option('--tail <n>', `日志行数（默认 ${LOG_TAIL_DEFAULT}）`)
+  .option('--container <id>', '指定容器（多副本时用，默认第一个运行中的）')
+  .option('--list', '只列出当前容器')
+  .action(runLogs);
+
+/**
+ * 旧命令保留一轮（决策 28）：平台指南、AGENT.md、Agent 记忆里都还留着旧写法，
+ * 直接删会让已装好的环境突然报错。隐藏不进 --help，执行时在 stderr 提示新写法。
+ */
+const renamed = (oldForm: string, newForm: string): void => {
+  console.error(`提示: \`${oldForm}\` 已改名为 \`${newForm}\`，旧写法这一版仍可用。`);
+};
+program
+  .command('projects', { hidden: true })
+  .action(async () => {
+    renamed('eat projects', 'eat project list');
+    await projectList();
+  });
+program
+  .command('deploy-status <id>', { hidden: true })
+  .action(async (id: string) => {
+    renamed('eat deploy-status <id>', 'eat project status <project>');
+    await deployStatus(id);
+  });
+program
+  .command('deploy-list <project>', { hidden: true })
+  .action(async (slug: string) => {
+    renamed('eat deploy-list <project>', 'eat project deployments <project>');
+    await projectDeployments(slug);
+  });
 
 program
   .command('self-update')
