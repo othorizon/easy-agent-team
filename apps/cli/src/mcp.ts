@@ -6,8 +6,8 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import * as path from 'node:path';
-import { CLI_VERSION, LOG_TAIL_DEFAULT, LOG_TAIL_MAX } from '@eat/shared';
-import type { SecretFingerprint } from '@eat/shared';
+import { CLI_VERSION, LOG_TAIL_DEFAULT, LOG_TAIL_MAX, STATIC_CONTAINER_PORT } from '@eat/shared';
+import type { AppInfo, SecretFingerprint } from '@eat/shared';
 import { Api, ApiError, setClientTag } from './client.js';
 import { scanWorkspace } from './scan.js';
 import { takeUpdateNoticeForMcp } from './update.js';
@@ -277,6 +277,21 @@ const APP_FIELDS = [
   'description',
 ] as const;
 
+/**
+ * create_app 的结果附一句人话（hint 字段）：分配了域名时说清访问地址与转发端口；
+ * 没显式指定端口的 dockerfile 应用还要点明「3000 只是默认值、用 update_app 的 port 改」——
+ * 光给 port: 3000 一个数字，AI 未必会把它和「我的容器其实监听 8080」联系起来。
+ */
+function withCreateHint(app: AppInfo, portGiven: boolean): AppInfo & { hint?: string } {
+  if (!app.url) return app;
+  const port = app.buildType === 'static' ? STATIC_CONTAINER_PORT : app.port;
+  let hint = `已分配域名 ${app.url}，流量转发到容器端口 ${port}（首次部署成功后可访问）。`;
+  if (app.buildType === 'dockerfile' && !portGiven) {
+    hint += `端口 ${app.port} 是默认值：应用实际监听别的端口时用 update_app 的 port 参数改，立即生效、不用重新部署。`;
+  }
+  return { ...app, hint };
+}
+
 function pick(args: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const k of keys) if (args[k] !== undefined) out[k] = args[k];
@@ -386,7 +401,11 @@ export async function startMcpServer(): Promise<void> {
           return jsonResult(await api.request('GET', '/api/apps'));
         }
         case 'create_app': {
-          return jsonResult(await api.request('POST', '/api/apps', pick(args, APP_FIELDS)));
+          // 工具描述承诺 name 默认同 slug，服务端契约里 name 是必填，得在这里补上
+          const body = pick(args, APP_FIELDS);
+          if (body.name === undefined) body.name = body.slug;
+          const app = await api.request<AppInfo>('POST', '/api/apps', body);
+          return jsonResult(withCreateHint(app, args.port !== undefined));
         }
         case 'update_app': {
           return jsonResult(await api.request('PATCH', `/api/apps/${args.app as string}`, pick(args, APP_FIELDS)));

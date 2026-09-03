@@ -1,7 +1,14 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { APP_BUILD_TYPE_LABEL, APP_ENV_TARGET_LABEL, CLI_VERSION, LOG_TAIL_DEFAULT, appBuildTypeSchema } from '@eat/shared';
+import {
+  APP_BUILD_TYPE_LABEL,
+  APP_ENV_TARGET_LABEL,
+  CLI_VERSION,
+  LOG_TAIL_DEFAULT,
+  STATIC_CONTAINER_PORT,
+  appBuildTypeSchema,
+} from '@eat/shared';
 import type {
   AppBuildType,
   AppEnv,
@@ -277,7 +284,12 @@ export async function appCreate(slug: string, opts: AppCreateOpts): Promise<void
   console.log('已创建。');
   printApp(app);
   if (app.url) {
-    console.log(`\n访问地址: ${app.url}（首次部署成功后可访问；DNS 由管理员配置，域名流量转发到容器端口 ${buildType === 'static' ? 80 : app.port}）`);
+    const port = buildType === 'static' ? STATIC_CONTAINER_PORT : app.port;
+    console.log(`\n访问地址: ${app.url}（首次部署成功后可访问；DNS 由管理员配置，域名流量转发到容器端口 ${port}）`);
+    // 没显式指定端口时得把「3000 只是默认值」说破：容器监听别的端口，域名就打不开，而且看不出原因
+    if (buildType === 'dockerfile' && opts.port === undefined) {
+      console.log(`容器端口 ${app.port} 是默认值；应用实际监听别的端口时执行 eat app update ${slug} --port <n>，立即生效、不用重新部署。`);
+    }
   }
   if (buildType === 'static') {
     console.log('\n提示: 静态托管不跑任何构建命令，只把发布目录原样交给 nginx——仓库里得直接有构建产物；要先 build 的请改用 dockerfile。');
