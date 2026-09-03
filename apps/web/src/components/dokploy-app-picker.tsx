@@ -8,17 +8,18 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 
 /**
- * 「从 Dokploy 选择」应用（决策 27）：application id 仍可手写，这里提供可搜索的快速填写。
+ * 「从 Dokploy 选择」应用（决策 27）：管理员挂载既有应用时用，application id 仍可手写，这里提供可搜索的快速填写。
+ * 决策 31 之后普通成员走自助创建，不再需要它，接口随之收到管理员路径下。
  * 清单按 Dokploy 项目分组；搜索同时匹配应用名、容器名（appName）与 id——
  * 同名应用在不同项目下很常见，只按显示名搜会选错。
  *
- * 只在弹开时才请求 Dokploy（enabled: open），避免每次打开项目弹窗都打一次外部服务。
+ * 只在弹开时才请求 Dokploy（enabled: open），避免每次打开弹窗都打一次外部服务。
  */
 export function DokployAppPicker({ value, onPick }: { value: string; onPick: (app: DokployApplication) => void }) {
   const [open, setOpen] = useState(false);
   const apps = useQuery({
     queryKey: ['dokploy-applications'],
-    queryFn: () => api<DokployApplication[]>('GET', '/api/dokploy/applications'),
+    queryFn: () => api<DokployApplication[]>('GET', '/api/admin/dokploy/applications'),
     enabled: open,
     staleTime: 60_000,
     retry: false,

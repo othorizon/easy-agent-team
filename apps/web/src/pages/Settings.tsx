@@ -1,7 +1,9 @@
 import type {
   AiSettingsInfo,
   ConnectionTestResult,
+  DokployProject,
   DokploySettingsInfo,
+  DokploySshKey,
   TestAiSettingsRequest,
   TestDokploySettingsRequest,
   UpdateAiSettingsRequest,
@@ -18,9 +20,13 @@ import { PageHeader } from '../components/page-header';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { Input } from '../components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { TableSkeleton } from '../components/ui/skeleton';
 import { Switch } from '../components/ui/switch';
 import { cn } from '../lib/utils';
+
+/** Radix Select 不接受空字符串作为选项值，「不绑定」用哨兵值代替 */
+const NONE = '__none__';
 
 /** 系统设置（仅管理员）：平台 AI 接入 + Dokploy 接入 */
 export function SettingsPage() {
@@ -166,6 +172,7 @@ function AiForm({
           render={({ field }) => <Switch checked={field.value} onCheckedChange={field.onChange} />}
         />
       </Field>
+
       <div className="flex flex-wrap items-center gap-2">
         <Button type="submit" loading={savePending}>
           保存
@@ -208,13 +215,14 @@ function DokploySettingsCard() {
       <CardContent>
         <h2 className="mb-1 text-sm font-semibold">Dokploy 接入</h2>
         <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
-          部署托管挂载 Dokploy：平台通过其 API 触发部署与查询状态。API Token 加密存储。
+          部署托管挂载 Dokploy：平台通过其 API 建应用、触发部署与查询状态。API Token 加密存储。
+          成员自助创建的应用会建在下面选定的 Dokploy 项目 / 环境下并绑定所选 SSH key（key 需先在 Dokploy 里创建）。
         </p>
         {!settings.data ? (
           <TableSkeleton rows={2} />
         ) : (
           <DokployForm
-            key={settings.data.configured ? 'configured' : 'new'}
+            key={`${settings.data.configured ? 'configured' : 'new'}-${settings.data.enabled}-${settings.data.projectId}-${settings.data.environmentId}-${settings.data.sshKeyId}`}
             settings={settings.data}
             savePending={save.isPending}
             testPending={test.isPending}
@@ -246,9 +254,33 @@ function DokployForm({
   onSave: (v: UpdateDokploySettingsRequest) => void;
   onTest: (v: TestDokploySettingsRequest) => void;
 }) {
-  const { register, handleSubmit, control, trigger, getValues, formState: { errors } } = useForm<UpdateDokploySettingsRequest>({
-    defaultValues: { apiUrl: settings.apiUrl, apiToken: '', enabled: settings.enabled },
+  const { register, handleSubmit, control, trigger, getValues, watch, setValue, formState: { errors } } = useForm<UpdateDokploySettingsRequest>({
+    defaultValues: {
+      apiUrl: settings.apiUrl,
+      apiToken: '',
+      enabled: settings.enabled,
+      projectId: settings.projectId,
+      environmentId: settings.environmentId,
+      sshKeyId: settings.sshKeyId,
+    },
   });
+  // 项目 / 环境 / SSH key 清单从 Dokploy 现拉：要先保存并启用地址与 token 才拉得到，拉不到时退回手填 id
+  const projects = useQuery({
+    queryKey: ['dokploy-projects'],
+    queryFn: () => api<DokployProject[]>('GET', '/api/admin/dokploy/projects'),
+    enabled: settings.configured && settings.enabled,
+    retry: false,
+  });
+  const sshKeys = useQuery({
+    queryKey: ['dokploy-ssh-keys'],
+    queryFn: () => api<DokploySshKey[]>('GET', '/api/admin/dokploy/ssh-keys'),
+    enabled: settings.configured && settings.enabled,
+    retry: false,
+  });
+  const projectId = watch('projectId');
+  const environments = (projects.data ?? []).find((p) => p.projectId === projectId)?.environments ?? [];
+  const listsUnavailable = !settings.configured || !settings.enabled;
+  const listError = projects.error instanceof ApiError ? projects.error.message : sshKeys.error instanceof ApiError ? sshKeys.error.message : null;
 
   async function runTest() {
     if (!(await trigger(['apiUrl', 'apiToken']))) return;
@@ -290,6 +322,94 @@ function DokployForm({
           render={({ field }) => <Switch checked={field.value} onCheckedChange={field.onChange} />}
         />
       </Field>
+
+      <div className="rounded-md border px-3 py-3">
+        <h3 className="text-sm font-medium">自助创建应用的落点（决策 31）</h3>
+        <p className="mt-1 mb-3 text-xs leading-relaxed text-muted-foreground">
+          成员自助创建的应用建在这个 Dokploy 项目 / 环境下；SSH key 用于拉取私有仓库，留空则只能建公开仓库的应用。
+          {listsUnavailable && ' 先保存并启用上面的地址与 Token，才能从 Dokploy 拉取清单；也可直接手填 id。'}
+          {listError && ` 清单读取失败：${listError}，可手填 id。`}
+        </p>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Field label="Dokploy 项目" htmlFor="dokploy-project" hint={settings.projectId && !projects.data ? `当前 ${settings.projectId}` : undefined}>
+            {projects.data ? (
+              <Select
+                value={projectId || undefined}
+                onValueChange={(v) => {
+                  setValue('projectId', v, { shouldDirty: true });
+                  // 换项目后原来的环境多半不属于新项目：能自动选默认环境就选，否则清空让人重选
+                  const envs = (projects.data ?? []).find((p) => p.projectId === v)?.environments ?? [];
+                  setValue('environmentId', (envs.find((e) => e.isDefault) ?? envs[0])?.environmentId ?? '', { shouldDirty: true });
+                }}
+              >
+                <SelectTrigger id="dokploy-project">
+                  <SelectValue placeholder="选择项目…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {projects.data.map((p) => (
+                    <SelectItem key={p.projectId} value={p.projectId}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Input id="dokploy-project" className="font-mono" placeholder="projectId" {...register('projectId')} />
+            )}
+          </Field>
+          <Field label="环境" htmlFor="dokploy-env" hint={projects.data && projectId && environments.length === 0 ? '该项目没有环境（Dokploy 版本过旧？），无法自助建应用' : undefined}>
+            {projects.data ? (
+              <Controller
+                control={control}
+                name="environmentId"
+                render={({ field }) => (
+                  <Select value={field.value || undefined} onValueChange={field.onChange} disabled={environments.length === 0}>
+                    <SelectTrigger id="dokploy-env">
+                      <SelectValue placeholder="选择环境…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {environments.map((e) => (
+                        <SelectItem key={e.environmentId} value={e.environmentId}>
+                          {e.name}
+                          {e.isDefault ? '（默认）' : ''}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            ) : (
+              <Input id="dokploy-env" className="font-mono" placeholder="environmentId" {...register('environmentId')} />
+            )}
+          </Field>
+          <Field label="SSH key" htmlFor="dokploy-ssh" hint="可留空">
+            {sshKeys.data ? (
+              <Controller
+                control={control}
+                name="sshKeyId"
+                render={({ field }) => (
+                  <Select value={field.value || NONE} onValueChange={(v) => field.onChange(v === NONE ? '' : v)}>
+                    <SelectTrigger id="dokploy-ssh">
+                      <SelectValue placeholder="不绑定" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={NONE}>不绑定（仅公开仓库）</SelectItem>
+                      {sshKeys.data.map((k) => (
+                        <SelectItem key={k.sshKeyId} value={k.sshKeyId}>
+                          {k.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            ) : (
+              <Input id="dokploy-ssh" className="font-mono" placeholder="sshKeyId（可空）" {...register('sshKeyId')} />
+            )}
+          </Field>
+        </div>
+      </div>
+
       <div className="flex flex-wrap items-center gap-2">
         <Button type="submit" loading={savePending}>
           保存
@@ -297,6 +417,11 @@ function DokployForm({
         <Button type="button" variant="outline" onClick={() => void runTest()} loading={testPending}>
           测试连接
         </Button>
+        {settings.provisioningReady ? (
+          <span className="text-xs text-success">自助创建应用已就绪</span>
+        ) : (
+          <span className="text-xs text-muted-foreground">自助创建应用未就绪：需启用并选好项目与环境</span>
+        )}
       </div>
       <TestResultAlert result={testResult} />
     </form>

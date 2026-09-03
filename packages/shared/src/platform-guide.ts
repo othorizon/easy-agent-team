@@ -7,11 +7,11 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 7;
+export const PLATFORM_GUIDE_VERSION = 8;
 
 const CONTENT = `---
 name: eat-platform-guide
-description: 团队 AI 能力平台 easy-agent-team（eat）使用指南。当需要内部服务的配置/密钥/环境变量、数据库账号，想部署项目，或遇到内部系统问题想查团队经验、向同事求助时使用；也是 eat CLI 与 eat MCP 工具的行为规范。
+description: 团队 AI 能力平台 easy-agent-team（eat）使用指南。当需要内部服务的配置/密钥/环境变量、数据库账号，想创建或部署应用、改应用的 env，或遇到内部系统问题想查团队经验、向同事求助时使用；也是 eat CLI 与 eat MCP 工具的行为规范。
 ---
 
 # easy-agent-team（eat）平台使用指南
@@ -36,19 +36,27 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 
 \`eat db list\` 查看用户名下已分配的账号；凭证以环境变量形式下发，按上面的环境变量流程取值。需要新账号时，引导用户在控制台「数据库」页申请。
 
-### 部署与日志
+### 应用：创建、配置、env、部署与日志
 
-\`eat deploy [project]\`（MCP: \`trigger_deploy\`）触发部署。部署前 CLI 会自动做密钥扫描，报告不过会被拒绝——按报告修复后重试，**不要绕过检查**。
+平台里的「应用」对应 Dokploy 的 application（一个仓库 + 一种构建方式 + 一套 env）。用户侧不需要知道 Dokploy 的项目/SSH key，那些由管理员配置好。
+
+**创建应用**：\`eat app create <slug> --repo <git 地址> --build dockerfile|static\`（MCP: \`create_app\`）。平台会在 Dokploy 上建好应用、绑定 Git 源与 SSH key、配好构建方式。构建方式只有两种：\`dockerfile\`（按仓库里的 Dockerfile 构建，可用 \`--dockerfile\` / \`--context\` 指定路径与上下文）和 \`static\`（静态托管：**不跑任何构建命令**，把 \`--publish-dir\` 目录原样交给 nginx，仓库里必须直接有产物；前端路由用 \`--spa\`）。要先 build 再托管产物的一律选 dockerfile。之后用 \`eat app update <slug> ...\`（MCP: \`update_app\`）改配置，下次部署生效。
+
+**首次部署需要管理员授权一次**：新建的应用 \`deployApproved=false\`，部署会返回 \`DEPLOY_NOT_APPROVED\`——告诉用户找管理员在控制台「应用」页点「授权部署」，**不要反复重试**；授权一次后永久有效。
+
+**应用 env**：\`eat app env pull <slug>\` / \`eat app env push <slug> --file .env\`（MCP: \`get_app_env\` / \`set_app_env\`）读写 Dokploy 上的运行时 env；加 \`--build\`（MCP: \`target=build\`）是构建时变量（Dockerfile 里以 ARG 取用）。**推送是整体覆盖不是合并**：先 pull 再改再 push，否则没带上的变量会被删掉。值可能是密钥，只用于当前任务、不写进代码或对话。
+
+**部署**：\`eat deploy [slug]\`（MCP: \`trigger_deploy\`）。部署前 CLI 会自动做密钥扫描，报告不过会被拒绝——按报告修复后重试，**不要绕过检查**。
 
 部署完是否成功、失败在哪，按这个顺序查，不要让用户自己去开 Dokploy 控制台：
 
-1. \`eat project status <project>\`（MCP: \`get_deploy_status\`）——失败时 \`error\` 里已经带着构建日志末尾的真实报错；
-2. \`eat project build-logs <project>\`（MCP: \`get_build_logs\`）——**构建**日志，依赖装不上、编译报错、镜像拉不动看这里；
-3. \`eat project run-logs <project>\`（MCP: \`get_run_logs\`）——**运行**日志，构建成功但服务不正常（进程起不来、接口 500、连不上依赖）看这里。
+1. \`eat app status <slug>\`（MCP: \`get_deploy_status\`）——失败时 \`error\` 里已经带着构建日志末尾的真实报错；
+2. \`eat app build-logs <slug>\`（MCP: \`get_build_logs\`）——**构建**日志，依赖装不上、编译报错、镜像拉不动看这里；
+3. \`eat app run-logs <slug>\`（MCP: \`get_run_logs\`）——**运行**日志，构建成功但服务不正常（进程起不来、接口 500、连不上依赖）看这里。
 
 日志读到的报错是排查依据，改完代码重新 \`eat deploy\` 即可；日志可能带出构建期注入的密钥，不要把整段日志贴进求助或提交里。
 
-部署状态与历史都以 Dokploy 为准：\`status\` 取值是 \`queued\`(排队中) / \`running\`(构建中) / \`done\`(成功) / \`error\`(失败) / \`cancelled\`(已取消) / \`archived\`(构建记录已被 Dokploy 清理)。\`eat project deployments <project>\` 列出的是 Dokploy 上还留着的最近 10 次构建——**其中可能有人绕开平台、直接在 Dokploy 侧触发的部署**，这些记录的 \`platform\` 为 null、没有密钥扫描报告，排查问题时要把它们算进来；加 \`--all\` 看平台侧的完整历史。
+部署状态与历史都以 Dokploy 为准：\`status\` 取值是 \`queued\`(排队中) / \`running\`(构建中) / \`done\`(成功) / \`error\`(失败) / \`cancelled\`(已取消) / \`archived\`(构建记录已被 Dokploy 清理)。\`eat app deployments <slug>\` 列出的是 Dokploy 上还留着的最近 10 次构建——**其中可能有人绕开平台、直接在 Dokploy 侧触发的部署**（\`platform\` 为 null），也可能有从控制台按钮触发、没做密钥扫描的部署（\`platform.source=console\`），排查问题时要把它们算进来；加 \`--all\` 看平台侧的完整历史。
 
 ## CLI 速查
 
@@ -58,9 +66,11 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 | \`eat env list / pull / request\` | 环境变量：看清单 / 取值 / 申请权限 |
 | \`eat skill push <dir>\` | 把本地写好的 skill 上传到平台纳管分享 |
 | \`eat ask create / show / reply\` | 求助的 CLI 入口 |
-| \`eat deploy [project]\` | 触发部署（自动前置检查） |
-| \`eat project list / status / deployments\` | 项目清单 / 最近一次部署状态 / 部署历史（\`--all\` 看完整历史） |
-| \`eat project build-logs / run-logs <project>\` | 构建日志 / 运行日志（排查部署与线上问题的第一手材料） |
+| \`eat app create / update / delete <slug>\` | 自助创建应用（\`--repo\` + \`--build dockerfile|static\`）/ 改配置 / 删除 |
+| \`eat app env pull / push <slug> [--build]\` | 读写应用在 Dokploy 上的 env（运行时；\`--build\` 为构建时），push 是整体覆盖 |
+| \`eat deploy [slug]\` | 触发部署（自动前置检查；应用需先经管理员授权一次） |
+| \`eat app list / show / status / deployments\` | 应用清单 / 配置详情 / 最近一次部署状态 / 部署历史（\`--all\` 看完整历史） |
+| \`eat app build-logs / run-logs <slug>\` | 构建日志 / 运行日志（排查部署与线上问题的第一手材料） |
 | \`eat db list\` | 名下数据库账号 |
 | \`eat whoami\` | 当前身份；报错说明凭证失效，让用户重新 \`eat login\` |
 | \`eat self-update\` | 把 CLI 更新到平台当前分发的版本（跨平台同一条命令，不用重跑安装脚本） |
@@ -87,7 +97,7 @@ export function platformGuideSyncSkill(): SyncSkill {
   return {
     slug: PLATFORM_GUIDE_SLUG,
     name: 'eat 平台使用指南',
-    description: '内置：教 AI 正确使用 eat 平台（环境变量、求助、经验、部署）的行为规范',
+    description: '内置：教 AI 正确使用 eat 平台（环境变量、求助、经验、应用与部署）的行为规范',
     source: 'builtin',
     relation: 'builtin',
     version: PLATFORM_GUIDE_VERSION,

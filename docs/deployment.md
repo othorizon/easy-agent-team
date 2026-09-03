@@ -82,7 +82,7 @@ MCP 接入 Claude Code：`claude mcp add --scope user eat -- eat mcp`（或把 `
 
 ## 9. 自举（用平台部署平台）
 
-平台上线后，把它自己登记为一个项目（绑定 Dokploy 上的本应用），之后升级平台就是在仓库目录里：
+平台上线后，由管理员把它自己挂载为一个应用（控制台「应用 → 挂载已有应用」，绑定 Dokploy 上的本应用），之后升级平台就是在仓库目录里：
 
 ```bash
 eat deploy easy-agent-team

@@ -131,36 +131,103 @@ const TOOLS = [
     },
   },
   {
-    name: 'list_projects',
-    description: '列出部署项目与当前用户是否可部署（canDeploy）。部署前先确认项目 slug。',
+    name: 'list_apps',
+    description:
+      '列出部署应用（对应 Dokploy 的 application）及当前用户的关系：isMember=是否成员、deployApproved=管理员是否已授权部署、canDeploy=此刻能否部署。部署前先确认应用 slug。',
     inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'create_app',
+    description:
+      '自助创建应用：平台会在 Dokploy 上建 application 并绑好 Git 源、SSH key 与构建方式。buildType 只有 dockerfile（按仓库里的 Dockerfile 构建）和 static（静态托管：不跑任何构建命令，把 publishDirectory 原样交给 nginx，仓库里得直接有产物）。创建后首次部署需管理员在控制台授权一次（返回的 deployApproved=false 即还没授权）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string', description: '应用标识（小写字母/数字/连字符）' },
+        name: { type: 'string', description: '显示名称（默认同 slug）' },
+        repoUrl: { type: 'string', description: 'Git 仓库地址（https 或 ssh）' },
+        branch: { type: 'string', description: '分支，默认 main' },
+        buildType: { type: 'string', enum: ['dockerfile', 'static'], description: '构建方式' },
+        dockerfile: { type: 'string', description: 'dockerfile：Dockerfile 路径（相对仓库根，默认 Dockerfile）' },
+        dockerContextPath: { type: 'string', description: 'dockerfile：构建上下文（相对仓库根，默认仓库根）' },
+        publishDirectory: { type: 'string', description: 'static：发布目录（相对仓库根，默认 .）' },
+        staticSpa: { type: 'boolean', description: 'static：SPA 模式（所有路径回退到 index.html）' },
+        description: { type: 'string', description: '说明' },
+      },
+      required: ['slug', 'repoUrl', 'buildType'],
+    },
+  },
+  {
+    name: 'update_app',
+    description:
+      '修改应用配置（名称/说明/仓库/分支/构建方式及其选项）。平台托管的应用会同步写回 Dokploy，下次部署生效；管理员挂载的既有应用只能改名称/说明。仅 Owner 或管理员可改。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: '应用 slug（list_apps 查看）' },
+        name: { type: 'string' },
+        description: { type: 'string' },
+        repoUrl: { type: 'string' },
+        branch: { type: 'string' },
+        buildType: { type: 'string', enum: ['dockerfile', 'static'] },
+        dockerfile: { type: 'string' },
+        dockerContextPath: { type: 'string' },
+        publishDirectory: { type: 'string' },
+        staticSpa: { type: 'boolean' },
+      },
+      required: ['app'],
+    },
+  },
+  {
+    name: 'get_app_env',
+    description:
+      '读取应用在 Dokploy 上的 env：runtime=容器运行时环境变量，build=构建时变量（Dockerfile 里以 ARG 取用）。两块都是 dotenv 文本。值可能是密钥：只用于当前任务，不要写进代码、日志或对话。仅应用成员可读。',
+    inputSchema: {
+      type: 'object',
+      properties: { app: { type: 'string', description: '应用 slug（list_apps 查看）' } },
+      required: ['app'],
+    },
+  },
+  {
+    name: 'set_app_env',
+    description:
+      '用一段 dotenv 文本整体覆盖应用的 runtime 或 build env（另一块不动），下次部署生效。是覆盖不是合并：先 get_app_env 拿到现有内容再改，否则会把没带上的变量删掉。返回 key 级差异（added/changed/removed），不回值。仅应用成员可写。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: '应用 slug（list_apps 查看）' },
+        target: { type: 'string', enum: ['runtime', 'build'], description: 'runtime=运行时 env，build=构建时变量' },
+        content: { type: 'string', description: '完整的 dotenv 文本（KEY=value 一行一条）' },
+      },
+      required: ['app', 'target', 'content'],
+    },
   },
   {
     name: 'trigger_deploy',
     description:
-      '部署项目到 Dokploy。会先在 workdir 本地执行密钥扫描（通用规则 + 平台密钥指纹 + .env 误提交），发现问题则返回 findings 并拒绝部署——此时修复问题后重试，绝不要试图绕过检查。成功触发后用 get_deploy_status 跟踪结果。',
+      '部署应用到 Dokploy。会先在 workdir 本地执行密钥扫描（通用规则 + 平台密钥指纹 + .env 误提交），发现问题则返回 findings 并拒绝部署——此时修复问题后重试，绝不要试图绕过检查。应用未经管理员授权时返回 DEPLOY_NOT_APPROVED：告诉用户找管理员在控制台「应用」页授权一次，不要反复重试。成功触发后用 get_deploy_status 跟踪结果。',
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '项目 slug（list_projects 查看）' },
-        workdir: { type: 'string', description: '项目代码目录的绝对路径' },
+        app: { type: 'string', description: '应用 slug（list_apps 查看）' },
+        workdir: { type: 'string', description: '应用代码目录的绝对路径' },
       },
-      required: ['project', 'workdir'],
+      required: ['app', 'workdir'],
     },
   },
   {
     name: 'get_deploy_status',
     description:
-      '查询部署状态。status 取值 queued=排队中 / running=构建中 / done=成功 / error=失败 / cancelled=已取消 / archived=构建记录已被 Dokploy 清理。status=error 时 error 字段已带上构建日志末尾的真实报错——据此改代码后重新 trigger_deploy；要看完整日志用 get_build_logs。platform 为 null 表示这次是在 Dokploy 侧直接触发的、没经过平台的密钥扫描门禁。必须传 project；再传 deploymentId 看指定那次。',
+      '查询部署状态。status 取值 queued=排队中 / running=构建中 / done=成功 / error=失败 / cancelled=已取消 / archived=构建记录已被 Dokploy 清理。status=error 时 error 字段已带上构建日志末尾的真实报错——据此改代码后重新 trigger_deploy；要看完整日志用 get_build_logs。platform 为 null 表示这次是在 Dokploy 侧直接触发的、没经过平台的密钥扫描门禁；platform.source=console 表示从控制台按钮触发、同样没做扫描。必须传 app；再传 deploymentId 看指定那次。',
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '项目 slug（list_projects 查看）' },
+        app: { type: 'string', description: '应用 slug（list_apps 查看）' },
         deploymentId: { type: 'string', description: '看指定那次：Dokploy 构建记录 id 或平台元数据 id 都行' },
-        history: { type: 'boolean', description: '传 true 列出该项目的部署历史' },
+        history: { type: 'boolean', description: '传 true 列出该应用的部署历史' },
         all: { type: 'boolean', description: '与 history 同用：列出平台完整历史，含 Dokploy 已清理构建记录的那些' },
       },
-      required: ['project'],
+      required: ['app'],
     },
   },
   {
@@ -170,11 +237,11 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '项目 slug（list_projects 查看）' },
+        app: { type: 'string', description: '应用 slug（list_apps 查看）' },
         tail: { type: 'number', description: `日志行数，默认 ${LOG_TAIL_DEFAULT}，上限 ${LOG_TAIL_MAX}` },
         deploymentId: { type: 'string', description: 'Dokploy 构建记录 id（默认最近一次）' },
       },
-      required: ['project'],
+      required: ['app'],
     },
   },
   {
@@ -184,14 +251,34 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        project: { type: 'string', description: '项目 slug（list_projects 查看）' },
+        app: { type: 'string', description: '应用 slug（list_apps 查看）' },
         tail: { type: 'number', description: `日志行数，默认 ${LOG_TAIL_DEFAULT}，上限 ${LOG_TAIL_MAX}` },
         containerId: { type: 'string', description: '容器 id（默认第一个运行中的）' },
       },
-      required: ['project'],
+      required: ['app'],
     },
   },
 ] as const;
+
+/** create_app / update_app 透传给平台的字段：只挑这些，别把 app 之类的路径参数也塞进请求体 */
+const APP_FIELDS = [
+  'slug',
+  'name',
+  'repoUrl',
+  'branch',
+  'buildType',
+  'dockerfile',
+  'dockerContextPath',
+  'publishDirectory',
+  'staticSpa',
+  'description',
+] as const;
+
+function pick(args: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of keys) if (args[k] !== undefined) out[k] = args[k];
+  return out;
+}
 
 /** 日志类工具的查询串：tail 与「指定某次/某个」的可选参数 */
 function logQuery(args: Record<string, unknown>, pick: 'deploymentId' | 'containerId'): URLSearchParams {
@@ -292,8 +379,22 @@ export async function startMcpServer(): Promise<void> {
         case 'delete_help_request': {
           return jsonResult(await api.request('DELETE', `/api/help-requests/${args.requestId as string}`));
         }
-        case 'list_projects': {
-          return jsonResult(await api.request('GET', '/api/projects'));
+        case 'list_apps': {
+          return jsonResult(await api.request('GET', '/api/apps'));
+        }
+        case 'create_app': {
+          return jsonResult(await api.request('POST', '/api/apps', pick(args, APP_FIELDS)));
+        }
+        case 'update_app': {
+          return jsonResult(await api.request('PATCH', `/api/apps/${args.app as string}`, pick(args, APP_FIELDS)));
+        }
+        case 'get_app_env': {
+          return jsonResult(await api.request('GET', `/api/apps/${args.app as string}/env`));
+        }
+        case 'set_app_env': {
+          return jsonResult(
+            await api.request('PUT', `/api/apps/${args.app as string}/env`, { target: args.target, content: args.content }),
+          );
         }
         case 'trigger_deploy': {
           const workdir = path.resolve(args.workdir as string);
@@ -321,12 +422,12 @@ export async function startMcpServer(): Promise<void> {
               isError: true,
             };
           }
-          return jsonResult(await api.request('POST', `/api/projects/${args.project as string}/deploy`, { report }));
+          return jsonResult(await api.request('POST', `/api/apps/${args.app as string}/deploy`, { report }));
         }
         case 'get_deploy_status': {
-          if (!args.project) return errorResult(new Error('需要 project 参数（部署记录以 Dokploy 为准，查询必须带项目）'));
-          const slug = args.project as string;
-          const base = `/api/projects/${slug}/deployments`;
+          if (!args.app) return errorResult(new Error('需要 app 参数（部署记录以 Dokploy 为准，查询必须带应用）'));
+          const slug = args.app as string;
+          const base = `/api/apps/${slug}/deployments`;
           const path = args.deploymentId
             ? `${base}/${encodeURIComponent(args.deploymentId as string)}`
             : args.history
@@ -336,12 +437,12 @@ export async function startMcpServer(): Promise<void> {
         }
         case 'get_build_logs': {
           return jsonResult(
-            await api.request('GET', `/api/projects/${args.project as string}/build-logs?${logQuery(args, 'deploymentId')}`),
+            await api.request('GET', `/api/apps/${args.app as string}/build-logs?${logQuery(args, 'deploymentId')}`),
           );
         }
         case 'get_run_logs': {
           return jsonResult(
-            await api.request('GET', `/api/projects/${args.project as string}/run-logs?${logQuery(args, 'containerId')}`),
+            await api.request('GET', `/api/apps/${args.app as string}/run-logs?${logQuery(args, 'containerId')}`),
           );
         }
         default:
