@@ -38,7 +38,10 @@ export const upsertVariableSchema = z.object({
   key: variableKeySchema,
   value: z.string().max(65536),
   description: z.string().max(2000).default(''),
-  /** 无权限时是否在清单中可见（默认可见——让 AI 能"看见清单、看懂用途"） */
+  /**
+   * 没有读取权限的成员能否在清单里看到这个变量——看到的只有名称与备注，值永远看不到。
+   * 默认可见：让 AI 能"看见清单、看懂用途"，知道该申请什么；关闭则对他们完全隐藏，连变量存在都不知道。
+   */
   visibleWithoutPermission: z.boolean().default(true),
   /** 是否敏感（默认敏感）。只影响存储与展示：敏感值加密存储、控制台打码；非敏感值明文存储、有权限者在平台直接明文可见。读值授权模型两者一致 */
   secret: z.boolean().default(true),
