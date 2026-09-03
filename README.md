@@ -32,6 +32,76 @@ eat 的定位由此确定：作为 AI 与人之间的协作层，让权限、信
 4. **能力分发**：角色模板批量套用，CLI / MCP 自动同步至本地 AI 工作环境。
 5. **人机协作求助**：AI 可主动向团队成员求助，答复沉淀为经验 Skill，团队知识持续累积。
 
+## 长什么样
+
+下面的截图与录屏来自同一份可复现的演示数据（生成方式见 [`scripts/demo/`](scripts/demo/README.md)）：
+数据经平台自己的 API 写入，应用部署、构建日志、数据库账号都是真跑出来的，命令行录屏是把命令
+真执行一遍录下来的，输出未经修改。完整全集见 [界面截图与录屏](docs/screenshots.md)。
+
+### 一个新同事的一天，从命令行看
+
+登录一次，团队的 Skill 与 MCP 配置就到本地了——包括那份内置的平台使用指南，
+以及「哪些引用因为你没权限而没渲染出来、该怎么申请」。
+
+![eat login 与 eat sync](docs/assets/demos/onboard.gif)
+
+缺权限不是静默失败：清单看得见、值看不见，平台直接给出该执行的申请命令；Owner 批完再拉一次就有了。
+
+![eat env 申请与拉取](docs/assets/demos/permissions.gif)
+
+缺上下文也一样——AI 按能力描述自己挑该问谁，答复回来继续干活，事后还能沉淀成经验 Skill。
+
+![eat ask](docs/assets/demos/ask.gif)
+
+要上线时，本地先做密钥扫描：除了通用规则与 `.env` 误提交，还会拿文件里的字符串与**平台下发过的
+密钥指纹**比对。没过就不部署。
+
+![eat deploy 前置检查](docs/assets/demos/deploy-gate.gif)
+
+过了才触发部署，构建结果与容器日志都在平台里看（失败时长什么样见
+[全集](docs/screenshots.md#部署失败真实报错就在平台里)）。
+
+![部署成功](docs/assets/demos/deploy-ok.gif)
+
+### 控制台
+
+管理、授权与审批走网页。变量的 key 与备注默认全员可见，值需要授权；敏感值加密存储并打码，
+非敏感值对有权限的人直接明文可见。
+
+![环境变量清单](docs/assets/screenshots/envs.png)
+
+![环境详情](docs/assets/screenshots/env-detail.png)
+
+无权限的人发起申请，Owner 在这里批——也可以设个有效期。
+
+![权限申请](docs/assets/screenshots/requests.png)
+
+Skill 集中纳管、按可见性分发（团队可见 / 授权可见 / 私有），版本由服务端在每次推送时递增；
+`exp-` 开头的是求助解决后沉淀下来的经验。内置的平台使用指南不占列表位，`eat sync` 时自动注入到每个人本地。
+
+![Skill 清单](docs/assets/screenshots/skills.png)
+
+求助是多轮的，解决后可以一键整理成经验 Skill 继续分发。
+
+![求助详情](docs/assets/screenshots/help-detail.png)
+
+应用由成员自助创建（填 Git 地址与构建方式），首次部署需管理员授权一次；管理员配了域名后缀的话，
+建应用时自动分配 `<slug>.<后缀>`。
+
+![应用清单](docs/assets/screenshots/apps.png)
+
+部署记录以部署后台的构建记录为准。这三条分别是：**直接在部署后台触发的**（标注「未经平台扫描」，
+绕过门禁因此可见）、平台触发且成功的、平台触发但构建失败的。
+
+![部署记录](docs/assets/screenshots/app-deployments.png)
+
+移动端同样可用：桌面是左侧分组侧边栏，手机换抽屉导航，表格按断点隐藏次要列。
+
+<p>
+  <img src="docs/assets/screenshots/mobile-nav.png" alt="移动端导航" width="290">
+  <img src="docs/assets/screenshots/mobile-apps.png" alt="移动端应用清单" width="290">
+</p>
+
 ## 架构图
 
 ```mermaid
@@ -222,6 +292,7 @@ eat login --server http://<平台地址>
 
 ## 文档
 
+- [界面截图与录屏](docs/screenshots.md) —— 控制台每个页面与 CLI 关键流程的全集；生成方式见 [`scripts/demo/`](scripts/demo/README.md)。
 - [产品设计文档](docs/product-design.md) —— 产品与技术设计的唯一事实源，含权限模型、数据模型、接口设计与全部决策记录。
 - [部署文档](docs/deployment.md) —— 镜像构建、Dokploy 部署步骤、备份与 CLI 自举分发。
 
