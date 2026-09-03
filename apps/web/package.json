@@ -2,6 +2,7 @@
   "name": "@eat/web",
   "version": "0.1.0",
   "description": "easy-agent-team Web 控制台（React + Vite + Tailwind CSS + shadcn 风格组件）",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "scripts": {

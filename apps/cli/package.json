@@ -2,6 +2,7 @@
   "name": "@eat/cli",
   "version": "0.5.4",
   "description": "easy-agent-team CLI（eat）与 MCP server",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "eat": "./dist/index.js"

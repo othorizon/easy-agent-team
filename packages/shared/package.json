@@ -2,6 +2,7 @@
   "name": "@eat/shared",
   "version": "0.1.0",
   "description": "easy-agent-team 三端共用的 zod 契约与类型",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

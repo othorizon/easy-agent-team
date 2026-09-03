@@ -2,6 +2,7 @@
   "name": "@eat/server",
   "version": "0.1.0",
   "description": "easy-agent-team 平台服务（NestJS + Fastify 单体）",
+  "license": "Apache-2.0",
   "private": true,
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
