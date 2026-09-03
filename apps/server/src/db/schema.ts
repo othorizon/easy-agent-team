@@ -471,6 +471,10 @@ export const dokploySettings = pgTable('dokploy_setting', {
   environmentId: text('environment_id').notNull().default(''),
   /** 自助创建的应用绑哪把 SSH key 拉仓库；空串 = 不绑（只能拉公开仓库） */
   sshKeyId: text('ssh_key_id').notNull().default(''),
+  /** 自动分配域名的后缀（决策 32）：建应用时绑 `<slug>.<后缀>`；空串 = 不自动分配 */
+  domainSuffix: text('domain_suffix').notNull().default(''),
+  /** 自动分配的域名是否走 HTTPS（Let's Encrypt） */
+  domainHttps: boolean('domain_https').notNull().default(false),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -491,6 +495,14 @@ export const apps = pgTable('app', {
   dockerContextPath: text('docker_context_path').notNull().default(''),
   publishDirectory: text('publish_directory').notNull().default('.'),
   staticSpa: boolean('static_spa').notNull().default(false),
+  /** dockerfile 应用的容器监听端口，自动分配的域名把流量转发到它（static 固定 80） */
+  port: integer('port').notNull().default(3000),
+  /** 创建时自动分配的域名（决策 32）；没配后缀时建的、以及挂载的应用为 null */
+  domain: text('domain'),
+  /** 分配时是否按 HTTPS 建的（管理员之后改开关不影响已分配的域名，访问地址得按当时的算） */
+  domainHttps: boolean('domain_https').notNull().default(false),
+  /** Dokploy 上这条域名记录的 id：改端口时要靠它回写 */
+  dokployDomainId: text('dokploy_domain_id'),
   dokployApplicationId: text('dokploy_application_id').notNull(),
   description: text('description').notNull().default(''),
   ownerId: uuid('owner_id')

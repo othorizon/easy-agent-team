@@ -9,6 +9,7 @@ import type {
   UpdateAiSettingsRequest,
   UpdateDokploySettingsRequest,
 } from '@eat/shared';
+import { DOMAIN_SUFFIX_REGEX, normalizeDomainSuffix } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, XCircle } from 'lucide-react';
 import { useState } from 'react';
@@ -262,6 +263,8 @@ function DokployForm({
       projectId: settings.projectId,
       environmentId: settings.environmentId,
       sshKeyId: settings.sshKeyId,
+      domainSuffix: settings.domainSuffix,
+      domainHttps: settings.domainHttps,
     },
   });
   // 项目 / 环境 / SSH key 清单从 Dokploy 现拉：要先保存并启用地址与 token 才拉得到，拉不到时退回手填 id
@@ -278,6 +281,8 @@ function DokployForm({
     retry: false,
   });
   const projectId = watch('projectId');
+  const domainSuffix = normalizeDomainSuffix(watch('domainSuffix') ?? '');
+  const domainHttps = watch('domainHttps');
   const environments = (projects.data ?? []).find((p) => p.projectId === projectId)?.environments ?? [];
   const listsUnavailable = !settings.configured || !settings.enabled;
   const listError = projects.error instanceof ApiError ? projects.error.message : sshKeys.error instanceof ApiError ? sshKeys.error.message : null;
@@ -406,6 +411,40 @@ function DokployForm({
             ) : (
               <Input id="dokploy-ssh" className="font-mono" placeholder="sshKeyId（可空）" {...register('sshKeyId')} />
             )}
+          </Field>
+        </div>
+      </div>
+
+      <div className="rounded-md border px-3 py-3">
+        <h3 className="text-sm font-medium">自动分配域名（决策 32）</h3>
+        <p className="mt-1 mb-3 text-xs leading-relaxed text-muted-foreground">
+          配了后缀后，成员每建一个应用就自动在 Dokploy 上绑定 <code className="font-mono">&lt;slug&gt;.{domainSuffix || '<后缀>'}</code>
+          ，创建结果与应用详情里都能看到访问地址；留空则不自动分配。只影响之后新建的应用。DNS 里需有指向 Dokploy 服务器的通配记录
+          <code className="ml-1 font-mono">*.{domainSuffix || '<后缀>'}</code>。
+        </p>
+        <div className="grid gap-4 sm:grid-cols-[1fr_auto]">
+          <Field
+            label="域名后缀"
+            htmlFor="dokploy-domain-suffix"
+            error={errors.domainSuffix?.message}
+            hint={domainSuffix ? `示例：${domainHttps ? 'https' : 'http'}://crm-tool.${domainSuffix}` : '如 apps.example.com；可留空'}
+          >
+            <Input
+              id="dokploy-domain-suffix"
+              className="font-mono"
+              placeholder="apps.example.com"
+              aria-invalid={!!errors.domainSuffix}
+              {...register('domainSuffix', {
+                validate: (v) => !v || DOMAIN_SUFFIX_REGEX.test(normalizeDomainSuffix(v)) || '需为合法主机名，如 apps.example.com（不含协议与路径）',
+              })}
+            />
+          </Field>
+          <Field label="HTTPS" hint="Let's Encrypt 签发，需在 Dokploy 的 Web Server 设置里配好证书邮箱">
+            <Controller
+              control={control}
+              name="domainHttps"
+              render={({ field }) => <Switch checked={field.value} onCheckedChange={field.onChange} />}
+            />
           </Field>
         </div>
       </div>

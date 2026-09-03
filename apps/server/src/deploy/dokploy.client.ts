@@ -10,6 +10,8 @@
  *   POST {apiUrl}/application.saveBuildType    → 构建方式（static / dockerfile）
  *   POST {apiUrl}/application.saveEnvironment  → 运行时 env / 构建时 buildArgs（整体覆盖）
  *   POST {apiUrl}/application.delete   { applicationId }
+ *   POST {apiUrl}/domain.create        { host, port, https, certificateType, applicationId, domainType }（决策 32）
+ *   POST {apiUrl}/domain.update        { domainId, host, port, ... }（host 必带）
  *   GET  {apiUrl}/deployment.allByType?id=...&type=application  → 构建记录列表（每应用最多 10 条，见下）
  *   GET  {apiUrl}/deployment.queueList → 部署队列里的任务（构建记录还没建出来时的唯一去处，决策 30）
  *   GET  {apiUrl}/deployment.readLogs?deploymentId=...&tail=N   → 构建日志正文（决策 28）
@@ -110,6 +112,14 @@ export interface DokployEnvironmentInput {
   buildArgs: string;
   buildSecrets: string;
   createEnvFile: boolean;
+}
+
+/** 给 application 绑一条域名（决策 32）：路径固定 `/`，流量转发到容器的 port */
+export interface DokployDomainInput {
+  applicationId: string;
+  host: string;
+  port: number;
+  https: boolean;
 }
 
 export class DokployClient {
@@ -474,6 +484,48 @@ export class DokployClient {
     if (!res.ok && res.status !== 404) {
       throw new Error(`在 Dokploy 删除应用失败（HTTP ${res.status}）: ${(await res.text()).slice(0, 300)}`);
     }
+  }
+
+  // ---------- 域名（决策 32） ----------
+
+  /**
+   * 给应用绑域名。请求体是 Dokploy 控制台表单的最小集（对 v0.30.5 真机验证过）：path 固定 `/`；
+   * https 时证书类型 letsencrypt（要 Dokploy 自己配好证书邮箱），否则 none。
+   * 建完 Dokploy 立刻把 Traefik 路由写进文件 provider，不用等下次部署。
+   */
+  async createDomain(input: DokployDomainInput): Promise<{ domainId: string }> {
+    const json = await this.postJson(
+      `${this.base}/domain.create`,
+      {
+        host: input.host,
+        path: '/',
+        port: input.port,
+        https: input.https,
+        certificateType: input.https ? 'letsencrypt' : 'none',
+        applicationId: input.applicationId,
+        domainType: 'application',
+      },
+      '在 Dokploy 绑定域名失败',
+    );
+    const domainId = str(((json ?? {}) as Record<string, unknown>).domainId);
+    if (!domainId) throw new Error('Dokploy 绑定域名的响应里没有 domainId');
+    return { domainId };
+  }
+
+  /** 改域名转发的容器端口。domain.update 的 zod 把 host 定成必填（真机验证），所以关键字段整组带上 */
+  async updateDomain(input: DokployDomainInput & { domainId: string }): Promise<void> {
+    await this.postJson(
+      `${this.base}/domain.update`,
+      {
+        domainId: input.domainId,
+        host: input.host,
+        path: '/',
+        port: input.port,
+        https: input.https,
+        certificateType: input.https ? 'letsencrypt' : 'none',
+      },
+      '在 Dokploy 更新域名失败',
+    );
   }
 
   private async postJson(url: string, body: unknown, failNote: string): Promise<unknown> {

@@ -10,6 +10,57 @@ import { slugSchema } from './common.js';
  * Dokploy 的「项目 / 环境」只出现在管理员的接入配置里，用户侧不再感知。
  */
 
+// ---------- 自动分配域名（决策 32） ----------
+
+/** RFC 1123 主机名（Dokploy 校验域名用的就是这个形状；下划线不许，Let's Encrypt 不给签） */
+const HOSTNAME_LABEL = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
+/** 域名后缀至少两段（`apps.example.com`），小写、不带协议 / 路径 / 前导点 */
+export const DOMAIN_SUFFIX_REGEX = new RegExp(`^(?:${HOSTNAME_LABEL}\\.)+${HOSTNAME_LABEL}$`);
+/** 能直接当域名前缀用的 slug：一个合法的 DNS label（不以连字符结尾、不超过 63 字符） */
+export const DNS_LABEL_REGEX = new RegExp(`^${HOSTNAME_LABEL}$`);
+/** 完整主机名上限（RFC 1035） */
+export const HOSTNAME_MAX_LENGTH = 253;
+
+/**
+ * 把管理员输入的后缀标准化：去空白、去协议、去 `*.` / 前导点、去尾部斜杠与点、转小写。
+ * 管理员十有八九会照着 DNS 里的通配记录 `*.apps.example.com` 或带 https:// 的地址贴进来，别为这个报错。
+ */
+export function normalizeDomainSuffix(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
+    .replace(/^[*.]+/, '')
+    .replace(/[/.]+$/, '');
+}
+
+export const domainSuffixSchema = z
+  .string()
+  .max(HOSTNAME_MAX_LENGTH)
+  .transform(normalizeDomainSuffix)
+  .refine((v) => v === '' || DOMAIN_SUFFIX_REGEX.test(v), '域名后缀需为合法主机名（如 apps.example.com），不含协议与路径');
+
+/** 应用自动分配到的主机名：`<slug>.<后缀>` */
+export function appDomainHost(slug: string, suffix: string): string {
+  return `${slug}.${suffix}`;
+}
+
+/** 域名的访问地址（回给三端展示 / 复制用） */
+export function appUrl(domain: string, https: boolean): string {
+  return `${https ? 'https' : 'http'}://${domain}`;
+}
+
+/** 容器监听端口：域名的流量转发到它。Dokploy 的域名表单默认也是 3000 */
+export const DEFAULT_CONTAINER_PORT = 3000;
+/** 静态托管固定 80：Dokploy 的 static 构建器就是 `FROM nginx:alpine`，nginx 监听 80，用户改不了 */
+export const STATIC_CONTAINER_PORT = 80;
+export const containerPortSchema = z.coerce.number().int().min(1).max(65535);
+
+/** 域名实际转发到的容器端口：static 一律 80，dockerfile 用应用自己填的 */
+export function appContainerPort(buildType: AppBuildType | null, port: number): number {
+  return buildType === 'static' ? STATIC_CONTAINER_PORT : port;
+}
+
 // ---------- Dokploy 接入配置（管理员） ----------
 
 export const updateDokploySettingsSchema = z.object({
@@ -22,6 +73,10 @@ export const updateDokploySettingsSchema = z.object({
   environmentId: z.string().max(200).default(''),
   /** 自助创建的应用拉取 Git 仓库用的 SSH key（管理员预先在 Dokploy 建好）；空串 = 不绑，只能拉公开仓库 */
   sshKeyId: z.string().max(200).default(''),
+  /** 自动分配域名的后缀（决策 32）：配了就在建应用时绑 `<slug>.<后缀>`；空串 = 不自动分配 */
+  domainSuffix: domainSuffixSchema.default(''),
+  /** 自动分配的域名是否走 HTTPS（Dokploy 用 Let's Encrypt 签发，需要它自己的证书邮箱配置） */
+  domainHttps: z.boolean().default(false),
 });
 export type UpdateDokploySettingsRequest = z.infer<typeof updateDokploySettingsSchema>;
 
@@ -37,6 +92,8 @@ export const dokploySettingsInfoSchema = z.object({
   projectId: z.string(),
   environmentId: z.string(),
   sshKeyId: z.string(),
+  domainSuffix: z.string(),
+  domainHttps: z.boolean(),
   /** 自助创建应用的前提是否齐：已启用 + 项目 + 环境都配了（SSH key 可空） */
   provisioningReady: z.boolean(),
 });
@@ -108,6 +165,8 @@ export const createAppSchema = z.object({
   publishDirectory: repoPathSchema.default(DEFAULT_PUBLISH_DIRECTORY),
   /** static：SPA 模式（所有路径回退到 index.html） */
   staticSpa: z.boolean().default(false),
+  /** dockerfile：容器监听端口，自动分配的域名把流量转发到它（static 固定 80，此字段不生效） */
+  port: containerPortSchema.default(DEFAULT_CONTAINER_PORT),
   description: z.string().max(2000).default(''),
 });
 export type CreateAppRequest = z.infer<typeof createAppSchema>;
@@ -136,6 +195,7 @@ export const updateAppSchema = z.object({
   dockerContextPath: repoPathSchema.optional(),
   publishDirectory: repoPathSchema.optional(),
   staticSpa: z.boolean().optional(),
+  port: containerPortSchema.optional(),
   /** 仅挂载的应用可改 */
   dokployApplicationId: z.string().min(1).max(200).optional(),
 });
@@ -153,6 +213,12 @@ export const appInfoSchema = z.object({
   dockerContextPath: z.string(),
   publishDirectory: z.string(),
   staticSpa: z.boolean(),
+  /** dockerfile 应用的容器监听端口（static 固定 80，这里的值不生效） */
+  port: z.number(),
+  /** 创建时自动分配的域名（决策 32）；没配后缀时建的、以及挂载的应用为 null */
+  domain: z.string().nullable(),
+  /** 域名的访问地址（含协议），domain 为 null 时也为 null */
+  url: z.string().nullable(),
   dokployApplicationId: z.string(),
   description: z.string(),
   ownerId: z.string(),

@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 8;
+export const PLATFORM_GUIDE_VERSION = 9;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -42,6 +42,8 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 
 **创建应用**：\`eat app create <slug> --repo <git 地址> --build dockerfile|static\`（MCP: \`create_app\`）。平台会在 Dokploy 上建好应用、绑定 Git 源与 SSH key、配好构建方式。构建方式只有两种：\`dockerfile\`（按仓库里的 Dockerfile 构建，可用 \`--dockerfile\` / \`--context\` 指定路径与上下文）和 \`static\`（静态托管：**不跑任何构建命令**，把 \`--publish-dir\` 目录原样交给 nginx，仓库里必须直接有产物；前端路由用 \`--spa\`）。要先 build 再托管产物的一律选 dockerfile。之后用 \`eat app update <slug> ...\`（MCP: \`update_app\`）改配置，下次部署生效。
 
+**域名**：管理员配置了自动域名后缀时，创建结果里会带 \`domain\` / \`url\`（\`<slug>.<后缀>\`，\`eat app show\` / \`list_apps\` 也能看到），把访问地址告诉用户；结果里 \`url\` 为 null 说明平台没开自动域名，要域名找管理员。dockerfile 应用用 \`--port\`（MCP: \`port\`，默认 3000）声明容器监听的端口——域名流量转发到它，填错了页面打不开；static 固定转发到 80，不用填。
+
 **首次部署需要管理员授权一次**：新建的应用 \`deployApproved=false\`，部署会返回 \`DEPLOY_NOT_APPROVED\`——告诉用户找管理员在控制台「应用」页点「授权部署」，**不要反复重试**；授权一次后永久有效。
 
 **应用 env**：\`eat app env pull <slug>\` / \`eat app env push <slug> --file .env\`（MCP: \`get_app_env\` / \`set_app_env\`）读写 Dokploy 上的运行时 env；加 \`--build\`（MCP: \`target=build\`）是构建时变量（Dockerfile 里以 ARG 取用）。**推送是整体覆盖不是合并**：先 pull 再改再 push，否则没带上的变量会被删掉。值可能是密钥，只用于当前任务、不写进代码或对话。
@@ -66,7 +68,7 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 | \`eat env list / pull / request\` | 环境变量：看清单 / 取值 / 申请权限 |
 | \`eat skill push <dir>\` | 把本地写好的 skill 上传到平台纳管分享 |
 | \`eat ask create / show / reply\` | 求助的 CLI 入口 |
-| \`eat app create / update / delete <slug>\` | 自助创建应用（\`--repo\` + \`--build dockerfile|static\`）/ 改配置 / 删除 |
+| \`eat app create / update / delete <slug>\` | 自助创建应用（\`--repo\` + \`--build dockerfile|static\`，dockerfile 加 \`--port\` 声明容器端口；管理员配了后缀则自动得到域名）/ 改配置 / 删除 |
 | \`eat app env pull / push <slug> [--build]\` | 读写应用在 Dokploy 上的 env（运行时；\`--build\` 为构建时），push 是整体覆盖 |
 | \`eat deploy [slug]\` | 触发部署（自动前置检查；应用需先经管理员授权一次） |
 | \`eat app list / show / status / deployments\` | 应用清单 / 配置详情 / 最近一次部署状态 / 部署历史（\`--all\` 看完整历史） |

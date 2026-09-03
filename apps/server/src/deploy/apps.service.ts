@@ -17,7 +17,16 @@ import type {
   UpdateAppEnvRequest,
   UpdateAppRequest,
 } from '@eat/shared';
-import { DEFAULT_DOCKERFILE, DEFAULT_PUBLISH_DIRECTORY, diffDotenv } from '@eat/shared';
+import {
+  DEFAULT_DOCKERFILE,
+  DEFAULT_PUBLISH_DIRECTORY,
+  DNS_LABEL_REGEX,
+  HOSTNAME_MAX_LENGTH,
+  appContainerPort,
+  appDomainHost,
+  appUrl,
+  diffDotenv,
+} from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
 import { DB, type Db } from '../db/db.module';
@@ -112,6 +121,9 @@ export class AppsService {
       dockerContextPath: row.dockerContextPath,
       publishDirectory: row.publishDirectory,
       staticSpa: row.staticSpa,
+      port: row.port,
+      domain: row.domain,
+      url: row.domain ? appUrl(row.domain, row.domainHttps) : null,
       dokployApplicationId: row.dokployApplicationId,
       description: row.description,
       ownerId: row.ownerId,
@@ -141,13 +153,30 @@ export class AppsService {
   // ---------- 创建 / 挂载 ----------
 
   /**
+   * 自动分配的域名（决策 32）：`<slug>.<后缀>`。slug 的规则比 DNS label 宽（允许以连字符结尾、长到 64），
+   * 配了后缀时得先把它挡在建 Dokploy 应用之前，别建到一半才发现域名绑不上。
+   */
+  private domainFor(slug: string, suffix: string): string {
+    const host = appDomainHost(slug, suffix);
+    if (!DNS_LABEL_REGEX.test(slug) || host.length > HOSTNAME_MAX_LENGTH) {
+      throw new BadRequestException({
+        error: 'VALIDATION_FAILED',
+        message: `平台会给应用自动分配域名 ${host}，slug 需能作为域名前缀：不以连字符结尾、不超过 63 个字符`,
+      });
+    }
+    return host;
+  }
+
+  /**
    * 自助创建（决策 31）：先在 Dokploy 上把应用建出来并配好，全部成功才落平台库。
-   * Dokploy 侧三步（建应用 → 绑 Git 源 → 配构建方式）任一步失败就把刚建的应用删掉，
-   * 不留一个在 Dokploy 上有、平台里没有的孤儿——那种应用用户看不见也删不掉。
+   * Dokploy 侧几步（建应用 → 绑 Git 源 → 配构建方式 → 绑域名）任一步失败就把刚建的应用删掉
+   * （域名随应用级联删），不留一个在 Dokploy 上有、平台里没有的孤儿——那种应用用户看不见也删不掉。
    */
   async createApp(user: AuthUser, dto: CreateAppRequest): Promise<AppInfo> {
     await this.assertSlugFree(dto.slug);
-    const { client, environmentId, sshKeyId } = await this.dokploy.provisioning();
+    const { client, environmentId, sshKeyId, domainSuffix, domainHttps } = await this.dokploy.provisioning();
+    // 决策 32：管理员配了后缀才分配；没配就不绑域名，应用照常可建
+    const domain = domainSuffix ? this.domainFor(dto.slug, domainSuffix) : null;
 
     const created = await this.dokploy.callDokploy(
       () =>
@@ -158,9 +187,23 @@ export class AppsService {
         }),
       '在 Dokploy 创建应用失败',
     );
+    let dokployDomainId: string | null = null;
     try {
       await this.syncGitProvider(client, created.applicationId, dto.repoUrl, dto.branch, sshKeyId);
       await this.syncBuildType(client, created.applicationId, dto);
+      if (domain) {
+        const bound = await this.dokploy.callDokploy(
+          () =>
+            client.createDomain({
+              applicationId: created.applicationId,
+              host: domain,
+              port: appContainerPort(dto.buildType, dto.port),
+              https: domainHttps,
+            }),
+          '在 Dokploy 绑定域名失败',
+        );
+        dokployDomainId = bound.domainId;
+      }
     } catch (err) {
       await client.deleteApplication(created.applicationId).catch((e: Error) => {
         this.logger.warn(`回滚删除 Dokploy 应用 ${created.applicationId} 失败（忽略）: ${e.message}`);
@@ -181,6 +224,10 @@ export class AppsService {
         dockerContextPath: dto.dockerContextPath,
         publishDirectory: dto.publishDirectory,
         staticSpa: dto.staticSpa,
+        port: dto.port,
+        domain,
+        domainHttps: domain ? domainHttps : false,
+        dokployDomainId,
         dokployApplicationId: created.applicationId,
         description: dto.description,
         ownerId: user.id,
@@ -197,7 +244,7 @@ export class AppsService {
       action: 'app.created',
       targetType: 'app',
       targetId: row.id,
-      meta: { slug: dto.slug, dokployApplicationId: created.applicationId, buildType: dto.buildType },
+      meta: { slug: dto.slug, dokployApplicationId: created.applicationId, buildType: dto.buildType, domain },
     });
     return this.toAppInfo(row, user);
   }
@@ -276,13 +323,14 @@ export class AppsService {
   /**
    * 更新。平台托管的应用：Git 字段（仓库 / 分支）与构建字段有变化才回写 Dokploy，
    * 先写 Dokploy 再落库——Dokploy 拒绝时平台侧不该先改成一个 Dokploy 上并不生效的配置。
+   * 域名转发的容器端口跟着构建方式 / port 走（static 固定 80），有域名的应用变了就回写域名记录。
    * 挂载的应用：只改平台侧信息，构建配置字段一律拒绝。
    */
   async updateApp(user: AuthUser, slug: string, dto: UpdateAppRequest): Promise<AppInfo> {
     const app = await this.getApp(slug);
     this.assertCanManage(app, user, '修改');
-    const buildKeys = ['branch', 'buildType', 'dockerfile', 'dockerContextPath', 'publishDirectory', 'staticSpa'] as const;
-    const touchesBuild = buildKeys.some((k) => dto[k] !== undefined);
+    const buildKeys = ['buildType', 'dockerfile', 'dockerContextPath', 'publishDirectory', 'staticSpa'] as const;
+    const touchesBuild = (['branch', 'port', ...buildKeys] as const).some((k) => dto[k] !== undefined);
 
     if (!app.managed) {
       if (touchesBuild) {
@@ -309,6 +357,7 @@ export class AppsService {
       dockerContextPath: dto.dockerContextPath ?? app.dockerContextPath,
       publishDirectory: dto.publishDirectory ?? app.publishDirectory,
       staticSpa: dto.staticSpa ?? app.staticSpa,
+      port: dto.port ?? app.port,
       dokployApplicationId: app.managed ? app.dokployApplicationId : (dto.dokployApplicationId ?? app.dokployApplicationId),
     };
 
@@ -317,8 +366,12 @@ export class AppsService {
         throw new BadRequestException({ error: 'VALIDATION_FAILED', message: '平台托管的应用必须有 Git 仓库地址' });
       }
       const gitChanged = next.repoUrl !== app.repoUrl || next.branch !== app.branch;
-      const buildChanged = buildKeys.some((k) => k !== 'branch' && next[k] !== app[k]);
-      if (gitChanged || buildChanged) {
+      const buildChanged = buildKeys.some((k) => next[k] !== app[k]);
+      const portChanged =
+        app.domain !== null &&
+        app.dokployDomainId !== null &&
+        appContainerPort(next.buildType, next.port) !== appContainerPort(app.buildType, app.port);
+      if (gitChanged || buildChanged || portChanged) {
         const client = await this.dokploy.client();
         // 换仓库时沿用管理员当前配置的 key：应用创建后管理员可能换过 key，以当前配置为准
         if (gitChanged) {
@@ -326,6 +379,19 @@ export class AppsService {
           await this.syncGitProvider(client, app.dokployApplicationId, next.repoUrl, next.branch, sshKeyId);
         }
         if (buildChanged) await this.syncBuildType(client, app.dokployApplicationId, next);
+        if (portChanged) {
+          await this.dokploy.callDokploy(
+            () =>
+              client.updateDomain({
+                domainId: app.dokployDomainId as string,
+                applicationId: app.dokployApplicationId,
+                host: app.domain as string,
+                port: appContainerPort(next.buildType, next.port),
+                https: app.domainHttps,
+              }),
+            '在 Dokploy 更新域名端口失败',
+          );
+        }
       }
     }
 
@@ -341,6 +407,7 @@ export class AppsService {
         dockerContextPath: next.dockerContextPath,
         publishDirectory: next.publishDirectory,
         staticSpa: next.staticSpa,
+        port: next.port,
         dokployApplicationId: next.dokployApplicationId,
       })
       .where(eq(apps.id, app.id))

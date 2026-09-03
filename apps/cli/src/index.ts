@@ -129,7 +129,7 @@ app.command('list').description('查看应用清单、自己的成员身份与�
 app.command('show <app>').description('查看应用配置（Git、构建方式、成员、部署授权）').action(appShow);
 app
   .command('create <slug>')
-  .description('自助创建应用：平台在 Dokploy 上建应用并绑好 Git 源 / SSH key / 构建方式')
+  .description('自助创建应用：平台在 Dokploy 上建应用并绑好 Git 源 / SSH key / 构建方式（管理员配了域名后缀时自动分配 <slug>.<后缀>）')
   .option('--name <name>', '显示名称（默认同 slug）')
   .requiredOption('--repo <url>', 'Git 仓库地址（https 或 ssh；私有仓库靠管理员配置的 SSH key）')
   .option('--branch <branch>', '分支（默认 main）')
@@ -138,6 +138,7 @@ app
   .option('--context <path>', 'dockerfile：构建上下文（相对仓库根，默认仓库根）')
   .option('--publish-dir <path>', 'static：发布目录（相对仓库根，默认 .）')
   .option('--spa', 'static：SPA 模式（所有路径回退到 index.html）')
+  .option('--port <n>', 'dockerfile：容器监听端口（默认 3000）；平台自动分配的域名把流量转发到它，static 固定 80')
   .option('--description <text>', '说明')
   .action(appCreate);
 app
@@ -152,6 +153,7 @@ app
   .option('--publish-dir <path>', 'static：发布目录')
   .option('--spa', 'static：开启 SPA 模式')
   .option('--no-spa', 'static：关闭 SPA 模式')
+  .option('--port <n>', 'dockerfile：容器监听端口（有自动分配域名的应用会同步改域名转发端口）')
   .option('--description <text>', '说明')
   .action(appUpdate);
 app

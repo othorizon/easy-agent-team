@@ -194,7 +194,7 @@ export async function appList(): Promise<void> {
   for (const a of rows) {
     const mark = a.canDeploy ? '●' : a.isMember ? '◐' : '○';
     const build = a.buildType ? APP_BUILD_TYPE_LABEL[a.buildType] : '挂载';
-    console.log(`${mark} ${a.slug}  ${a.name}（${build}，Owner: ${a.ownerName}，成员 ${a.members.length}，${approvalNote(a)}）`);
+    console.log(`${mark} ${a.slug}  ${a.name}（${build}，Owner: ${a.ownerName}，成员 ${a.members.length}，${approvalNote(a)}）${a.url ? `  ${a.url}` : ''}`);
   }
   console.log('\n● 可部署  ◐ 成员但应用未获授权  ○ 非成员');
 }
@@ -207,12 +207,14 @@ function printApp(a: AppInfo): void {
   if (a.managed && a.buildType) {
     const cfg =
       a.buildType === 'dockerfile'
-        ? `Dockerfile: ${a.dockerfile}，构建上下文: ${a.dockerContextPath || '（仓库根）'}`
+        ? `Dockerfile: ${a.dockerfile}，构建上下文: ${a.dockerContextPath || '（仓库根）'}，容器端口: ${a.port}`
         : `发布目录: ${a.publishDirectory}，SPA 模式: ${a.staticSpa ? '开' : '关'}`;
     console.log(`构建: ${APP_BUILD_TYPE_LABEL[a.buildType]}（${cfg}）`);
   } else {
     console.log('构建: 管理员挂载的既有 Dokploy 应用，构建配置在 Dokploy 侧维护');
   }
+  if (a.url) console.log(`域名: ${a.url}`);
+  else if (a.managed) console.log('域名: 未分配（管理员未在「系统设置 → Dokploy」配置自动域名后缀）');
   console.log(`Dokploy application: ${a.dokployApplicationId}`);
   const approval = a.deployApproved
     ? `已授权（${a.approvedByName ?? '-'}，${when(a.approvedAt ?? '')}）`
@@ -224,6 +226,13 @@ function printApp(a: AppInfo): void {
 export async function appShow(slug: string): Promise<void> {
   const api = Api.fromSaved();
   printApp(await resolveApp(api, slug));
+}
+
+/** --port：1-65535 的整数（commander 传进来的是字符串） */
+function parsePort(raw: string): number {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) throw new Error(`--port 需为 1-65535 的整数，收到 ${raw}`);
+  return n;
 }
 
 function parseBuildType(raw: string | undefined): AppBuildType | undefined {
@@ -242,6 +251,7 @@ export interface AppCreateOpts {
   context?: string;
   publishDir?: string;
   spa?: boolean;
+  port?: string;
   description?: string;
 }
 
@@ -261,10 +271,14 @@ export async function appCreate(slug: string, opts: AppCreateOpts): Promise<void
   if (opts.context !== undefined) body.dockerContextPath = opts.context;
   if (opts.publishDir) body.publishDirectory = opts.publishDir;
   if (opts.spa) body.staticSpa = true;
+  if (opts.port !== undefined) body.port = parsePort(opts.port);
   console.log(`在 Dokploy 上创建应用 ${slug}（${APP_BUILD_TYPE_LABEL[buildType]}，${opts.repo}）...`);
   const app = await api.request<AppInfo>('POST', '/api/apps', body);
   console.log('已创建。');
   printApp(app);
+  if (app.url) {
+    console.log(`\n访问地址: ${app.url}（首次部署成功后可访问；DNS 由管理员配置，域名流量转发到容器端口 ${buildType === 'static' ? 80 : app.port}）`);
+  }
   if (buildType === 'static') {
     console.log('\n提示: 静态托管不跑任何构建命令，只把发布目录原样交给 nginx——仓库里得直接有构建产物；要先 build 的请改用 dockerfile。');
   }
@@ -281,6 +295,7 @@ export interface AppUpdateOpts {
   publishDir?: string;
   /** commander 的 --spa / --no-spa：没传时是 undefined */
   spa?: boolean;
+  port?: string;
   description?: string;
 }
 
@@ -296,6 +311,7 @@ export async function appUpdate(slug: string, opts: AppUpdateOpts): Promise<void
   if (opts.context !== undefined) body.dockerContextPath = opts.context;
   if (opts.publishDir !== undefined) body.publishDirectory = opts.publishDir;
   if (opts.spa !== undefined) body.staticSpa = opts.spa;
+  if (opts.port !== undefined) body.port = parsePort(opts.port);
   if (opts.description !== undefined) body.description = opts.description;
   if (Object.keys(body).length === 0) throw new Error('没有要改的字段（eat app update --help 查看可选项）');
   const app = await api.request<AppInfo>('PATCH', `/api/apps/${slug}`, body);

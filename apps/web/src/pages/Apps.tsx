@@ -12,7 +12,15 @@ import type {
   RunLogsResult,
   UpdateAppRequest,
 } from '@eat/shared';
-import { APP_BUILD_TYPE_LABEL, APP_ENV_TARGET_LABEL, DEFAULT_BRANCH, DEFAULT_DOCKERFILE, DEFAULT_PUBLISH_DIRECTORY } from '@eat/shared';
+import {
+  APP_BUILD_TYPE_LABEL,
+  APP_ENV_TARGET_LABEL,
+  DEFAULT_BRANCH,
+  DEFAULT_CONTAINER_PORT,
+  DEFAULT_DOCKERFILE,
+  DEFAULT_PUBLISH_DIRECTORY,
+  STATIC_CONTAINER_PORT,
+} from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link2, Pencil, Plus, RefreshCw, Rocket, ShieldCheck, ShieldOff, Trash2, X } from 'lucide-react';
 import { useState } from 'react';
@@ -104,7 +112,8 @@ export function AppsPage() {
   const create = useMutation({
     mutationFn: (v: CreateAppRequest) => api<AppInfo>('POST', '/api/apps', v),
     onSuccess: (a) => {
-      toast.success(a.deployApproved ? '应用已创建' : '应用已创建；首次部署前需管理员授权一次');
+      const domain = a.domain ? `，已分配域名 ${a.domain}` : '';
+      toast.success(a.deployApproved ? `应用已创建${domain}` : `应用已创建${domain}；首次部署前需管理员授权一次`);
       setCreating(false);
       invalidate();
     },
@@ -210,6 +219,11 @@ export function AppsPage() {
                         <span className="font-medium">{a.name}</span>
                         <Badge variant="outline">{a.buildType ? APP_BUILD_TYPE_LABEL[a.buildType] : '挂载'}</Badge>
                       </button>
+                      {a.url && (
+                        <a href={a.url} target="_blank" rel="noreferrer" className="mt-0.5 block truncate font-mono text-xs text-muted-foreground hover:underline">
+                          {a.domain}
+                        </a>
+                      )}
                     </TableCell>
                     <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell" title={a.repoUrl}>
                       {a.repoUrl || '—'}
@@ -366,12 +380,22 @@ function Overview({
           {APP_BUILD_TYPE_LABEL[app.buildType]}
           <span className="ml-2 text-xs text-muted-foreground">
             {app.buildType === 'dockerfile'
-              ? `Dockerfile ${app.dockerfile}，上下文 ${app.dockerContextPath || '仓库根'}`
+              ? `Dockerfile ${app.dockerfile}，上下文 ${app.dockerContextPath || '仓库根'}，容器端口 ${app.port}`
               : `发布目录 ${app.publishDirectory}，SPA 模式${app.staticSpa ? '开' : '关'}`}
           </span>
         </>
       ) : (
         <span className="text-muted-foreground">管理员挂载的既有应用，构建配置在 Dokploy 侧维护</span>
+      ),
+    ],
+    [
+      '域名',
+      app.url ? (
+        <a key="url" href={app.url} target="_blank" rel="noreferrer" className="break-all font-mono text-primary hover:underline">
+          {app.url}
+        </a>
+      ) : (
+        <span className="text-muted-foreground">{app.managed ? '未分配（管理员未在「系统设置 → Dokploy」配置自动域名后缀）' : '—'}</span>
       ),
     ],
     ['Dokploy application', <InlineCode key="id">{app.dokployApplicationId}</InlineCode>],
@@ -704,7 +728,10 @@ type BuildFormValues = {
   dockerContextPath: string;
   publishDirectory: string;
   staticSpa: boolean;
+  port: number;
 };
+
+const containerPort = (v: number) => (Number.isInteger(v) && v >= 1 && v <= 65535 ? true : '1-65535 的整数');
 
 /** 构建方式 + 各自的可选项（决策 31：只开放 static / dockerfile 两种） */
 function BuildFields<T extends BuildFormValues>({
@@ -735,12 +762,15 @@ function BuildFields<T extends BuildFormValues>({
         />
       </Field>
       {buildType === 'dockerfile' ? (
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-[1fr_1fr_7rem]">
           <Field label="Dockerfile 路径" htmlFor={`${idPrefix}-dockerfile`} hint="相对仓库根" error={f.formState.errors.dockerfile?.message}>
             <Input id={`${idPrefix}-dockerfile`} className="font-mono" placeholder={DEFAULT_DOCKERFILE} {...f.register('dockerfile', { validate: repoPath })} />
           </Field>
           <Field label="构建上下文" htmlFor={`${idPrefix}-context`} hint="相对仓库根，留空为仓库根" error={f.formState.errors.dockerContextPath?.message}>
             <Input id={`${idPrefix}-context`} className="font-mono" placeholder="." {...f.register('dockerContextPath', { validate: repoPath })} />
+          </Field>
+          <Field label="容器端口" htmlFor={`${idPrefix}-port`} hint="域名流量转发到它" error={f.formState.errors.port?.message}>
+            <Input id={`${idPrefix}-port`} type="number" className="font-mono" placeholder={String(DEFAULT_CONTAINER_PORT)} {...f.register('port', { valueAsNumber: true, validate: containerPort })} />
           </Field>
         </div>
       ) : (
@@ -748,7 +778,7 @@ function BuildFields<T extends BuildFormValues>({
           <Field label="发布目录" htmlFor={`${idPrefix}-publish`} hint="相对仓库根，交给 nginx 托管的目录" error={f.formState.errors.publishDirectory?.message}>
             <Input id={`${idPrefix}-publish`} className="font-mono" placeholder={DEFAULT_PUBLISH_DIRECTORY} {...f.register('publishDirectory', { validate: repoPath })} />
           </Field>
-          <Field label="SPA 模式" hint="所有路径回退到 index.html（前端路由用）">
+          <Field label="SPA 模式" hint={`所有路径回退到 index.html（前端路由用）；静态托管由 nginx 监听 ${STATIC_CONTAINER_PORT} 端口，域名流量转发到它`}>
             <Controller control={f.control} name="staticSpa" render={({ field }) => <Switch checked={field.value} onCheckedChange={field.onChange} />} />
           </Field>
         </div>
@@ -773,6 +803,7 @@ function CreateAppDialog({ pending, onClose, onSubmit }: { pending: boolean; onC
       dockerContextPath: '',
       publishDirectory: DEFAULT_PUBLISH_DIRECTORY,
       staticSpa: false,
+      port: DEFAULT_CONTAINER_PORT,
       description: '',
     },
   });
@@ -838,6 +869,7 @@ function EditAppDialog({ app, pending, onClose, onSubmit }: { app: AppInfo; pend
       dockerContextPath: app.dockerContextPath,
       publishDirectory: app.publishDirectory,
       staticSpa: app.staticSpa,
+      port: app.port,
       dokployApplicationId: app.dokployApplicationId,
     },
   });
@@ -865,6 +897,7 @@ function EditAppDialog({ app, pending, onClose, onSubmit }: { app: AppInfo; pend
                     dockerContextPath: v.dockerContextPath,
                     publishDirectory: v.publishDirectory || DEFAULT_PUBLISH_DIRECTORY,
                     staticSpa: v.staticSpa,
+                    port: v.port,
                   }
                 : { name: v.name, description: v.description, repoUrl: v.repoUrl, dokployApplicationId: v.dokployApplicationId },
             ),

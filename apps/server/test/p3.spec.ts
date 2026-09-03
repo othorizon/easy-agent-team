@@ -34,6 +34,8 @@ const dokCalls: Array<{ op: string; body: Record<string, unknown> }> = [];
 let failGitProviderOnce = false;
 /** 让 application.delete 失败，验证删应用时 Dokploy 删不掉就不动平台记录 */
 let failDelete = false;
+/** 让 domain.create 失败一次，验证绑域名失败时整体回滚（决策 32） */
+let failDomainOnce = false;
 let createdSeq = 0;
 /**
  * project.all 的真实形状：新版 Dokploy 把 applications 挂在 environments[] 下（真机实测），
@@ -184,6 +186,17 @@ beforeAll(async () => {
           case '/api/application.delete':
             dokCalls.push({ op: 'delete', body });
             return failDelete ? json(500, { message: 'boom' }) : json(200, true);
+          case '/api/domain.create':
+            dokCalls.push({ op: 'domain', body });
+            if (failDomainOnce) {
+              failDomainOnce = false;
+              return json(400, { message: 'Invalid domain name' });
+            }
+            // 真实响应是整条域名记录；平台只用 domainId
+            return json(200, { domainId: `dom-${createdSeq}`, ...body });
+          case '/api/domain.update':
+            dokCalls.push({ op: 'domainUpdate', body });
+            return json(200, body);
           default:
             return res.writeHead(404).end();
         }
@@ -318,6 +331,27 @@ describe('Dokploy 接入配置', () => {
 
     const saved = await api('PUT', '/api/admin/dokploy-settings', { token: adminToken, payload: fullSettings() });
     expect(saved.body).toMatchObject({ projectId: 'proj-1', environmentId: 'env-1', sshKeyId: 'key-1', provisioningReady: true });
+  });
+
+  it('自动分配域名的后缀（决策 32）：默认不分配；输入标准化（去协议 / 通配前缀 / 大小写）；非法主机名 400', async () => {
+    const before = await api('GET', '/api/admin/dokploy-settings', { token: adminToken });
+    expect(before.body).toMatchObject({ domainSuffix: '', domainHttps: false });
+
+    // 管理员多半照着 DNS 通配记录或带协议的地址贴：都认，存成干净的主机名
+    const saved = await api('PUT', '/api/admin/dokploy-settings', {
+      token: adminToken,
+      payload: fullSettings({ domainSuffix: ' https://*.Apps.Example.com/ ', domainHttps: true }),
+    });
+    expect(saved.status).toBe(200);
+    expect(saved.body).toMatchObject({ domainSuffix: 'apps.example.com', domainHttps: true });
+
+    for (const bad of ['apps_example.com', 'localhost', 'apps.example.com/path', '-apps.example.com']) {
+      const r = await api('PUT', '/api/admin/dokploy-settings', { token: adminToken, payload: fullSettings({ domainSuffix: bad }) });
+      expect(r.status, bad).toBe(400);
+    }
+    // 后面的建应用用例默认不分配域名
+    const reset = await api('PUT', '/api/admin/dokploy-settings', { token: adminToken, payload: fullSettings() });
+    expect(reset.body).toMatchObject({ domainSuffix: '', domainHttps: false });
   });
 });
 
@@ -522,6 +556,102 @@ describe('应用：自助创建与挂载（决策 31）', () => {
     dokCalls.length = 0;
   });
 
+  it('配了域名后缀：建应用时自动绑 <slug>.<后缀>，dockerfile 转发到应用填的端口，结果里带 domain / url（决策 32）', async () => {
+    await api('PUT', '/api/admin/dokploy-settings', { token: adminToken, payload: fullSettings({ domainSuffix: 'apps.example.com' }) });
+    const r = await api('POST', '/api/apps', {
+      token: ownerToken,
+      payload: { slug: 'with-domain', name: '带域名', repoUrl: 'https://git.example.com/d.git', buildType: 'dockerfile', port: 8080 },
+    });
+    expect(r.status).toBe(201);
+    expect(r.body).toMatchObject({ port: 8080, domain: 'with-domain.apps.example.com', url: 'http://with-domain.apps.example.com' });
+    expect(dokCalls.map((c) => c.op)).toEqual(['create', 'git', 'build', 'domain']);
+    // 请求体照 Dokploy 控制台表单的最小集（真机验证过）：path 固定 /，不开 HTTPS 时证书类型 none
+    expect(dokCalls[3].body).toEqual({
+      host: 'with-domain.apps.example.com',
+      path: '/',
+      port: 8080,
+      https: false,
+      certificateType: 'none',
+      applicationId: 'app-created-5',
+      domainType: 'application',
+    });
+    // 列表里也带
+    const list = await api('GET', '/api/apps', { token: memberToken });
+    expect(list.body.find((a: { slug: string }) => a.slug === 'with-domain')).toMatchObject({ domain: 'with-domain.apps.example.com' });
+    expect(list.body.find((a: { slug: string }) => a.slug === 'crm-tool')).toMatchObject({ domain: null, url: null, port: 3000 });
+    dokCalls.length = 0;
+  });
+
+  it('静态托管的域名固定转发到 80（nginx），应用填的端口不生效；开了 HTTPS 用 Let\'s Encrypt、url 带 https', async () => {
+    await api('PUT', '/api/admin/dokploy-settings', { token: adminToken, payload: fullSettings({ domainSuffix: 'apps.example.com', domainHttps: true }) });
+    const r = await api('POST', '/api/apps', {
+      token: ownerToken,
+      payload: { slug: 'static-domain', name: '静态带域名', repoUrl: 'https://git.example.com/s.git', buildType: 'static', port: 9999 },
+    });
+    expect(r.status).toBe(201);
+    expect(r.body).toMatchObject({ port: 9999, domain: 'static-domain.apps.example.com', url: 'https://static-domain.apps.example.com' });
+    expect(dokCalls.map((c) => c.op)).toEqual(['create', 'git', 'build', 'domain']);
+    expect(dokCalls[3].body).toMatchObject({ host: 'static-domain.apps.example.com', port: 80, https: true, certificateType: 'letsencrypt' });
+    dokCalls.length = 0;
+  });
+
+  it('slug 当不了域名前缀（以连字符结尾）时在建 Dokploy 应用之前就拒绝；端口越界 400', async () => {
+    const trailing = await api('POST', '/api/apps', {
+      token: ownerToken,
+      payload: { slug: 'trailing-', name: 'x', repoUrl: 'https://git.example.com/t.git', buildType: 'dockerfile' },
+    });
+    expect(trailing.status).toBe(400);
+    expect(trailing.body.message).toContain('域名前缀');
+    const port = await api('POST', '/api/apps', {
+      token: ownerToken,
+      payload: { slug: 'bad-port', name: 'x', repoUrl: 'https://git.example.com/t.git', buildType: 'dockerfile', port: 70000 },
+    });
+    expect(port.status).toBe(400);
+    expect(dokCalls).toHaveLength(0);
+  });
+
+  it('绑域名失败时整体回滚：删掉刚建的应用（域名随之级联删），平台里不留记录', async () => {
+    failDomainOnce = true;
+    const r = await api('POST', '/api/apps', {
+      token: ownerToken,
+      payload: { slug: 'domain-fail', name: '域名失败', repoUrl: 'https://git.example.com/f.git', buildType: 'dockerfile' },
+    });
+    expect(r.status).toBe(503);
+    expect(r.body.message).toContain('域名');
+    expect(dokCalls.map((c) => c.op)).toEqual(['create', 'git', 'build', 'domain', 'delete']);
+    expect(dokCalls[4].body).toEqual({ applicationId: 'app-created-7' });
+    const list = await api('GET', '/api/apps', { token: ownerToken });
+    expect(list.body.map((a: { slug: string }) => a.slug)).not.toContain('domain-fail');
+    dokCalls.length = 0;
+    // 关掉自动域名：后面的用例不分配
+    await api('PUT', '/api/admin/dokploy-settings', { token: adminToken, payload: fullSettings() });
+  });
+
+  it('域名转发端口跟着配置走：改 port / 改构建方式会回写 Dokploy 的域名记录；静态托管下改 port 与没域名的应用都不碰', async () => {
+    const port = await api('PATCH', '/api/apps/with-domain', { token: ownerToken, payload: { port: 3001 } });
+    expect(port.status).toBe(200);
+    expect(port.body.port).toBe(3001);
+    // domain.update 的 host 是必填（真机验证），整组关键字段带上
+    expect(dokCalls.map((c) => c.op)).toEqual(['domainUpdate']);
+    expect(dokCalls[0].body).toEqual({ domainId: 'dom-5', host: 'with-domain.apps.example.com', path: '/', port: 3001, https: false, certificateType: 'none' });
+    dokCalls.length = 0;
+
+    const toStatic = await api('PATCH', '/api/apps/with-domain', { token: ownerToken, payload: { buildType: 'static' } });
+    expect(toStatic.status).toBe(200);
+    expect(dokCalls.map((c) => c.op)).toEqual(['build', 'domainUpdate']);
+    expect(dokCalls[1].body).toMatchObject({ domainId: 'dom-5', port: 80 });
+    dokCalls.length = 0;
+
+    const staticPort = await api('PATCH', '/api/apps/with-domain', { token: ownerToken, payload: { port: 4000 } });
+    expect(staticPort.body.port).toBe(4000);
+    expect(dokCalls).toHaveLength(0);
+
+    const noDomain = await api('PATCH', '/api/apps/crm-tool', { token: ownerToken, payload: { port: 5000 } });
+    expect(noDomain.status).toBe(200);
+    expect(noDomain.body).toMatchObject({ port: 5000, domain: null });
+    expect(dokCalls).toHaveLength(0);
+  });
+
   it('挂载既有 Dokploy 应用：仅管理员；不碰 Dokploy、构建配置为空、创建即已授权', async () => {
     const asMember = await api('POST', '/api/apps/mount', {
       token: ownerToken,
@@ -533,7 +663,7 @@ describe('应用：自助创建与挂载（决策 31）', () => {
       payload: { slug: 'legacy', name: '遗留应用', dokployApplicationId: 'app-legacy', repoUrl: 'https://git.example.com/legacy' },
     });
     expect(r.status).toBe(201);
-    expect(r.body).toMatchObject({ managed: false, buildType: null, deployApproved: true, dokployApplicationId: 'app-legacy', branch: 'main' });
+    expect(r.body).toMatchObject({ managed: false, buildType: null, deployApproved: true, dokployApplicationId: 'app-legacy', branch: 'main', domain: null, url: null });
     expect(dokCalls).toHaveLength(0);
   });
 });

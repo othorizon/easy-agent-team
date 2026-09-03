@@ -133,13 +133,13 @@ const TOOLS = [
   {
     name: 'list_apps',
     description:
-      '列出部署应用（对应 Dokploy 的 application）及当前用户的关系：isMember=是否成员、deployApproved=管理员是否已授权部署、canDeploy=此刻能否部署。部署前先确认应用 slug。',
+      '列出部署应用（对应 Dokploy 的 application）及当前用户的关系：isMember=是否成员、deployApproved=管理员是否已授权部署、canDeploy=此刻能否部署；url 是平台自动分配的访问地址（未分配为 null）。部署前先确认应用 slug。',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'create_app',
     description:
-      '自助创建应用：平台会在 Dokploy 上建 application 并绑好 Git 源、SSH key 与构建方式。buildType 只有 dockerfile（按仓库里的 Dockerfile 构建）和 static（静态托管：不跑任何构建命令，把 publishDirectory 原样交给 nginx，仓库里得直接有产物）。创建后首次部署需管理员在控制台授权一次（返回的 deployApproved=false 即还没授权）。',
+      '自助创建应用：平台会在 Dokploy 上建 application 并绑好 Git 源、SSH key 与构建方式。buildType 只有 dockerfile（按仓库里的 Dockerfile 构建）和 static（静态托管：不跑任何构建命令，把 publishDirectory 原样交给 nginx，仓库里得直接有产物）。管理员配置了域名后缀时会自动绑定域名 <slug>.<后缀>，返回的 domain/url 即访问地址（未配置则为 null）。创建后首次部署需管理员在控制台授权一次（返回的 deployApproved=false 即还没授权）。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -152,6 +152,7 @@ const TOOLS = [
         dockerContextPath: { type: 'string', description: 'dockerfile：构建上下文（相对仓库根，默认仓库根）' },
         publishDirectory: { type: 'string', description: 'static：发布目录（相对仓库根，默认 .）' },
         staticSpa: { type: 'boolean', description: 'static：SPA 模式（所有路径回退到 index.html）' },
+        port: { type: 'number', description: 'dockerfile：容器监听端口（默认 3000），自动分配的域名把流量转发到它；static 固定 80' },
         description: { type: 'string', description: '说明' },
       },
       required: ['slug', 'repoUrl', 'buildType'],
@@ -174,6 +175,7 @@ const TOOLS = [
         dockerContextPath: { type: 'string' },
         publishDirectory: { type: 'string' },
         staticSpa: { type: 'boolean' },
+        port: { type: 'number', description: 'dockerfile：容器监听端口（有自动分配域名的应用会同步改域名转发端口）' },
       },
       required: ['app'],
     },
@@ -271,6 +273,7 @@ const APP_FIELDS = [
   'dockerContextPath',
   'publishDirectory',
   'staticSpa',
+  'port',
   'description',
 ] as const;
 

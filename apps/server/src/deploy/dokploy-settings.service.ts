@@ -20,6 +20,9 @@ export interface DokployProvisioning {
   environmentId: string;
   /** 空串 = 不绑 key（只能拉公开仓库） */
   sshKeyId: string;
+  /** 自动分配域名的后缀（决策 32）；空串 = 不分配 */
+  domainSuffix: string;
+  domainHttps: boolean;
 }
 
 /**
@@ -45,6 +48,8 @@ export class DokploySettingsService {
         projectId: '',
         environmentId: '',
         sshKeyId: '',
+        domainSuffix: '',
+        domainHttps: false,
         provisioningReady: false,
       };
     }
@@ -57,6 +62,8 @@ export class DokploySettingsService {
       projectId: row.projectId,
       environmentId: row.environmentId,
       sshKeyId: row.sshKeyId,
+      domainSuffix: row.domainSuffix,
+      domainHttps: row.domainHttps,
       provisioningReady: row.enabled && row.projectId !== '' && row.environmentId !== '',
     };
   }
@@ -71,6 +78,8 @@ export class DokploySettingsService {
       projectId: dto.projectId,
       environmentId: dto.environmentId,
       sshKeyId: dto.sshKeyId,
+      domainSuffix: dto.domainSuffix,
+      domainHttps: dto.domainHttps,
     };
     if (row) {
       await this.db
@@ -122,7 +131,13 @@ export class DokploySettingsService {
         message: '管理员尚未配置自助创建应用所需的 Dokploy 项目与环境（系统设置 → Dokploy），配好后再试',
       });
     }
-    return { client, environmentId: row.environmentId, sshKeyId: row.sshKeyId };
+    return {
+      client,
+      environmentId: row.environmentId,
+      sshKeyId: row.sshKeyId,
+      domainSuffix: row.domainSuffix,
+      domainHttps: row.domainHttps,
+    };
   }
 
   /**
