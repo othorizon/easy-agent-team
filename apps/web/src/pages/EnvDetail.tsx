@@ -191,7 +191,7 @@ export function EnvDetailPage() {
                   <TableHead className="hidden md:table-cell">备注</TableHead>
                   <TableHead className="w-40">值</TableHead>
                   <TableHead className="w-24">权限</TableHead>
-                  <TableHead className="hidden w-28 lg:table-cell">无权限可见</TableHead>
+                  <TableHead className="hidden w-36 lg:table-cell">对未授权成员</TableHead>
                   <TableHead className="hidden w-16 sm:table-cell">版本</TableHead>
                   {canManage && <TableHead className="w-36">操作</TableHead>}
                 </TableRow>
@@ -226,7 +226,7 @@ export function EnvDetailPage() {
                       {row.hasAccess ? <Badge variant="success">可读取</Badge> : <Badge variant="outline">无权限</Badge>}
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground lg:table-cell">
-                      {row.visibleWithoutPermission ? '是' : '否'}
+                      {row.visibleWithoutPermission ? '可见名称与备注' : '完全隐藏'}
                     </TableCell>
                     <TableCell className="hidden tabular-nums text-muted-foreground sm:table-cell">
                       v{row.version}
@@ -461,7 +461,10 @@ function VariableDialog({
           <Field label="备注" htmlFor="var-desc" hint="AI 会读取，请写清楚这个变量的作用">
             <Textarea id="var-desc" rows={2} placeholder="内部网关的调用令牌，用于 xxx 服务" {...register('description')} />
           </Field>
-          <Field label="无权限时是否可见" hint="关闭后，未授权成员在清单中也看不到该变量">
+          <Field
+            label="未授权成员可见"
+            hint="开启：没有读取权限的成员在清单里能看到变量名和备注（看不到值），知道该申请什么；关闭：对他们完全隐藏，连这个变量存在都看不到。"
+          >
             <Controller
               control={control}
               name="visibleWithoutPermission"

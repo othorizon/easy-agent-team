@@ -133,13 +133,13 @@ const TOOLS = [
   {
     name: 'list_apps',
     description:
-      '列出部署应用（对应 Dokploy 的 application）及当前用户的关系：isMember=是否成员、deployApproved=管理员是否已授权部署、canDeploy=此刻能否部署；url 是平台自动分配的访问地址（未分配为 null）。部署前先确认应用 slug。',
+      '列出应用及当前用户的关系：isMember=是否成员、deployApproved=管理员是否已授权部署、canDeploy=此刻能否部署；url 是平台自动分配的访问地址（未分配为 null）。部署前先确认应用 slug。',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'create_app',
     description:
-      '自助创建应用：平台会在 Dokploy 上建 application 并绑好 Git 源、SSH key 与构建方式。buildType 只有 dockerfile（按仓库里的 Dockerfile 构建）和 static（静态托管：不跑任何构建命令，把 publishDirectory 原样交给 nginx，仓库里得直接有产物）。管理员配置了域名后缀时会自动绑定域名 <slug>.<后缀>，返回的 domain/url 即访问地址（未配置则为 null）。创建后首次部署需管理员在控制台授权一次（返回的 deployApproved=false 即还没授权）。',
+      '自助创建应用：填 Git 仓库地址与构建方式即可，私有仓库的拉取凭证由管理员预先配置。buildType 只有 dockerfile（按仓库里的 Dockerfile 构建）和 static（静态托管：不跑任何构建命令，把 publishDirectory 原样交给 nginx，仓库里得直接有产物）。管理员配置了域名后缀时会自动绑定域名 <slug>.<后缀>，返回的 domain/url 即访问地址（未配置则为 null）。创建后首次部署需管理员在控制台授权一次（返回的 deployApproved=false 即还没授权）。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -161,7 +161,7 @@ const TOOLS = [
   {
     name: 'update_app',
     description:
-      '修改应用配置（名称/说明/仓库/分支/构建方式及其选项）。平台托管的应用会同步写回 Dokploy，下次部署生效；管理员挂载的既有应用只能改名称/说明。仅 Owner 或管理员可改。',
+      '修改应用配置（名称/说明/仓库/分支/构建方式及其选项）。改动下次部署生效；管理员挂载的既有应用只能改名称/说明。仅 Owner 或管理员可改。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -183,7 +183,7 @@ const TOOLS = [
   {
     name: 'get_app_env',
     description:
-      '读取应用在 Dokploy 上的 env：runtime=容器运行时环境变量，build=构建时变量（Dockerfile 里以 ARG 取用）。两块都是 dotenv 文本。值可能是密钥：只用于当前任务，不要写进代码、日志或对话。仅应用成员可读。',
+      '读取应用的 env：runtime=容器运行时环境变量，build=构建时变量（Dockerfile 里以 ARG 取用）。两块都是 dotenv 文本。值可能是密钥：只用于当前任务，不要写进代码、日志或对话。仅应用成员可读。',
     inputSchema: {
       type: 'object',
       properties: { app: { type: 'string', description: '应用 slug（list_apps 查看）' } },
@@ -207,7 +207,7 @@ const TOOLS = [
   {
     name: 'trigger_deploy',
     description:
-      '部署应用到 Dokploy。会先在 workdir 本地执行密钥扫描（通用规则 + 平台密钥指纹 + .env 误提交），发现问题则返回 findings 并拒绝部署——此时修复问题后重试，绝不要试图绕过检查。应用未经管理员授权时返回 DEPLOY_NOT_APPROVED：告诉用户找管理员在控制台「应用」页授权一次，不要反复重试。成功触发后用 get_deploy_status 跟踪结果。',
+      '部署应用。会先在 workdir 本地执行密钥扫描（通用规则 + 平台密钥指纹 + .env 误提交），发现问题则返回 findings 并拒绝部署——此时修复问题后重试，绝不要试图绕过检查。应用未经管理员授权时返回 DEPLOY_NOT_APPROVED：告诉用户找管理员在控制台「应用」页授权一次，不要反复重试。成功触发后用 get_deploy_status 跟踪结果。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -220,14 +220,14 @@ const TOOLS = [
   {
     name: 'get_deploy_status',
     description:
-      '查询部署状态。status 取值 queued=排队中 / running=构建中 / done=成功 / error=失败 / cancelled=已取消 / archived=构建记录已被 Dokploy 清理。status=error 时 error 字段已带上构建日志末尾的真实报错——据此改代码后重新 trigger_deploy；要看完整日志用 get_build_logs。platform 为 null 表示这次是在 Dokploy 侧直接触发的、没经过平台的密钥扫描门禁；platform.source=console 表示从控制台按钮触发、同样没做扫描。必须传 app；再传 deploymentId 看指定那次。',
+      '查询部署状态。status 取值 queued=排队中 / running=构建中 / done=成功 / error=失败 / cancelled=已取消 / archived=构建记录已被清理。status=error 时 error 字段已带上构建日志末尾的真实报错——据此改代码后重新 trigger_deploy；要看完整日志用 get_build_logs。platform 为 null 表示这次是绕过平台直接触发的、没经过密钥扫描门禁；platform.source=console 表示从控制台按钮触发、同样没做扫描。必须传 app；再传 deploymentId 看指定那次。',
     inputSchema: {
       type: 'object',
       properties: {
         app: { type: 'string', description: '应用 slug（list_apps 查看）' },
-        deploymentId: { type: 'string', description: '看指定那次：Dokploy 构建记录 id 或平台元数据 id 都行' },
+        deploymentId: { type: 'string', description: '看指定那次：deploymentId 或平台元数据 id 都行，支持 8 位前缀' },
         history: { type: 'boolean', description: '传 true 列出该应用的部署历史' },
-        all: { type: 'boolean', description: '与 history 同用：列出平台完整历史，含 Dokploy 已清理构建记录的那些' },
+        all: { type: 'boolean', description: '与 history 同用：列出平台完整历史，含构建记录已被清理的那些' },
       },
       required: ['app'],
     },
@@ -235,13 +235,13 @@ const TOOLS = [
   {
     name: 'get_build_logs',
     description:
-      '读 Dokploy 上的构建日志——部署失败时排查的第一手材料（依赖装不上、编译报错、镜像拉不动都在这里）。默认最近一次构建；recent 里有最近的构建记录，可用 deploymentId 回看某次。',
+      '读构建日志——部署失败时排查的第一手材料（依赖装不上、编译报错、镜像拉不动都在这里）。默认最近一次构建；recent 里有最近的构建记录，可用 deploymentId 回看某次。',
     inputSchema: {
       type: 'object',
       properties: {
         app: { type: 'string', description: '应用 slug（list_apps 查看）' },
         tail: { type: 'number', description: `日志行数，默认 ${LOG_TAIL_DEFAULT}，上限 ${LOG_TAIL_MAX}` },
-        deploymentId: { type: 'string', description: 'Dokploy 构建记录 id（默认最近一次）' },
+        deploymentId: { type: 'string', description: '构建记录 id（默认最近一次）' },
       },
       required: ['app'],
     },
@@ -282,7 +282,14 @@ const APP_FIELDS = [
  * 没显式指定端口的 dockerfile 应用还要点明「3000 只是默认值、用 update_app 的 port 改」——
  * 光给 port: 3000 一个数字，AI 未必会把它和「我的容器其实监听 8080」联系起来。
  */
-function withCreateHint(app: AppInfo, portGiven: boolean): AppInfo & { hint?: string } {
+/** 给 AI 的应用信息：去掉部署后台的内部 id——AI 既用不上也操作不了部署后台，露出来只会让它误以为要去那边做什么 */
+function forAgent(app: AppInfo): Omit<AppInfo, 'dokployApplicationId'> {
+  const { dokployApplicationId: _internal, ...rest } = app;
+  return rest;
+}
+
+function withCreateHint(raw: AppInfo, portGiven: boolean): Omit<AppInfo, 'dokployApplicationId'> & { hint?: string } {
+  const app = forAgent(raw);
   if (!app.url) return app;
   const port = app.buildType === 'static' ? STATIC_CONTAINER_PORT : app.port;
   let hint = `已分配域名 ${app.url}，流量转发到容器端口 ${port}（首次部署成功后可访问）。`;
@@ -398,7 +405,7 @@ export async function startMcpServer(): Promise<void> {
           return jsonResult(await api.request('DELETE', `/api/help-requests/${args.requestId as string}`));
         }
         case 'list_apps': {
-          return jsonResult(await api.request('GET', '/api/apps'));
+          return jsonResult((await api.request<AppInfo[]>('GET', '/api/apps')).map(forAgent));
         }
         case 'create_app': {
           // 工具描述承诺 name 默认同 slug，服务端契约里 name 是必填，得在这里补上
@@ -408,7 +415,7 @@ export async function startMcpServer(): Promise<void> {
           return jsonResult(withCreateHint(app, args.port !== undefined));
         }
         case 'update_app': {
-          return jsonResult(await api.request('PATCH', `/api/apps/${args.app as string}`, pick(args, APP_FIELDS)));
+          return jsonResult(forAgent(await api.request<AppInfo>('PATCH', `/api/apps/${args.app as string}`, pick(args, APP_FIELDS))));
         }
         case 'get_app_env': {
           return jsonResult(await api.request('GET', `/api/apps/${args.app as string}/env`));
@@ -447,7 +454,7 @@ export async function startMcpServer(): Promise<void> {
           return jsonResult(await api.request('POST', `/api/apps/${args.app as string}/deploy`, { report }));
         }
         case 'get_deploy_status': {
-          if (!args.app) return errorResult(new Error('需要 app 参数（部署记录以 Dokploy 为准，查询必须带应用）'));
+          if (!args.app) return errorResult(new Error('需要 app 参数（部署记录按应用查询）'));
           const slug = args.app as string;
           const base = `/api/apps/${slug}/deployments`;
           const path = args.deploymentId

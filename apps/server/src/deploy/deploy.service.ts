@@ -146,7 +146,7 @@ export class DeployService {
     const title = `eat · ${user.name} · ${slug}`.slice(0, 200);
     await this.dokploy.callDokploy(
       () => client.deploy(app.dokployApplicationId, { title, description: deployTag(id) }),
-      '触发 Dokploy 部署失败',
+      '触发部署后台部署失败',
     );
     const [row] = await this.db
       .insert(deployments)
@@ -195,7 +195,7 @@ export class DeployService {
       throw new NotFoundException({
         error: 'NOT_FOUND',
         message: archived.length
-          ? `Dokploy 上已没有 ${slug} 的构建记录（每个应用只保留最近 10 次）；平台侧历史: eat app deployments ${slug} --all`
+          ? `部署后台上已没有 ${slug} 的构建记录（每个应用只保留最近 10 次）；平台侧历史: eat app deployments ${slug} --all`
           : `应用 ${slug} 还没有部署记录（eat deploy ${slug} 触发一次）`,
       });
     }
@@ -237,13 +237,13 @@ export class DeployService {
    */
   private async mergeDeployments(app: AppRow, all: boolean): Promise<DeploymentInfo[]> {
     const client = await this.dokploy.client();
-    const builds = await this.dokploy.callDokploy(() => client.listDeployments(app.dokployApplicationId), '拉取 Dokploy 构建记录失败');
+    const builds = await this.dokploy.callDokploy(() => client.listDeployments(app.dokployApplicationId), '拉取部署后台构建记录失败');
     // 队列读失败不该让整张清单挂掉（老版本 Dokploy 未必有这个端点），拿不到就当队列是空的
     let jobs: DokployQueueJob[] = [];
     try {
       jobs = (await client.queueList()).filter((j) => j.applicationId === app.dokployApplicationId && QUEUE_PENDING_STATES.has(j.state));
     } catch (err) {
-      this.logger.warn(`拉取 Dokploy 部署队列失败（忽略）: ${(err as Error).message}`);
+      this.logger.warn(`拉取部署后台部署队列失败（忽略）: ${(err as Error).message}`);
     }
     const metas = await this.db
       .select()
@@ -262,7 +262,7 @@ export class DeployService {
         appSlug: app.slug,
         deploymentId: b.deploymentId,
         status: b.status,
-        origin: claim ? 'platform' : 'dokploy',
+        origin: claim ? 'platform' : 'external',
         title: b.title,
         // 失败详情（构建日志末尾）只在查单条时补，列表里每条都读日志太贵
         error: b.status === 'error' ? b.errorMessage || null : null,
@@ -305,7 +305,7 @@ export class DeployService {
         appSlug: app.slug,
         deploymentId: null,
         status: 'queued',
-        origin: 'dokploy',
+        origin: 'external',
         title: job.title,
         error: null,
         createdAt: new Date(job.timestamp || Date.now()).toISOString(),
@@ -398,7 +398,7 @@ export class DeployService {
         meta.claim = how;
       } catch (err) {
         // 唯一索引冲突（历史上误认领过同一条）不该让查询失败，回写本就是缓存
-        this.logger.warn(`回写 Dokploy 构建记录 id 失败（忽略）: ${(err as Error).message}`);
+        this.logger.warn(`回写部署后台构建记录 id 失败（忽略）: ${(err as Error).message}`);
       }
     }
   }
@@ -421,12 +421,12 @@ export class DeployService {
   }
 
   private async buildFailureReason(client: DokployClient, deploymentId: string, errorMessage: string | null, slug: string): Promise<string> {
-    const head = `Dokploy 构建失败（完整日志: eat app build-logs ${slug}）`;
+    const head = `部署后台构建失败（完整日志: eat app build-logs ${slug}）`;
     let logs = '';
     try {
       logs = await client.readDeploymentLogs(deploymentId, FAILURE_LOG_TAIL);
     } catch (err) {
-      this.logger.warn(`读取 Dokploy 构建日志失败: ${(err as Error).message}`);
+      this.logger.warn(`读取部署后台构建日志失败: ${(err as Error).message}`);
     }
     const tail = logs
       .split('\n')
@@ -446,13 +446,13 @@ export class DeployService {
     const app = await this.apps.getApp(slug);
     await this.apps.assertMember(app, user, '查看构建日志');
     const client = await this.dokploy.client();
-    const builds = await this.dokploy.callDokploy(() => client.listDeployments(app.dokployApplicationId), '拉取 Dokploy 构建记录失败');
+    const builds = await this.dokploy.callDokploy(() => client.listDeployments(app.dokployApplicationId), '拉取部署后台构建记录失败');
     const target = query.deploymentId ? builds.find((b) => b.deploymentId === query.deploymentId) : builds[0];
     if (query.deploymentId && !target) {
-      throw new NotFoundException({ error: 'NOT_FOUND', message: `Dokploy 上没有构建记录 ${query.deploymentId}` });
+      throw new NotFoundException({ error: 'NOT_FOUND', message: `部署后台上没有构建记录 ${query.deploymentId}` });
     }
     const logs = target
-      ? await this.dokploy.callDokploy(() => client.readDeploymentLogs(target.deploymentId, query.tail), '读取 Dokploy 构建日志失败')
+      ? await this.dokploy.callDokploy(() => client.readDeploymentLogs(target.deploymentId, query.tail), '读取部署后台构建日志失败')
       : '';
     await this.audit.record({
       actorId: user.id,
@@ -471,14 +471,14 @@ export class DeployService {
     await this.apps.assertMember(app, user, '查看运行日志');
     const client = await this.dokploy.client();
     // 容器名前缀（appName）是 Dokploy 生成的，只有 application.one 里带
-    const appName = await this.dokploy.callDokploy(() => client.applicationAppName(app.dokployApplicationId), '读取 Dokploy 应用详情失败');
+    const appName = await this.dokploy.callDokploy(() => client.applicationAppName(app.dokployApplicationId), '读取部署后台应用详情失败');
     if (!appName) {
       throw new ServiceUnavailableException({
-        error: 'DOKPLOY_UNAVAILABLE',
-        message: 'Dokploy 上查不到该应用的容器名，确认应用绑定的 application id 是否正确',
+        error: 'DEPLOY_BACKEND_UNAVAILABLE',
+        message: '部署后台查不到该应用的容器，请管理员确认应用绑定的 application id 是否正确',
       });
     }
-    const containers = await this.dokploy.callDokploy(() => client.listContainers(appName), '拉取 Dokploy 容器清单失败');
+    const containers = await this.dokploy.callDokploy(() => client.listContainers(appName), '拉取部署后台容器清单失败');
     const target = query.containerId
       ? containers.find((c) => c.containerId === query.containerId)
       : (containers.find((c) => c.state === 'running') ?? containers[0]);
@@ -486,7 +486,7 @@ export class DeployService {
       throw new NotFoundException({ error: 'NOT_FOUND', message: `该应用当前没有容器 ${query.containerId}` });
     }
     const logs = target
-      ? await this.dokploy.callDokploy(() => client.containerLogs(target.containerId, query.tail), '读取 Dokploy 运行日志失败')
+      ? await this.dokploy.callDokploy(() => client.containerLogs(target.containerId, query.tail), '读取部署后台运行日志失败')
       : '';
     await this.audit.record({
       actorId: user.id,

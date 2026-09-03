@@ -140,7 +140,7 @@ export class DokployClient {
       signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) {
-      throw new Error(`Dokploy 返回 HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      throw new Error(`部署后台返回 HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
     }
   }
 
@@ -160,7 +160,7 @@ export class DokployClient {
       signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) {
-      throw new Error(`Dokploy 返回 HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      throw new Error(`部署后台返回 HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
     }
     const json: unknown = await res.json();
     if (!Array.isArray(json)) return [];
@@ -206,7 +206,7 @@ export class DokployClient {
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
-      throw new Error(`Dokploy 部署触发失败（HTTP ${res.status}）: ${(await res.text()).slice(0, 300)}`);
+      throw new Error(`部署后台部署触发失败（HTTP ${res.status}）: ${(await res.text()).slice(0, 300)}`);
     }
   }
 
@@ -218,7 +218,7 @@ export class DokployClient {
    */
   async listDeployments(applicationId: string): Promise<DokployDeployment[]> {
     const url = `${this.base}/deployment.allByType?id=${encodeURIComponent(applicationId)}&type=application`;
-    const json = await this.getJson(url, '拉取 Dokploy 构建记录失败');
+    const json = await this.getJson(url, '拉取部署后台构建记录失败');
     if (!Array.isArray(json)) return [];
     const out: DokployDeployment[] = [];
     for (const raw of json as Array<Record<string, unknown>>) {
@@ -250,7 +250,7 @@ export class DokployClient {
    * ② 任务入队时带了 removeOnComplete/removeOnFail，跑完即从队列消失（那时构建记录已经有了）。
    */
   async queueList(): Promise<DokployQueueJob[]> {
-    const json = await this.getJson(`${this.base}/deployment.queueList`, '拉取 Dokploy 部署队列失败');
+    const json = await this.getJson(`${this.base}/deployment.queueList`, '拉取部署后台部署队列失败');
     if (!Array.isArray(json)) return [];
     const out: DokployQueueJob[] = [];
     for (const raw of json as Array<Record<string, unknown>>) {
@@ -271,14 +271,14 @@ export class DokployClient {
   /** 某次构建的日志正文（Dokploy 侧就是对日志文件做 tail -n，tail 上限 10000） */
   async readDeploymentLogs(deploymentId: string, tail: number): Promise<string> {
     const url = `${this.base}/deployment.readLogs?deploymentId=${encodeURIComponent(deploymentId)}&tail=${tail}`;
-    const json = await this.getJson(url, '读取 Dokploy 构建日志失败');
+    const json = await this.getJson(url, '读取部署后台构建日志失败');
     return typeof json === 'string' ? json : '';
   }
 
   /** 应用当前的容器（appName 是 Dokploy 生成的容器名前缀，取自 application.one） */
   async listContainers(appName: string): Promise<DokployContainer[]> {
     const url = `${this.base}/docker.getContainersByAppNameMatch?appName=${encodeURIComponent(appName)}`;
-    const json = await this.getJson(url, '拉取 Dokploy 容器清单失败');
+    const json = await this.getJson(url, '拉取部署后台容器清单失败');
     if (!Array.isArray(json)) return [];
     const out: DokployContainer[] = [];
     for (const raw of json as Array<Record<string, unknown>>) {
@@ -292,7 +292,7 @@ export class DokployClient {
   /** 应用的容器名前缀（appName），运行日志要靠它找容器 */
   async applicationAppName(applicationId: string): Promise<string> {
     const url = `${this.base}/application.one?applicationId=${encodeURIComponent(applicationId)}`;
-    const json = await this.getJson(url, '读取 Dokploy 应用详情失败');
+    const json = await this.getJson(url, '读取部署后台应用详情失败');
     return str((json as Record<string, unknown>)?.appName);
   }
 
@@ -347,7 +347,7 @@ export class DokployClient {
       });
       // 4000+ 是 Dokploy 自己的拒绝码（参数非法 / 无权限），要如实报出来而不是当成正常收尾
       ws.on('close', (code: number, reason: Buffer) =>
-        finish(code >= 4000 ? new Error(`Dokploy 拒绝读取（${code} ${reason.toString() || '无权限或参数非法'}）`) : undefined),
+        finish(code >= 4000 ? new Error(`部署后台拒绝读取（${code} ${reason.toString() || '无权限或参数非法'}）`) : undefined),
       );
       ws.on('error', (err: Error) => finish(err));
     });
@@ -406,10 +406,10 @@ export class DokployClient {
     applicationId: string;
     appName: string;
   }> {
-    const json = await this.postJson(`${this.base}/application.create`, input, '在 Dokploy 创建应用失败');
+    const json = await this.postJson(`${this.base}/application.create`, input, '在部署后台创建应用失败');
     const row = (json ?? {}) as Record<string, unknown>;
     const applicationId = str(row.applicationId);
-    if (!applicationId) throw new Error('Dokploy 创建应用的响应里没有 applicationId');
+    if (!applicationId) throw new Error('部署后台创建应用的响应里没有 applicationId');
     return { applicationId, appName: str(row.appName) };
   }
 
@@ -421,7 +421,7 @@ export class DokployClient {
     await this.postJson(
       `${this.base}/application.saveGitProvider`,
       { ...input, watchPaths: [], enableSubmodules: false },
-      '在 Dokploy 配置 Git 源失败',
+      '在部署后台配置 Git 源失败',
     );
   }
 
@@ -444,14 +444,14 @@ export class DokployClient {
         publishDirectory: docker ? null : input.publishDirectory,
         isStaticSpa: docker ? null : input.isStaticSpa,
       },
-      '在 Dokploy 配置构建方式失败',
+      '在部署后台配置构建方式失败',
     );
   }
 
   /** 应用详情：env / buildArgs / appName 等平台用得上的字段 */
   async getApplication(applicationId: string): Promise<DokployApplicationDetail> {
     const url = `${this.base}/application.one?applicationId=${encodeURIComponent(applicationId)}`;
-    const raw = ((await this.getJson(url, '读取 Dokploy 应用详情失败')) ?? {}) as Record<string, unknown>;
+    const raw = ((await this.getJson(url, '读取部署后台应用详情失败')) ?? {}) as Record<string, unknown>;
     return {
       applicationId: str(raw.applicationId) || applicationId,
       name: str(raw.name),
@@ -470,7 +470,7 @@ export class DokployClient {
 
   /** 写 env / buildArgs / buildSecrets：Dokploy 这个端点是整体覆盖，四个字段都得带上 */
   async saveEnvironment(input: DokployEnvironmentInput): Promise<void> {
-    await this.postJson(`${this.base}/application.saveEnvironment`, input, '在 Dokploy 写入环境变量失败');
+    await this.postJson(`${this.base}/application.saveEnvironment`, input, '在部署后台写入环境变量失败');
   }
 
   /** 删除 application。Dokploy 上已经没有这个应用（404）视为删成功，别让平台侧的记录因此删不掉 */
@@ -482,7 +482,7 @@ export class DokployClient {
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok && res.status !== 404) {
-      throw new Error(`在 Dokploy 删除应用失败（HTTP ${res.status}）: ${(await res.text()).slice(0, 300)}`);
+      throw new Error(`在部署后台删除应用失败（HTTP ${res.status}）: ${(await res.text()).slice(0, 300)}`);
     }
   }
 
@@ -505,10 +505,10 @@ export class DokployClient {
         applicationId: input.applicationId,
         domainType: 'application',
       },
-      '在 Dokploy 绑定域名失败',
+      '在部署后台绑定域名失败',
     );
     const domainId = str(((json ?? {}) as Record<string, unknown>).domainId);
-    if (!domainId) throw new Error('Dokploy 绑定域名的响应里没有 domainId');
+    if (!domainId) throw new Error('部署后台绑定域名的响应里没有 domainId');
     return { domainId };
   }
 
@@ -524,7 +524,7 @@ export class DokployClient {
         https: input.https,
         certificateType: input.https ? 'letsencrypt' : 'none',
       },
-      '在 Dokploy 更新域名失败',
+      '在部署后台更新域名失败',
     );
   }
 

@@ -185,7 +185,7 @@ export class AppsService {
           description: [`由 eat 平台创建（${dto.slug}，Owner ${user.name}）`, dto.description].filter(Boolean).join('\n'),
           environmentId,
         }),
-      '在 Dokploy 创建应用失败',
+      '在部署后台创建应用失败',
     );
     let dokployDomainId: string | null = null;
     try {
@@ -200,13 +200,13 @@ export class AppsService {
               port: appContainerPort(dto.buildType, dto.port),
               https: domainHttps,
             }),
-          '在 Dokploy 绑定域名失败',
+          '在部署后台绑定域名失败',
         );
         dokployDomainId = bound.domainId;
       }
     } catch (err) {
       await client.deleteApplication(created.applicationId).catch((e: Error) => {
-        this.logger.warn(`回滚删除 Dokploy 应用 ${created.applicationId} 失败（忽略）: ${e.message}`);
+        this.logger.warn(`回滚删除部署后台应用 ${created.applicationId} 失败（忽略）: ${e.message}`);
       });
       throw err;
     }
@@ -295,7 +295,7 @@ export class AppsService {
           customGitBuildPath: GIT_BUILD_PATH,
           customGitSSHKeyId: sshKeyId || null,
         }),
-      '在 Dokploy 配置 Git 源失败',
+      '在部署后台配置 Git 源失败',
     );
   }
 
@@ -314,7 +314,7 @@ export class AppsService {
           publishDirectory: cfg.publishDirectory || DEFAULT_PUBLISH_DIRECTORY,
           isStaticSpa: cfg.staticSpa,
         }),
-      '在 Dokploy 配置构建方式失败',
+      '在部署后台配置构建方式失败',
     );
   }
 
@@ -336,13 +336,13 @@ export class AppsService {
       if (touchesBuild) {
         throw new BadRequestException({
           error: 'VALIDATION_FAILED',
-          message: '挂载的应用的分支与构建配置在 Dokploy 侧维护，平台不代改',
+          message: '管理员挂载的应用：分支与构建配置由管理员在部署后台维护，平台不代改',
         });
       }
     } else if (dto.dokployApplicationId !== undefined && dto.dokployApplicationId !== app.dokployApplicationId) {
       throw new BadRequestException({
         error: 'VALIDATION_FAILED',
-        message: '平台托管的应用与 Dokploy 上的应用一一对应，不能改绑 application id',
+        message: '平台创建的应用不能改绑部署后台的 application id',
       });
     }
 
@@ -389,7 +389,7 @@ export class AppsService {
                 port: appContainerPort(next.buildType, next.port),
                 https: app.domainHttps,
               }),
-            '在 Dokploy 更新域名端口失败',
+            '在部署后台更新域名端口失败',
           );
         }
       }
@@ -429,7 +429,7 @@ export class AppsService {
     this.assertCanManage(app, user, '删除');
     if (app.managed) {
       const client = await this.dokploy.client();
-      await this.dokploy.callDokploy(() => client.deleteApplication(app.dokployApplicationId), '在 Dokploy 删除应用失败');
+      await this.dokploy.callDokploy(() => client.deleteApplication(app.dokployApplicationId), '在部署后台删除应用失败');
     }
     await this.db.delete(apps).where(eq(apps.id, app.id));
     await this.audit.record({
@@ -496,7 +496,7 @@ export class AppsService {
     const app = await this.getApp(slug);
     await this.assertMember(app, user, '读取应用 env');
     const client = await this.dokploy.client();
-    const detail = await this.dokploy.callDokploy(() => client.getApplication(app.dokployApplicationId), '读取 Dokploy 应用详情失败');
+    const detail = await this.dokploy.callDokploy(() => client.getApplication(app.dokployApplicationId), '读取部署后台应用详情失败');
     await this.audit.record({ actorId: user.id, actorTokenId: user.tokenId, action: 'app.env_read', targetType: 'app', targetId: app.id, meta: { slug } });
     return { appSlug: slug, runtime: detail.env, build: detail.buildArgs };
   }
@@ -510,7 +510,7 @@ export class AppsService {
     const app = await this.getApp(slug);
     await this.assertMember(app, user, '修改应用 env');
     const client = await this.dokploy.client();
-    const detail = await this.dokploy.callDokploy(() => client.getApplication(app.dokployApplicationId), '读取 Dokploy 应用详情失败');
+    const detail = await this.dokploy.callDokploy(() => client.getApplication(app.dokployApplicationId), '读取部署后台应用详情失败');
     const before = dto.target === 'runtime' ? detail.env : detail.buildArgs;
     await this.dokploy.callDokploy(
       () =>
@@ -521,7 +521,7 @@ export class AppsService {
           buildSecrets: detail.buildSecrets,
           createEnvFile: detail.createEnvFile,
         }),
-      '在 Dokploy 写入环境变量失败',
+      '在部署后台写入环境变量失败',
     );
     const diff = diffDotenv(before, dto.content);
     await this.audit.record({
