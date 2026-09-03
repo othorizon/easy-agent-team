@@ -37,7 +37,8 @@ export function SkillsPage() {
   const create = useMutation({
     mutationFn: (v: PushSkillRequest) => api('POST', '/api/skills/push', v),
     onSuccess: () => {
-      toast.success('Skill 已创建');
+      // 创建不代表订阅（决策 34）：不提一句的话，作者会以为 eat sync 就该带上它
+      toast.success('Skill 已创建；想让它随 eat sync 落到本地，记得订阅一下');
       setCreating(false);
       void queryClient.invalidateQueries({ queryKey: ['skills'] });
     },

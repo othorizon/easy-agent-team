@@ -198,7 +198,13 @@ export class SkillsService {
     return null;
   }
 
-  /** 创建或推送新版本（eat skill push / 网页创建共用） */
+  /**
+   * 创建或推送新版本（eat skill push / 网页创建共用）。
+   *
+   * **不碰订阅关系**：是否让某个 skill 进自己的 sync 范围完全由用户自己决定（订阅 / 退订），
+   * 推送只负责内容。此前这里会把推送者自动订阅上去，副作用是「退订自己的 skill → 推个新版本
+   * → 又被订阅回来」，用户的退订意愿留不住。作者要本地也有一份，自行 eat skill subscribe 一次。
+   */
   async push(user: AuthUser, dto: PushSkillRequest): Promise<SkillDetail> {
     const problem = this.validatePayload(dto);
     if (problem) throw new BadRequestException({ error: 'VALIDATION_FAILED', message: problem });
@@ -245,12 +251,6 @@ export class SkillsService {
         updatedAt: new Date(),
       })
       .where(eq(skills.id, skill.id));
-
-    // 作者自动订阅自己的 skill（保证出现在 sync 范围）
-    await this.db
-      .insert(skillSubscriptions)
-      .values({ userId: user.id, skillId: skill.id })
-      .onConflictDoNothing();
 
     await this.audit.record({
       actorId: user.id,

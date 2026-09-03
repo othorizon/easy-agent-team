@@ -6,7 +6,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { and, desc, eq } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import type { DistillRequest, ExperienceInfo, ExperienceSearchResult } from '@eat/shared';
 import { AiService } from '../ai/ai.service';
 import { AuditService } from '../audit/audit.service';
@@ -93,18 +93,20 @@ export class ExperiencesService {
       .set({ source: 'experience', visibility: dto.public ? 'team' : 'granted' })
       .where(eq(skills.id, skill.id));
 
-    // 沉淀给谁 → 订阅（订阅在 granted 可见性下同时充当授权）
+    // 沉淀给谁 → 订阅（订阅在 granted 可见性下同时充当授权）。
+    // push 本身不建立任何订阅，所以两边都得显式插；没勾的那方不动其既有订阅——
+    // 「不沉淀给自己」是「不主动给你加一份」，不是「把你自己订过的退掉」。
     if (dto.grantedToRequester) {
       await this.db
         .insert(skillSubscriptions)
         .values({ userId: req.requesterId, skillId: skill.id, source: 'experience' })
         .onConflictDoNothing();
     }
-    if (!dto.grantedToHelper) {
-      // 不沉淀给自己：移除 push 时自动创建的作者订阅（保留 Owner 编辑权，但不进本地 sync）
+    if (dto.grantedToHelper) {
       await this.db
-        .delete(skillSubscriptions)
-        .where(and(eq(skillSubscriptions.skillId, skill.id), eq(skillSubscriptions.userId, user.id)));
+        .insert(skillSubscriptions)
+        .values({ userId: user.id, skillId: skill.id, source: 'experience' })
+        .onConflictDoNothing();
     }
 
     const [row] = await this.db

@@ -94,6 +94,10 @@ export async function skillPush(
   if (res.currentVersion === 1) {
     console.log('这是新建的 skill，团队成员现在可以在控制台或 eat skill list 里看到并订阅它。');
   }
+  // 推送不建立订阅：作者要本地也留一份得自己订一次，否则 eat sync 不会带上它
+  if (!res.subscribed) {
+    console.log(`你自己还没订阅它（推送不会自动订阅）。想让它随 eat sync 落到本地: eat skill subscribe ${res.slug}`);
+  }
 }
 
 export async function skillList(): Promise<void> {
