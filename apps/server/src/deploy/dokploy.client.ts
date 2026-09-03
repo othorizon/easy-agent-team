@@ -3,7 +3,15 @@
  * 端点基于 Dokploy REST API（x-api-key 认证）：
  *   POST {apiUrl}/application.deploy   { applicationId, title?, description? }（决策 30）
  *   GET  {apiUrl}/application.one?applicationId=...  → { appName }（找容器用）
- *   GET  {apiUrl}/project.all          （只读；连通性测试与应用清单都用它）
+ *   GET  {apiUrl}/project.all          （只读；连通性测试、应用清单、项目/环境清单都用它）
+ *   GET  {apiUrl}/sshKey.allForApps    → 组织内的 SSH key（只有 id 与名字，决策 31）
+ *   POST {apiUrl}/application.create   { name, description, environmentId } → 新建 application（决策 31）
+ *   POST {apiUrl}/application.saveGitProvider  → 绑自定义 Git 源（地址 / 分支 / SSH key）
+ *   POST {apiUrl}/application.saveBuildType    → 构建方式（static / dockerfile）
+ *   POST {apiUrl}/application.saveEnvironment  → 运行时 env / 构建时 buildArgs（整体覆盖）
+ *   POST {apiUrl}/application.delete   { applicationId }
+ *   POST {apiUrl}/domain.create        { host, port, https, certificateType, applicationId, domainType }（决策 32）
+ *   POST {apiUrl}/domain.update        { domainId, host, port, ... }（host 必带）
  *   GET  {apiUrl}/deployment.allByType?id=...&type=application  → 构建记录列表（每应用最多 10 条，见下）
  *   GET  {apiUrl}/deployment.queueList → 部署队列里的任务（构建记录还没建出来时的唯一去处，决策 30）
  *   GET  {apiUrl}/deployment.readLogs?deploymentId=...&tail=N   → 构建日志正文（决策 28）
@@ -17,7 +25,14 @@
  *   2. Dokploy 每建一条构建记录就调 removeLastTenDeployments，**每个应用只保留最近 10 条**，
  *      超出的连日志文件一起删；硬编码不可配。所以部署历史的长期留存只能靠平台侧元数据。
  */
-import type { DokployApplication, DokployContainer, DokployDeployment } from '@eat/shared';
+import type {
+  AppBuildType,
+  DokployApplication,
+  DokployContainer,
+  DokployDeployment,
+  DokployProject,
+  DokploySshKey,
+} from '@eat/shared';
 import { WebSocket } from 'ws';
 
 /**
@@ -51,6 +66,60 @@ export interface DokployQueueJob {
   state: string;
   /** 入队时间（毫秒） */
   timestamp: number;
+}
+
+/** application.one 里用得上的字段（真实响应有一百多个字段，这里只取平台要的） */
+export interface DokployApplicationDetail {
+  applicationId: string;
+  name: string;
+  /** Dokploy 生成的容器名前缀，找容器 / 读运行日志靠它 */
+  appName: string;
+  /** 运行时环境变量（dotenv 文本） */
+  env: string;
+  /** 构建时变量（dotenv 文本），Dockerfile 里以 ARG 取用 */
+  buildArgs: string;
+  buildSecrets: string;
+  createEnvFile: boolean;
+  sourceType: string;
+  buildType: string;
+  customGitUrl: string;
+  customGitBranch: string;
+}
+
+/** 自定义 Git 源（决策 31：平台自建的应用一律走这条，不走 GitHub/GitLab 等托管商集成） */
+export interface DokployGitProviderInput {
+  applicationId: string;
+  customGitUrl: string;
+  customGitBranch: string;
+  /** 仓库内的构建根目录，Dokploy 默认 `/` */
+  customGitBuildPath: string;
+  /** null = 不绑 key（只能拉公开仓库） */
+  customGitSSHKeyId: string | null;
+}
+
+export interface DokployBuildTypeInput {
+  applicationId: string;
+  buildType: AppBuildType;
+  dockerfile: string;
+  dockerContextPath: string;
+  publishDirectory: string;
+  isStaticSpa: boolean;
+}
+
+export interface DokployEnvironmentInput {
+  applicationId: string;
+  env: string;
+  buildArgs: string;
+  buildSecrets: string;
+  createEnvFile: boolean;
+}
+
+/** 给 application 绑一条域名（决策 32）：路径固定 `/`，流量转发到容器的 port */
+export interface DokployDomainInput {
+  applicationId: string;
+  host: string;
+  port: number;
+  https: boolean;
 }
 
 export class DokployClient {
@@ -286,6 +355,196 @@ export class DokployClient {
     // 服务端是在 pty 里跑 docker logs，行尾是 \r\n
     const text = raw.replace(/\r\n/g, '\n');
     return text.length > MAX_BYTES ? `（日志过长，只保留末尾）\n${text.slice(-MAX_BYTES)}` : text;
+  }
+
+  // ---------- 项目 / 环境 / SSH key 清单（管理员配置自助建应用的落点，决策 31） ----------
+
+  /**
+   * Dokploy 上的项目及其环境。新版 Dokploy 的 application 必须建在某个环境下（environmentId 必填），
+   * 所以管理员要选到环境这一层；没有 environments 的老版本这里回空数组，自助建应用随之不可用。
+   */
+  async listProjects(): Promise<DokployProject[]> {
+    const json = await this.getJson(`${this.base}/project.all`, '拉取 Dokploy 项目清单失败');
+    if (!Array.isArray(json)) return [];
+    const out: DokployProject[] = [];
+    for (const raw of json as Array<Record<string, unknown>>) {
+      const projectId = raw?.projectId;
+      if (typeof projectId !== 'string' || projectId === '') continue;
+      const environments: DokployProject['environments'] = [];
+      if (Array.isArray(raw.environments)) {
+        for (const env of raw.environments as Array<Record<string, unknown>>) {
+          const environmentId = env?.environmentId;
+          if (typeof environmentId !== 'string' || environmentId === '') continue;
+          environments.push({ environmentId, name: str(env.name) || environmentId, isDefault: env.isDefault === true });
+        }
+      }
+      out.push({ projectId, name: str(raw.name) || projectId, environments });
+    }
+    return out;
+  }
+
+  /** 组织内的 SSH key（sshKey.allForApps 只回 id 与名字，不含私钥） */
+  async listSshKeys(): Promise<DokploySshKey[]> {
+    const json = await this.getJson(`${this.base}/sshKey.allForApps`, '拉取 Dokploy SSH key 清单失败');
+    if (!Array.isArray(json)) return [];
+    const out: DokploySshKey[] = [];
+    for (const raw of json as Array<Record<string, unknown>>) {
+      const sshKeyId = raw?.sshKeyId;
+      if (typeof sshKeyId !== 'string' || sshKeyId === '') continue;
+      out.push({ sshKeyId, name: str(raw.name) || sshKeyId });
+    }
+    return out;
+  }
+
+  // ---------- 建应用 / 配 Git 源 / 配构建方式 / 删应用（决策 31） ----------
+
+  /**
+   * 新建 application。不传 appName：让 Dokploy 自己生成容器名（`<name>-<随机后缀>`），
+   * 传固定值会撞它的全局唯一校验（同名应用在别的项目下很常见）。
+   */
+  async createApplication(input: { name: string; description: string; environmentId: string }): Promise<{
+    applicationId: string;
+    appName: string;
+  }> {
+    const json = await this.postJson(`${this.base}/application.create`, input, '在 Dokploy 创建应用失败');
+    const row = (json ?? {}) as Record<string, unknown>;
+    const applicationId = str(row.applicationId);
+    if (!applicationId) throw new Error('Dokploy 创建应用的响应里没有 applicationId');
+    return { applicationId, appName: str(row.appName) };
+  }
+
+  /**
+   * 绑自定义 Git 源。字段名照 Dokploy 控制台自己的表单发（watchPaths 必须是数组、enableSubmodules 必须带），
+   * 少一个键 zod 就拒；customGitSSHKeyId 传 null 表示不绑 key。
+   */
+  async saveGitProvider(input: DokployGitProviderInput): Promise<void> {
+    await this.postJson(
+      `${this.base}/application.saveGitProvider`,
+      { ...input, watchPaths: [], enableSubmodules: false },
+      '在 Dokploy 配置 Git 源失败',
+    );
+  }
+
+  /**
+   * 构建方式。只开放 static / dockerfile 两种（决策 31）。与另一种方式无关的字段一律传 null，
+   * 与 Dokploy 控制台的做法一致；static 的 publishDirectory 虽然它的表单不露出，但构建器读的就是这个字段。
+   */
+  async saveBuildType(input: DokployBuildTypeInput): Promise<void> {
+    const docker = input.buildType === 'dockerfile';
+    await this.postJson(
+      `${this.base}/application.saveBuildType`,
+      {
+        applicationId: input.applicationId,
+        buildType: input.buildType,
+        dockerfile: docker ? input.dockerfile : null,
+        dockerContextPath: docker ? input.dockerContextPath : null,
+        dockerBuildStage: null,
+        herokuVersion: null,
+        railpackVersion: null,
+        publishDirectory: docker ? null : input.publishDirectory,
+        isStaticSpa: docker ? null : input.isStaticSpa,
+      },
+      '在 Dokploy 配置构建方式失败',
+    );
+  }
+
+  /** 应用详情：env / buildArgs / appName 等平台用得上的字段 */
+  async getApplication(applicationId: string): Promise<DokployApplicationDetail> {
+    const url = `${this.base}/application.one?applicationId=${encodeURIComponent(applicationId)}`;
+    const raw = ((await this.getJson(url, '读取 Dokploy 应用详情失败')) ?? {}) as Record<string, unknown>;
+    return {
+      applicationId: str(raw.applicationId) || applicationId,
+      name: str(raw.name),
+      appName: str(raw.appName),
+      env: str(raw.env),
+      buildArgs: str(raw.buildArgs),
+      buildSecrets: str(raw.buildSecrets),
+      // Dokploy 默认 true；缺字段（老版本）也按 true，别把人家的 .env 生成关了
+      createEnvFile: raw.createEnvFile !== false,
+      sourceType: str(raw.sourceType),
+      buildType: str(raw.buildType),
+      customGitUrl: str(raw.customGitUrl),
+      customGitBranch: str(raw.customGitBranch),
+    };
+  }
+
+  /** 写 env / buildArgs / buildSecrets：Dokploy 这个端点是整体覆盖，四个字段都得带上 */
+  async saveEnvironment(input: DokployEnvironmentInput): Promise<void> {
+    await this.postJson(`${this.base}/application.saveEnvironment`, input, '在 Dokploy 写入环境变量失败');
+  }
+
+  /** 删除 application。Dokploy 上已经没有这个应用（404）视为删成功，别让平台侧的记录因此删不掉 */
+  async deleteApplication(applicationId: string): Promise<void> {
+    const res = await fetch(`${this.base}/application.delete`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ applicationId }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok && res.status !== 404) {
+      throw new Error(`在 Dokploy 删除应用失败（HTTP ${res.status}）: ${(await res.text()).slice(0, 300)}`);
+    }
+  }
+
+  // ---------- 域名（决策 32） ----------
+
+  /**
+   * 给应用绑域名。请求体是 Dokploy 控制台表单的最小集（对 v0.30.5 真机验证过）：path 固定 `/`；
+   * https 时证书类型 letsencrypt（要 Dokploy 自己配好证书邮箱），否则 none。
+   * 建完 Dokploy 立刻把 Traefik 路由写进文件 provider，不用等下次部署。
+   */
+  async createDomain(input: DokployDomainInput): Promise<{ domainId: string }> {
+    const json = await this.postJson(
+      `${this.base}/domain.create`,
+      {
+        host: input.host,
+        path: '/',
+        port: input.port,
+        https: input.https,
+        certificateType: input.https ? 'letsencrypt' : 'none',
+        applicationId: input.applicationId,
+        domainType: 'application',
+      },
+      '在 Dokploy 绑定域名失败',
+    );
+    const domainId = str(((json ?? {}) as Record<string, unknown>).domainId);
+    if (!domainId) throw new Error('Dokploy 绑定域名的响应里没有 domainId');
+    return { domainId };
+  }
+
+  /** 改域名转发的容器端口。domain.update 的 zod 把 host 定成必填（真机验证），所以关键字段整组带上 */
+  async updateDomain(input: DokployDomainInput & { domainId: string }): Promise<void> {
+    await this.postJson(
+      `${this.base}/domain.update`,
+      {
+        domainId: input.domainId,
+        host: input.host,
+        path: '/',
+        port: input.port,
+        https: input.https,
+        certificateType: input.https ? 'letsencrypt' : 'none',
+      },
+      '在 Dokploy 更新域名失败',
+    );
+  }
+
+  private async postJson(url: string, body: unknown, failNote: string): Promise<unknown> {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) {
+      throw new Error(`${failNote}（HTTP ${res.status}）: ${(await res.text()).slice(0, 300)}`);
+    }
+    const text = await res.text();
+    if (!text) return undefined;
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      return undefined;
+    }
   }
 
   private async getJson(url: string, failNote: string): Promise<unknown> {

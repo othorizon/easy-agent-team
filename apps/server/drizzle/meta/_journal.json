@@ -71,6 +71,20 @@
       "when": 1788353578661,
       "tag": "0009_outstanding_gauntlet",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788414770508,
+      "tag": "0010_app_entity",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1788421097556,
+      "tag": "0011_app_domain",
+      "breakpoints": true
     }
   ]
 }

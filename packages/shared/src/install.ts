@@ -54,7 +54,7 @@ export function buildAgentInstallGuide(publicUrl: string): string {
 
 之后 CLI 或团队 Skill 有更新时，\`eat\` 命令会在 stderr 附一行提示（不影响命令结果，同一版本只提示一次）：CLI 更新执行 \`eat self-update\`（跨平台同一条命令，不用重跑本安装脚本），Skill 更新执行 \`eat sync\`。
 
-装好后你就可以直接执行 \`eat\` 命令使用平台全部能力（env / skill / ask / db / deploy 等），无需其他配置。
+装好后你就可以直接执行 \`eat\` 命令使用平台全部能力（env / skill / ask / db / app / deploy 等），无需其他配置。
 
 注意：全程不要向用户索要密码，也不要试图绕过设备码授权；所有凭证只存放在 \`~/.eat/credentials.json\`。
 `;
@@ -79,6 +79,6 @@ eat 的全部能力都可以通过 \`eat\` CLI 使用——**AI Agent 有 shell 
 - 兜底写法（\`eat\` 不在 PATH，或客户端不走 shell）：命令 \`node\`、参数 \`<CLI 路径>/eat.js mcp\`——
   类 Unix 是 \`~/.eat/bin/eat.js\`，Windows 是 \`%USERPROFILE%\\.eat\\bin\\eat.js\`（配置里请写展开后的绝对路径）。
 
-注册后客户端将获得平台全套 MCP 工具（环境变量清单/取值/权限申请、经验搜索、求助、部署等）。
+注册后客户端将获得平台全套 MCP 工具（环境变量清单/取值/权限申请、经验搜索、求助、应用创建与 env、部署与日志等）。
 `;
 }

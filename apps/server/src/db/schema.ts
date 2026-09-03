@@ -460,45 +460,84 @@ export const aiCallLogs = pgTable(
   (t) => [index('ai_call_log_purpose_idx').on(t.purpose)],
 );
 
-/** Dokploy 接入配置（单行） */
+/** Dokploy 接入配置（单行）。项目 / 环境 / SSH key 三项是自助建应用的落点（决策 31） */
 export const dokploySettings = pgTable('dokploy_setting', {
   id: uuid('id').primaryKey().defaultRandom(),
   apiUrl: text('api_url').notNull(),
   apiTokenEncrypted: text('api_token_encrypted').notNull(),
   enabled: boolean('enabled').notNull().default(true),
+  /** 自助创建的应用建在 Dokploy 的哪个项目 / 环境下；空串 = 未配置 */
+  projectId: text('project_id').notNull().default(''),
+  environmentId: text('environment_id').notNull().default(''),
+  /** 自助创建的应用绑哪把 SSH key 拉仓库；空串 = 不绑（只能拉公开仓库） */
+  sshKeyId: text('ssh_key_id').notNull().default(''),
+  /** 自动分配域名的后缀（决策 32）：建应用时绑 `<slug>.<后缀>`；空串 = 不自动分配 */
+  domainSuffix: text('domain_suffix').notNull().default(''),
+  /** 自动分配的域名是否走 HTTPS（Let's Encrypt） */
+  domainHttps: boolean('domain_https').notNull().default(false),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const projects = pgTable('project', {
+/**
+ * 应用（决策 31）：与 Dokploy 的 application 一一对应。
+ * managed=true 的是平台在 Dokploy 上自动建出来的（Git 源 / SSH key / 构建方式都由平台写入、删除时连带删除）；
+ * managed=false 的是管理员挂载的既有 application，构建配置归 Dokploy 侧维护、平台不替它记。
+ */
+export const apps = pgTable('app', {
   id: uuid('id').primaryKey().defaultRandom(),
   slug: text('slug').notNull().unique(),
   name: text('name').notNull(),
   repoUrl: text('repo_url').notNull().default(''),
+  branch: text('branch').notNull().default('main'),
+  /** 构建方式；挂载的应用为 null */
+  buildType: text('build_type', { enum: ['static', 'dockerfile'] }),
+  dockerfile: text('dockerfile').notNull().default('Dockerfile'),
+  dockerContextPath: text('docker_context_path').notNull().default(''),
+  publishDirectory: text('publish_directory').notNull().default('.'),
+  staticSpa: boolean('static_spa').notNull().default(false),
+  /** dockerfile 应用的容器监听端口，自动分配的域名把流量转发到它（static 固定 80） */
+  port: integer('port').notNull().default(3000),
+  /** 创建时自动分配的域名（决策 32）；没配后缀时建的、以及挂载的应用为 null */
+  domain: text('domain'),
+  /** 分配时是否按 HTTPS 建的（管理员之后改开关不影响已分配的域名，访问地址得按当时的算） */
+  domainHttps: boolean('domain_https').notNull().default(false),
+  /** Dokploy 上这条域名记录的 id：改端口时要靠它回写 */
+  dokployDomainId: text('dokploy_domain_id'),
   dokployApplicationId: text('dokploy_application_id').notNull(),
   description: text('description').notNull().default(''),
   ownerId: uuid('owner_id')
     .notNull()
     .references(() => users.id),
+  managed: boolean('managed').notNull().default(true),
+  /**
+   * 部署授权（决策 31）：用户自建的应用首次部署要管理员放行一次，放行后不再拦。
+   * 管理员自己建的 / 挂载的应用创建即视为已授权。
+   */
+  deployApproved: boolean('deploy_approved').notNull().default(false),
+  approvedBy: uuid('approved_by').references(() => users.id),
+  approvedAt: timestamp('approved_at', { withTimezone: true }),
+  /** 最近一次因未授权被拒的部署尝试：控制台据此把应用标成「待授权」 */
+  approvalRequestedAt: timestamp('approval_requested_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export const projectMembers = pgTable(
-  'project_member',
+export const appMembers = pgTable(
+  'app_member',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    projectId: uuid('project_id')
+    appId: uuid('app_id')
       .notNull()
-      .references(() => projects.id, { onDelete: 'cascade' }),
+      .references(() => apps.id, { onDelete: 'cascade' }),
     userId: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
   },
-  (t) => [uniqueIndex('project_member_idx').on(t.projectId, t.userId)],
+  (t) => [uniqueIndex('app_member_idx').on(t.appId, t.userId)],
 );
 
 /**
  * 部署元数据（决策 30）。部署记录本身与其状态**一律以 Dokploy 的构建记录为准**，这张表只存
- * Dokploy 那边没有的业务信息：谁触发的、带了什么 CLI 前置检查报告（决策 #8）。
+ * Dokploy 那边没有的业务信息：谁触发的、从哪触发的、带了什么 CLI 前置检查报告（决策 #8）。
  * 刻意不存 status / error——那些实时读 Dokploy，在库里存一份必然过期（旧实现就卡在这上面）。
  *
  * 行只增不删：Dokploy 每个应用只保留最近 10 条构建记录（removeLastTenDeployments，硬编码不可配），
@@ -510,22 +549,32 @@ export const deployments = pgTable(
   {
     /** 触发时由服务端显式生成，并以 `eat:<id>` 写进 Dokploy 构建记录的 description 供精确认领 */
     id: uuid('id').primaryKey().defaultRandom(),
-    projectId: uuid('project_id')
+    appId: uuid('app_id')
       .notNull()
-      .references(() => projects.id, { onDelete: 'cascade' }),
+      .references(() => apps.id, { onDelete: 'cascade' }),
     triggeredBy: uuid('triggered_by')
       .notNull()
       .references(() => users.id),
+    /** cli = eat deploy / MCP（带扫描报告）；console = 控制台按钮（没做扫描，决策 31） */
+    source: text('source', { enum: ['cli', 'console'] })
+      .notNull()
+      .default('cli'),
     /**
      * 认领到的 Dokploy 构建记录 id。触发时 Dokploy 还没建出记录（部署是排队执行的），
      * 首次读到就回写；唯一索引保证一条构建记录不会被两行元数据同时认领。
      */
     dokployDeploymentId: text('dokploy_deployment_id'),
+    /**
+     * 当初是怎么认领上的：tagged = description 里的标记精确匹配；inferred = 按时间推断。
+     * 必须记下来——Dokploy v0.30.5 起构建结束后会把 title/description 覆盖成提交信息，标记随之消失，
+     * 之后再读只能靠回写的 id 认，没有这一列就分不清「当初精确认过」和「一直是猜的」。
+     */
+    claim: text('claim', { enum: ['tagged', 'inferred'] }),
     report: jsonb('report').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    index('deployment_project_idx').on(t.projectId),
+    index('deployment_app_idx').on(t.appId),
     uniqueIndex('deployment_dokploy_idx').on(t.dokployDeploymentId),
   ],
 );

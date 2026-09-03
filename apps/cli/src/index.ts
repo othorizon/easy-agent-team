@@ -6,14 +6,20 @@ import { envList, envPull, envRequest, envRequests } from './commands/env.js';
 import { askCreate, askDelete, askList, askReply, askResolve, askShow, askTargets } from './commands/ask.js';
 import { dbInstances, dbList, dbRequest } from './commands/db.js';
 import {
+  appCreate,
+  appDelete,
+  appDeployments,
+  appEnvPull,
+  appEnvPush,
+  appList,
+  appShow,
+  appStatus,
+  appUpdate,
   buildLogs,
   deployRun,
-  projectDeployments,
-  projectList,
-  projectStatus,
   runLogs,
   scanOnly,
-} from './commands/deploy.js';
+} from './commands/app.js';
 import { skillList, skillPush, skillSubscribe, skillUnsubscribe } from './commands/skill.js';
 import { selfUpdate } from './commands/self-update.js';
 import { sync } from './commands/sync.js';
@@ -110,40 +116,90 @@ program
   .command('scan [dir]')
   .description('本地密钥扫描（通用规则 + 平台密钥指纹 + .env 误提交），不部署')
   .action(scanOnly);
-// deploy 留在顶层：最高频，且做成 `project deploy` 会与 `project <slug>` 形式的参数打架
+// deploy 留在顶层：最高频，且做成 `app deploy` 会与 `app <slug>` 形式的参数打架
 program
-  .command('deploy [project]')
-  .description('部署项目：本地前置检查通过后触发 Dokploy 部署')
+  .command('deploy [app]')
+  .description('部署应用：本地前置检查通过后触发 Dokploy 部署（应用需先经管理员授权一次）')
   .option('--dir <dir>', '代码目录（默认当前目录）')
   .option('--check <cmd>', '可选的本地预跑命令（如 "pnpm build"），非零退出则阻止部署')
   .action(deployRun);
 
-const project = program.command('project').description('部署项目：清单、部署状态、构建日志、运行日志');
-project.command('list').description('查看部署项目与自己的成员身份').action(projectList);
-project
-  .command('status <project>')
-  .description('项目最近一次部署的状态与失败原因')
+const app = program.command('app').description('应用（对应 Dokploy 的 application）：创建、配置、env、部署状态、日志');
+app.command('list').description('查看应用清单、自己的成员身份与授权状态').action(appList);
+app.command('show <app>').description('查看应用配置（Git、构建方式、成员、部署授权）').action(appShow);
+app
+  .command('create <slug>')
+  .description('自助创建应用：平台在 Dokploy 上建应用并绑好 Git 源 / SSH key / 构建方式（管理员配了域名后缀时自动分配 <slug>.<后缀>）')
+  .option('--name <name>', '显示名称（默认同 slug）')
+  .requiredOption('--repo <url>', 'Git 仓库地址（https 或 ssh；私有仓库靠管理员配置的 SSH key）')
+  .option('--branch <branch>', '分支（默认 main）')
+  .requiredOption('--build <type>', '构建方式：dockerfile 或 static（静态托管：不跑构建，仓库里直接放产物）')
+  .option('--dockerfile <path>', 'dockerfile：Dockerfile 路径（相对仓库根，默认 Dockerfile）')
+  .option('--context <path>', 'dockerfile：构建上下文（相对仓库根，默认仓库根）')
+  .option('--publish-dir <path>', 'static：发布目录（相对仓库根，默认 .）')
+  .option('--spa', 'static：SPA 模式（所有路径回退到 index.html）')
+  .option('--port <n>', 'dockerfile：容器监听端口（默认 3000）；平台自动分配的域名把流量转发到它，static 固定 80')
+  .option('--description <text>', '说明')
+  .action(appCreate);
+app
+  .command('update <app>')
+  .description('修改应用配置（平台托管的应用会同步写回 Dokploy，下次部署生效）')
+  .option('--name <name>', '显示名称')
+  .option('--repo <url>', 'Git 仓库地址')
+  .option('--branch <branch>', '分支')
+  .option('--build <type>', '构建方式：dockerfile 或 static')
+  .option('--dockerfile <path>', 'Dockerfile 路径（相对仓库根）')
+  .option('--context <path>', '构建上下文（相对仓库根，传空串表示仓库根）')
+  .option('--publish-dir <path>', 'static：发布目录')
+  .option('--spa', 'static：开启 SPA 模式')
+  .option('--no-spa', 'static：关闭 SPA 模式')
+  .option('--port <n>', 'dockerfile：容器监听端口（有自动分配域名的应用会同步改域名转发端口）')
+  .option('--description <text>', '说明')
+  .action(appUpdate);
+app
+  .command('delete <app>')
+  .description('删除应用（平台托管的连 Dokploy 上的一起删；挂载的只解绑）')
+  .option('--yes', '确认删除')
+  .action(appDelete);
+app
+  .command('status <app>')
+  .description('应用最近一次部署的状态与失败原因')
   .option('--deployment <id>', '查看指定的某次部署（支持 ID 前缀）')
-  .action(projectStatus);
-project
-  .command('deployments <project>')
-  .description('项目的部署历史（默认 Dokploy 上还留着的最近 10 次，含在 Dokploy 侧直接触发的）')
+  .action(appStatus);
+app
+  .command('deployments <app>')
+  .description('应用的部署历史（默认 Dokploy 上还留着的最近 10 次，含在 Dokploy 侧直接触发的）')
   .option('--all', '改列平台侧的完整历史，含 Dokploy 已清理掉构建记录的那些')
-  .action(projectDeployments);
-project
-  .command('build-logs <project>')
+  .action(appDeployments);
+app
+  .command('build-logs <app>')
   .description('读 Dokploy 上的构建日志（部署失败先看它，能看到真实报错）')
   .option('--tail <n>', `日志行数（默认 ${LOG_TAIL_DEFAULT}）`)
   .option('--deployment <id>', '指定某次构建（默认最近一次）')
   .option('--list', '只列出最近的构建记录')
   .action(buildLogs);
-project
-  .command('run-logs <project>')
+app
+  .command('run-logs <app>')
   .description('读应用容器的运行日志（构建成功但服务不正常时看它）')
   .option('--tail <n>', `日志行数（默认 ${LOG_TAIL_DEFAULT}）`)
   .option('--container <id>', '指定容器（多副本时用，默认第一个运行中的）')
   .option('--list', '只列出当前容器')
   .action(runLogs);
+
+const appEnv = app.command('env').description('应用的 env：运行时（默认）与构建时（--build）两块，直接读写 Dokploy 上的配置');
+appEnv
+  .command('pull <app>')
+  .description('拉取应用 env，默认写入 ./.env（--build 时 ./.env.build）')
+  .option('--build', '构建时 env（Dokploy 的 Build Args）而非运行时 env')
+  .option('--out <file>', '输出文件')
+  .option('--print', '打印到标准输出而不写文件')
+  .action(appEnvPull);
+appEnv
+  .command('push <app>')
+  .description('用本地 dotenv 文件整体覆盖应用 env，默认读 ./.env（--build 时 ./.env.build），只回 key 级变化')
+  .option('--build', '推送到构建时 env（Dokploy 的 Build Args）')
+  .option('--file <file>', '要推送的 dotenv 文件')
+  .action(appEnvPush);
 
 program
   .command('self-update')

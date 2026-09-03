@@ -38,7 +38,7 @@ import { HelpDetailPage } from './pages/HelpDetail';
 import { InstallPage } from './pages/Install';
 import { LoginPage } from './pages/Login';
 import { McpConfigsPage } from './pages/McpConfigs';
-import { ProjectsPage } from './pages/Projects';
+import { AppsPage } from './pages/Apps';
 import { RequestsPage } from './pages/Requests';
 import { SettingsPage } from './pages/Settings';
 import { SkillDetailPage } from './pages/SkillDetail';
@@ -80,7 +80,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: '资源',
     items: [
       { to: '/db', label: '数据库', icon: Database },
-      { to: '/projects', label: '部署项目', icon: Rocket },
+      { to: '/apps', label: '应用', icon: Rocket },
     ],
   },
   {
@@ -270,7 +270,7 @@ export function App() {
       <Route path="/templates" element={<RequireAuth><TemplatesPage /></RequireAuth>} />
       <Route path="/mcp" element={<RequireAuth><McpConfigsPage /></RequireAuth>} />
       <Route path="/db" element={<RequireAuth><DbsPage /></RequireAuth>} />
-      <Route path="/projects" element={<RequireAuth><ProjectsPage /></RequireAuth>} />
+      <Route path="/apps" element={<RequireAuth><AppsPage /></RequireAuth>} />
       <Route path="/requests" element={<RequireAuth><RequestsPage /></RequireAuth>} />
       <Route path="/help" element={<RequireAuth><HelpPage /></RequireAuth>} />
       <Route path="/help/:id" element={<RequireAuth><HelpDetailPage /></RequireAuth>} />

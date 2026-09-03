@@ -9,6 +9,7 @@ export * from './template.js';
 export * from './mcp.js';
 export * from './db.js';
 export * from './deploy.js';
+export * from './dotenv.js';
 export * from './install.js';
 export * from './platform-guide.js';
 export * from './version.js';

@@ -46,6 +46,7 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 | 角色模板 | 管理员预定义的「能力套餐」：一组 Skill + MCP 配置 + 环境引用 |
 | 求助（Help Request） | 用户或 AI 向团队内的人发起的提问 |
 | 经验（Experience） | 由求助沉淀出来的可复用知识，以 Skill 形式分发 |
+| 应用（App） | 部署托管的平台实体，与 Dokploy 的 application 一一对应：一个 Git 仓库 + 一种构建方式 + 一套 env；由成员自助创建（平台在 Dokploy 上建出来）或由管理员挂载既有 application（决策 31）。Dokploy 的「项目 / 环境」只出现在管理员的接入配置里，用户侧不感知 |
 
 ---
 
@@ -55,7 +56,7 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 
 | 角色 | 权限概述 |
 |---|---|
-| **管理员（Admin）** | 管理用户、角色模板、数据库实例、Dokploy 接入；可管理所有资源 |
+| **管理员（Admin）** | 管理用户、角色模板、数据库实例、Dokploy 接入（含自助建应用的落点：Dokploy 项目 / 环境 / SSH key）；授权应用首次部署、挂载既有 Dokploy 应用；可管理所有资源 |
 | **成员（Member）** | 使用被授权的资源；可创建自己的资源（个人 Skill、环境等）并成为其 Owner |
 | **资源 Owner** | 某个具体资源的创建者/作者，对该资源有完全管理权（含授权他人、审批申请） |
 
@@ -325,11 +326,17 @@ sequenceDiagram
 
 ### 3.7.1 功能
 
-- 管理员登记 Dokploy 实例（API 地址 + Token，加密存储）；
-- 平台内建「项目（Project）」实体：绑定 Git 仓库 + Dokploy 上的 application，配置项目成员（谁可部署）；
-- 部署操作：触发部署、查看部署状态与日志、回滚（映射 Dokploy API 能力）；
+- 管理员登记 Dokploy 实例（API 地址 + Token，加密存储），并选定**成员自助建应用的落点**：Dokploy 项目 / 环境 + 拉取仓库用的 SSH key（key 由管理员预先在 Dokploy 创建，可留空即只能建公开仓库的应用）；三项从 Dokploy 现拉清单选择，拉不到时可手填 id（决策 31）；可再配一个**自动分配域名的后缀**与 HTTPS 开关（决策 32）；
+- **自动分配域名**（决策 32）：管理员配了后缀（如 `apps.example.com`）后，成员每建一个应用平台就在 Dokploy 上给它绑 `<slug>.<后缀>`，创建结果与 `AppInfo` 里带 `domain` / `url`，三端都能看到；没配后缀就不分配。域名流量转发到容器端口：dockerfile 应用由创建者用 `port` 声明（默认 3000，之后可改，改了同步回写 Dokploy 的域名记录），static 固定 80（nginx）。只影响之后新建的应用，存量与挂载的应用不动；
+- 平台实体是「应用（App）」，与 Dokploy 的 application 一一对应（决策 31）。两种来源：
+  - **成员自助创建**（Web / CLI `eat app create` / MCP `create_app`）：填 Git 地址（必填）、分支、构建方式，平台在 Dokploy 上依次 `application.create` → `saveGitProvider`（绑 Git 源与 SSH key）→ `saveBuildType`，任一步失败即删掉刚建的 application 回滚，不留孤儿；创建者即 Owner；
+  - **管理员挂载既有 application**（`POST /api/apps/mount`，可从 Dokploy 搜索选择，决策 27）：平台只记 id，Git 源与构建配置归 Dokploy 侧维护，删除时只解绑；
+- 构建方式只开放两种：`dockerfile`（可指定 Dockerfile 路径与构建上下文）与 `static`（静态托管：Dokploy 把发布目录原样交给 nginx、**不跑任何构建命令**，仓库里需直接有产物；可开 SPA 模式）。创建时必选，之后可通过 `eat app update` / `update_app` / 控制台改，平台托管的应用会同步写回 Dokploy，下次部署生效；
+- 应用 env：运行时 env 与构建时 Build Args 两块，直接读写 Dokploy 上的配置（`eat app env pull|push [--build]`、MCP `get_app_env` / `set_app_env`、控制台详情页）。推送是整体覆盖目标区块（另一块与 buildSecrets 原样保留），只回 key 级差异不回值；值可能是密钥，仅应用成员可读写且落审计；
+- **部署授权**：成员自建的应用 `deployApproved=false`，首次部署（任何入口）被拒并回 `DEPLOY_NOT_APPROVED`、记下「有人试过」，管理员在控制台授权一次后永久有效（可撤销）；管理员自己建的与挂载的应用创建即视为已授权；
+- 部署操作：触发部署（CLI/MCP 携带本地密钥扫描报告；**控制台的「部署」按钮没有本地代码可扫，触发时显式声明 `source=console`，记录标成「未做密钥扫描」**，与 Dokploy 侧直接触发的部署同等显眼）、查看部署状态与日志（映射 Dokploy API 能力）；
 - **部署记录与状态一律以 Dokploy 为准（决策 30）**：平台库只存 Dokploy 没有的业务元数据（谁触发的、带了什么检查报告），靠触发时写进 Dokploy 构建记录 `description` 的 `eat:<id>` 标记精确认领；**在 Dokploy 侧直接触发的部署也会被列出来并标注「未经平台密钥扫描」**，绕过门禁这件事因此变得可见；Dokploy 每个应用只保留最近 10 条构建记录，更早的历史用 `--all` 从平台元数据看；
-- CLI/MCP：`eat deploy` / `trigger_deploy` 触发；`eat project status` / `get_deploy_status` 看结果（失败时 error 里已带构建日志末尾的真实报错）；`eat project build-logs` / `get_build_logs` 看构建日志，`eat project run-logs` / `get_run_logs` 看容器运行日志——AI 据此自查失败原因，不必跳去 Dokploy 控制台（决策 28）。
+- CLI/MCP：`eat deploy` / `trigger_deploy` 触发；`eat app status` / `get_deploy_status` 看结果（失败时 error 里已带构建日志末尾的真实报错）；`eat app build-logs` / `get_build_logs` 看构建日志，`eat app run-logs` / `get_run_logs` 看容器运行日志——AI 据此自查失败原因，不必跳去 Dokploy 控制台（决策 28）。
 
 ### 3.7.2 代码前置检查（Pre-deploy Checks）
 
@@ -342,7 +349,7 @@ sequenceDiagram
   2. **平台密钥指纹匹配**（独有能力）：CLI 从平台拉取密钥指纹清单——所有环境变量值的 SHA-256 单向指纹（仅对长度/熵足够的值生成，防离线字典猜测；清单读取落审计），对工作区文件的候选 token 同法比对——命中即证明真实下发的密钥被硬编码进了代码；
   3. 误提交检测：仓库中不允许出现含值的 `.env` 文件；
 - **构建检查外包给 Dokploy**：Dokploy 部署本身即构建（Dockerfile/Nixpacks），构建失败=部署失败，平台轮询状态并把构建日志透传给 AI；`eat deploy --check "<命令>"` 提供可选的本地预跑；
-- **防绕过**：部署 API 要求请求携带 CLI 检查报告（结论 + 规则版本），缺省拒绝——团队内部信任模型下，把"绕过"从顺手变成显式行为即可；
+- **防绕过**：部署 API 要求请求携带 CLI 检查报告（结论 + 规则版本），缺省拒绝——团队内部信任模型下，把"绕过"从顺手变成显式行为即可；控制台按钮触发是唯一的例外，它必须显式声明 `source=console`，记录明确标成「未做密钥扫描」（决策 31）；
 - 检查报告落 `precheck_result`，部署记录关联；**失败报告面向 AI 可读**——AI 拿到原因自行修复后重试部署；
 - **不做**：平台侧 runner（拉代码+容器构建）——将来出现强管控需求再评估；CI 回调模式降为可选扩展；依赖漏洞审计、大文件、Dockerfile 规范检查有真实需求再加。
 
@@ -361,9 +368,12 @@ CLI 与 MCP Server 同一个产物分发（平台自托管下载：类 Unix `cur
 | `eat env pull <env> [--format dotenv]` | 拉取有权限的变量值，写入 `.env` 或输出 |
 | `eat env request <env>/<KEY> --reason "..."` | 发起权限申请 |
 | `eat ask create / show / list / reply / delete` | 发起求助、查看回复、追问、删除（仅求助者/管理员）；按 ID 操作的子命令都接受 8 位短 ID 前缀（决策 25） |
-| `eat deploy [project]` | 触发部署（前置检查内置）；触发成功即进入 Dokploy 队列，随后轮询到构建结果 |
-| `eat project list / status / deployments` | 项目清单、最近一次部署状态（`--deployment <id>` 查指定那次，Dokploy 构建 id 与平台元数据 id 都认、支持 8 位前缀）、部署历史（`--all` 看平台完整历史，决策 30） |
-| `eat project build-logs / run-logs <project>` | 构建日志 / 容器运行日志（`--tail`、`--list`、`--deployment`/`--container`）（决策 28） |
+| `eat app create <slug> --repo <url> --build dockerfile\|static [...]` | 自助创建应用：平台在 Dokploy 上建 application 并绑 Git 源 / SSH key / 构建方式（`--branch`、`--dockerfile`、`--context`、`--port`、`--publish-dir`、`--spa`、`--description`）（决策 31）；管理员配了域名后缀时自动分配 `<slug>.<后缀>` 并打印访问地址（决策 32） |
+| `eat app update <app> [...]` / `eat app delete <app> --yes` | 改配置（托管应用同步写回 Dokploy，下次部署生效）/ 删除（托管的连 Dokploy 一起删，挂载的只解绑） |
+| `eat app env pull / push <app> [--build] [--out\|--file <f>]` | 读写应用在 Dokploy 上的 env：默认运行时，`--build` 为构建时 Build Args；push 整体覆盖、只回 key 级差异（决策 31） |
+| `eat deploy [app]` | 触发部署（前置检查内置；应用需先经管理员授权一次）；触发成功即进入 Dokploy 队列，随后轮询到构建结果 |
+| `eat app list / show / status / deployments` | 应用清单（成员与授权状态）、配置详情、最近一次部署状态（`--deployment <id>` 查指定那次，Dokploy 构建 id 与平台元数据 id 都认、支持 8 位前缀）、部署历史（`--all` 看平台完整历史，决策 30） |
+| `eat app build-logs / run-logs <app>` | 构建日志 / 容器运行日志（`--tail`、`--list`、`--deployment`/`--container`）（决策 28） |
 | `eat self-update` | 把 CLI 更新到平台当前分发的版本（重拉 `/install/eat.js` 覆盖本地产物，跨平台同一条命令）（决策 26） |
 | `eat db list` | 查看自己名下的数据库账号（引导用 env pull 取凭证） |
 
@@ -379,7 +389,9 @@ CLI 与 MCP Server 同一个产物分发（平台自托管下载：类 Unix `cur
 | `list_helpers` | 列出可求助者及其能力描述（含允许求助的 Skill 作者） |
 | `create_help_request` | 发起求助（指定 skill / helper / auto） |
 | `get_help_request` / `reply_help_request` / `delete_help_request` | 读取回复、追问、删除误发起的求助 |
-| `trigger_deploy` / `get_deploy_status` | 触发部署 / 查最近一次（或指定那次）的状态与失败原因；必须带 `project`，`history` + `all` 可列完整历史（决策 30） |
+| `list_apps` / `create_app` / `update_app` | 应用清单（含 isMember / deployApproved / canDeploy 与自动分配的 domain / url）/ 自助创建（`port` 声明容器端口）/ 改配置（决策 31、32） |
+| `get_app_env` / `set_app_env` | 读写应用 env（`target=runtime\|build`），set 为整体覆盖、只回 key 级差异（决策 31） |
+| `trigger_deploy` / `get_deploy_status` | 触发部署 / 查最近一次（或指定那次）的状态与失败原因；必须带 `app`，`history` + `all` 可列完整历史（决策 30）；应用未授权时回 `DEPLOY_NOT_APPROVED` |
 | `get_build_logs` / `get_run_logs` | 构建日志 / 容器运行日志（决策 28） |
 
 💡 设计说明：平台内置一个「平台使用指南」基础 Skill（`eat-platform-guide`，§10 决策 11），教 AI 正确的行为序列（先搜经验 → 再求助；先 list → 再 pull → 无权限则申请），这比在每个工具描述里堆规则更有效。实现为**内置虚拟 Skill**：内容随平台代码维护（`packages/shared/src/platform-guide.ts`，改内容须递增版本号），`sync-bundle` 对所有登录用户始终注入首位（`relation=builtin`），不落数据库、不可退订，slug 为保留名不可被 push 占用；登录后首次 `eat sync` 即落地，之后随平台升级自动更新。安装到登录之间的窗口由免鉴权的 `/install/AGENT.md` 兜底。
@@ -415,7 +427,7 @@ CLI 与 MCP Server 同一个产物分发（平台自托管下载：类 Unix `cur
 | 求助请求 | 仅求助双方 + 管理员 | — | — |
 | 经验（非公开） | 仅求助双方 + 管理员 | 沉淀时指定 | 被求助者 |
 | 经验（公开） | 全员 | 订阅即用 | — |
-| 部署项目 | 项目成员 | Owner 添加成员 | 项目 Owner |
+| 应用（部署 / 日志 / env） | 应用成员 | Owner 添加成员；首次部署需管理员授权一次 | 应用 Owner（成员）/ Admin（部署授权） |
 | 角色模板 | 全员可选用 | 管理员维护 | Admin |
 
 不变式（实现时需保证）：
@@ -448,7 +460,7 @@ erDiagram
     HELP_REQUEST ||--o{ HELP_MESSAGE : thread
     HELP_REQUEST ||--o| EXPERIENCE : distilled_to
     EXPERIENCE ||--|| SKILL : materializes_as
-    PROJECT ||--o{ DEPLOYMENT : deploys
+    APP ||--o{ DEPLOYMENT : deploys
     DEPLOYMENT ||--o{ PRECHECK_RESULT : gated_by
 ```
 
@@ -487,9 +499,9 @@ erDiagram
 
 **experience**：id, help_request_id, skill_id(沉淀生成的 skill), public(bool), granted_to_requester(bool), granted_to_helper(bool), created_by(=helper), updated_at
 
-**project**：id, name, repo_url, dokploy_app_id, owner_id —— **project_member**：project_id, user_id
-**deployment**：id, project_id, triggered_by, status(pending|checking|deploying|success|failed), dokploy_ref, created_at
-**precheck_result**：id, deployment_id, check_type(secret_scan|build|custom), status, report, created_at
+**app**：id, slug, name, repo_url, branch, build_type(static|dockerfile|null=挂载), dockerfile, docker_context_path, publish_directory, static_spa, port(容器端口), domain(自动分配的域名，null=未分配), domain_https, dokploy_domain_id, dokploy_application_id, description, owner_id, managed(bool), deploy_approved(bool), approved_by, approved_at, approval_requested_at —— **app_member**：app_id, user_id
+**deployment**：id, app_id, triggered_by, source(cli|console), dokploy_deployment_id, report(jsonb, 检查报告；console 触发为 null), created_at（状态一律实时读 Dokploy，决策 30）
+**dokploy_setting**：id, api_url, api_token_encrypted, enabled, project_id, environment_id, ssh_key_id（自助建应用的落点，决策 31）, domain_suffix, domain_https（自动分配域名，决策 32）
 
 **ai_setting**：id, api_base_url, api_key_encrypted, model, enabled（单行系统配置，OpenAI 接口范式）
 **ai_call_log**：id, purpose(experience_distill|...), model, prompt_tokens, completion_tokens, status, created_at
@@ -524,7 +536,7 @@ sequenceDiagram
 
 ### 6.2 部署流程
 
-`eat deploy` → CLI 在发起端本地执行前置检查（密钥扫描含平台指纹匹配 + 可选 `--check` 预跑，平台不拉代码，见决策 #8）→ 全部通过后携带检查报告调用平台 API → 平台校验报告并创建 deployment → 调 Dokploy API 触发部署 → 轮询状态回传 → 成功/失败通知触发人。任一本地检查失败则终止，AI 可读检查报告自行修复后重试。
+`eat deploy` → CLI 在发起端本地执行前置检查（密钥扫描含平台指纹匹配 + 可选 `--check` 预跑，平台不拉代码，见决策 #8）→ 全部通过后携带检查报告调用平台 API → 平台依次校验成员资格、检查报告、**管理员部署授权**（未授权回 `DEPLOY_NOT_APPROVED` 并记下「有人试过」，决策 31）→ 调 Dokploy API 触发部署并落业务元数据 → 轮询状态回传。任一本地检查失败则终止，AI 可读检查报告自行修复后重试。控制台「部署」按钮走同一接口但 `source=console`、不带报告，记录标成「未做密钥扫描」。
 
 ---
 
@@ -634,15 +646,15 @@ easy-agent-team/
 
 ### P3 —— 部署托管
 
-- Dokploy 接入、项目/成员、部署触发与日志（构建检查由 Dokploy 构建承担）
+- Dokploy 接入、应用（自助创建 / 管理员挂载）/ 成员、部署授权、应用 env、部署触发与日志（构建检查由 Dokploy 构建承担）
 - CLI 端前置检查（密钥扫描 + 平台指纹匹配 + .env 误提交），部署 API 携带报告
-- MCP 部署三件套
+- MCP 应用与部署工具
 
 ---
 
 ## 10. 决策记录
 
-以下问题已拍板（#1–12 于 2026-08-27，#13 于 2026-08-28），正文已按结论更新：
+以下问题已拍板（#1–12 于 2026-08-27，#13 于 2026-08-28，#31 于 2026-09-03），正文已按结论更新：
 
 | # | 问题 | 结论 |
 |---|---|---|
@@ -676,3 +688,5 @@ easy-agent-team/
 | 28 | 构建日志 / 运行日志与 CLI 命令结构 | **部署失败的原因要在平台里就能看到，不该让人去开 Dokploy 控制台**。原先 `deploy-status` 失败时只有一句「详见 Dokploy 控制台该应用的部署日志」，且状态取自 `application.one` 的 `applicationStatus`——那是**应用当前状态**，同一应用被别人再次部署就会串味。改动：① **状态改以 Dokploy 的构建记录为准**（`deployment.allByType?id=<appId>&type=application`，一次部署一条）；Dokploy 的部署是排队执行的，触发那一刻记录还没建出来，故**懒绑定**——首次查状态时取「我们触发之后建出来的第一条」（留 5 秒时钟差余量）记进 `deployment.dokploy_deployment_id`；绑不上先维持 `deploying`，**超过 10 分钟**才回落到 `applicationStatus`，免得记录永远卡住。② **失败时把构建日志末尾 12 行直接写进 `error`**（读 100 行、截断 800 字符），`eat deploy` / `eat project status` / MCP `get_deploy_status` 当场就能看到 `npm ERR!`、`Pulling image failed` 这类真实报错。③ 新增 `GET /api/projects/:slug/build-logs`（Dokploy `deployment.readLogs`，纯 REST）与 `GET /api/projects/:slug/run-logs`。**运行日志只有 WebSocket 一条路**：v0.30.4 上把 tRPC router 全枚举 + 端点实探（`docker.getContainerLogs` 等一律 404）+ 编译产物里 `docker logs` 命令的三处出处，都指向同一结论，REST 侧无对应过程；但**平台侧不做实时流**——带 `tail=N` 连上去，收完这一批就断开（静默 800ms / 硬超时 15s / 2MB 上限，服务端跑的是 `--follow` 永远不会主动结束），对外仍是打完即退的一次性读取。为此 `apps/server` 引入 `ws`（曾手写过最小只读实现，权衡后改用成熟实现，协议边界不自己扛）。日志**可能带出构建期注入的密钥，权限收紧到项目成员/Owner/管理员**（比部署历史严），读取落审计 `deploy.build_logs_read` / `deploy.run_logs_read`。④ **CLI 命令结构整理**：`projects` / `deploy-status` / `deploy-list` 三个平铺命令收进 `eat project` 名词组（`list` / `status` / `deployments` / `build-logs` / `run-logs`），与既有的 `env` / `skill` / `ask` / `db` 一致；**`eat deploy` 保持顶层**——最高频，且做成 `project deploy` 后 `eat project status` 会与「`project <slug>`」形式产生解析歧义。名词用 **project 而非 application**：平台实体自始至终叫项目（`/api/projects`、控制台「项目」页、`list_projects`），application 是 Dokploy 那边的词。`status` 改为吃**项目 slug**（`--deployment` 查指定那次），不必先记住 UUID。旧命令保留为**隐藏别名**并在 stderr 提示新写法——平台指南、AGENT.md、Agent 记忆里都还留着旧写法。⑤ MCP 补 `get_build_logs` / `get_run_logs`（此前 §3.7.1 与内置指南一直宣称有 `get_deploy_logs`，**实际从未实现**，Agent 调了就报错），`get_deploy_status` 改为可直接传 `project` 看最近一次（§3.7、§3.8） |
 | 29 | Windows 上不生成 `eat.ps1` | **PowerShell 入口靠 `eat.cmd` 兜住，安装脚本刻意不落 `.ps1` shim**。决策 24 按 npm cmd-shim 的惯例生成了三件套，实测在 Windows 上直接把 PowerShell 用户堵死：① PowerShell 解析命令时 `.ps1` 的优先级**高于** `PATHEXT` 里的 `.cmd`，② Windows PowerShell 5.1 默认 `ExecutionPolicy = Restricted` 拒绝执行任何 `.ps1` 文件——两条叠加的结果是 `eat` 报「无法加载文件 …\eat.ps1，因为在此系统上禁止运行脚本」，也就是 npm 那个最著名的 Windows 报错，而本来完全可用的 `eat.cmd` 被 `.ps1` 挡在后面永远选不中。（安装命令 `irm … | iex` 不受影响：执行策略只管**脚本文件**，管不了管道里的字符串，这也是各家一键安装都写成这个形式的原因。）业界只有两种解法：**发原生 exe、根本不落 `.ps1`**（Claude Code 自身的 Windows 安装、gh、uv、deno、rustup 都是这一档，exe 不受执行策略约束），或者**照 npm 落 `.ps1` 然后让用户自己去改 `Set-ExecutionPolicy`**（npm/pnpm/yarn 及所有 npm 分发的 Agent CLI 都在这一档）。eat 是 Node 单文件分发、不打算出 exe，因此取「不落 `.ps1`」这一半：**只生成 `eat.cmd`（cmd / PowerShell / `shell:true` 子进程通用）与 `eat`（Git Bash）**，PowerShell 自然回落到 `eat.cmd`，用户零操作、也不必被诱导去降低自己机器的安全设置（企业 GPO 场景本来也改不动）。代价只有 `.cmd` 的 `%*` 转发对含 `&` `^` `%` 的参数不如 `.ps1` 保真，属可接受；**退出码没有损失**：批处理把 node 的 errorlevel 作为自身退出码返回，PowerShell 的 `$LASTEXITCODE` 仍拿到真值，部署门禁等按退出码判定的命令不受影响。同时补两处文案：AGENT.md 明确要求 Agent **不要自己造 `eat.ps1`**、并给出 `cmd /c eat …` 与 `node "%USERPROFILE%\.eat\bin\eat.js" …` 两种兜底调用；安装脚本与 AGENT.md 都说明**用户级 PATH 只对新进程生效**——AI 客户端若在安装前就已启动，它拉起的终端继承的仍是旧 PATH，这不是安装失败，重启客户端即可（§7.5） |
 | 30 | 部署记录以 Dokploy 为准，平台只存业务元数据 | **部署记录与状态的唯一事实源是 Dokploy，平台库只存 Dokploy 没有的业务信息**。决策 28 已经把状态改成「以构建记录为准」，但仍在 `deployment` 表里维护一份 `status`/`error` 影子状态，于是要靠懒绑定 + 按需刷新 + 10 分钟超时回落去对齐它——列表接口还没做刷新，一条 `deploying` 能永远卡住；更关键的是**在 Dokploy 侧直接触发的部署平台完全看不见**，决策 #8 的密钥扫描门禁因此形同自愿、且不可观测。改动：① **`deployment` 表删掉 `status` / `error` / `updated_at`**，只留 `project_id` / `triggered_by` / `report` / `dokploy_deployment_id`（加唯一索引）；**行只增不删**，因为 Dokploy 会清理构建记录而「谁在什么时候带着什么扫描报告部署了生产」是平台的合规记录。② **认领靠标记而非猜时间**：`application.deploy` 接受可选的 `title` / `description` 并原样持久化到构建记录上（对 Dokploy 源码逐 tag 核对：`apiDeployApplication` 的 zod schema、仓库自带 `openapi.json` 的 requestBody、router 的 `titleLog`/`descriptionLog`、`deployApplication → createDeployment` 四处；**v0.25.0 起支持**，v0.24.0 及更早的 deploy 只吃 `applicationId`，老版本 zod 静默丢弃未知键、不报错，天然降级）。平台把 `eat:<元数据 id>` 写进 `description`（`title` 写人话，Dokploy 控制台的部署列表会显示它），读取时精确认领。**顺序是先触发成功、再落库**——Dokploy 拒绝时不留下永远认领不到的孤儿元数据；也因此触发失败直接回 503，不再伪造一条 `failed` 记录。③ **认领三轮**：标记精确匹配 → 已回写的 `dokploy_deployment_id` → 按触发时间就近推断（只用于**没有标记**的构建记录，覆盖老版本 Dokploy 与本次改造前的历史行，结果标成 `claim=inferred` 让 CLI/控制台显示「归属是猜的」）。两条铁律是冒烟实测踩出来的：**已认领过的元数据不再参与时间推断**（否则 Dokploy 清理掉它的构建记录后，它会转头认领别人在 Dokploy 侧点的部署，把未经扫描的部署冒充成平台部署），**也不再因「刚触发不久」退回 queued**（那是 archived）。④ **Dokploy 每个应用只保留最近 10 条构建记录**（`createDeployment` 每次都调 `removeLastTenDeployments`，连日志文件一起删，硬编码不可配）——所以默认视图就是「Dokploy 上还留着的那些」，`?all=1` / `--all` 改以平台元数据为主干做并集，被清理的显示为 `archived`；`deployments/latest` 在「Dokploy 已清空但平台有历史」时给专门文案，不说「还没部署过」误导人再部署一次。⑤ **排队中的部署读 `deployment.queueList`**（组织级全量，自己按 `applicationId` 过滤；只认 waiting/delayed 等未开始状态，active 说明构建记录多半已建出来；任务带 `removeOnComplete/removeOnFail`，跑完即消失）；该端点拿不到时（老版本、临时故障）用「刚触发 10 分钟内且从未认领过」兜底，保证 `eat deploy` 完立刻查得到自己那次。⑥ **状态取值直接用 Dokploy 的** `running`/`done`/`error`/`cancelled`，外加平台补的 `queued`/`archived`；**顺带修一个 bug**：此前契约把枚举写成 `running|done|error|idle`，`idle` 是 `applicationStatus` 的取值、不是构建记录的，导致**被取消的构建在平台上显示成「空闲」**。⑦ **失败详情收紧权限**：构建日志末尾那 12 行只补给项目成员，非成员只看到 Dokploy 记录上的 `errorMessage`——此前 `error` 里的日志摘录对任何登录用户可见，与决策 28 把日志收紧到成员的判断相矛盾。⑧ **破坏性 API 变更**：`GET /api/deployments/:id` 删除（Dokploy 的构建 id 反查不出属于哪个项目），改项目内 `GET /api/projects/:slug/deployments/:id`，Dokploy 构建 id 与平台元数据 id 都认、都支持 8 位前缀；CLI 升 0.4.0，`eat project deployments` 加 `--all`；**决策 28 为旧写法留的三个隐藏别名（`projects` / `deploy-status` / `deploy-list`）一并删除**——平台尚无存量用户，内置指南、AGENT.md 与 MCP 工具描述也都已是新写法，留着兼容层只会让两套写法长期并存、且 `deploy-status <id>` 在新模型下本就无法工作（Dokploy 的构建 id 反查不出项目）。**已知缺口**：「在 Dokploy 侧触发 + 构建记录已被清理」的部署平台永远看不到（元数据从来就不存在），要长期统计门禁绕过率得另起一个定期抓取 Dokploy 记录落库的任务，本次不做。**验证方式**：这个会话的出站策略 403 挡住了 Docker Hub 的 blob CDN（`production.cloudfront.docker.com`），Dokploy 真机起不来，故改为**对 Dokploy 官方源码按 tag 精确核对**（v0.24.0 / v0.25.0 / v0.28.x / v0.30.4 / v0.30.5）+ **用桩模拟真实时序做全链路冒烟**（CLI 的 deploy/deployments/--all/status、MCP `get_deploy_status`、控制台桌面与移动双视口），上面两条铁律正是冒烟时暴露出来的（§3.7、§3.8） |
+| 31 | 「项目」改为「应用」，成员自助创建、管理员授权首次部署 | **平台实体改名为应用（App），与 Dokploy 的 application 一一对应；成员自助创建，Dokploy 的项目 / 环境 / SSH key 收进管理员配置，用户侧不再感知。** 客户端不做兼容（只有几个内部测试用户装了 CLI，直接重装）：API `/api/projects` → `/api/apps`、CLI `eat project` → `eat app`（`eat deploy` 仍顶层）、MCP `list_projects` → `list_apps` 且各工具的 `project` 参数改 `app`、表 `project`/`project_member` → `app`/`app_member`、`deployment.project_id` → `app_id`。**数据库存量数据由迁移 `0010_app_entity` 原地搬迁**（平台已在线上使用）：`project` → `app` 保留 id（审计日志的 targetId 仍能对上）、`project_member` → `app_member`、`deployment.project_id` → `app_id`，搬完再删旧表，整个迁移在一个事务里；存量项目全部按「管理员挂载的既有 Dokploy 应用」处理——`managed=false`（本来就是绑定已有 application、不是平台建的，删除只解绑）、`build_type=NULL`（构建配置一直在 Dokploy 侧）、`deploy_approved=true`（上线前就在用的应用不该突然被授权门禁拦下，`approved_at` 取创建时间、`approved_by` 留空）；已用「跑到 0009 + 造存量行 + 跑 0010」的库实测；`eat sync --project` 指本地代码目录，是另一个概念，不动。① **自助创建**（Web / `eat app create` / MCP `create_app`）：Git 地址必填、分支默认 main、构建方式必选；服务端按 `application.create` → `application.saveGitProvider`（`customGitUrl/Branch/BuildPath=/`、`customGitSSHKeyId` 取管理员配置、`watchPaths: []` 与 `enableSubmodules` 必带，字段名照 Dokploy 自己的表单）→ `application.saveBuildType` 三步走，**任一步失败即 `application.delete` 回滚**，不留 Dokploy 上有、平台里没有的孤儿；不传 `appName` 让 Dokploy 自己生成容器名，避免撞它的全局唯一校验。② **构建方式只开放 `static` 与 `dockerfile`**（对 Dokploy v0.30.4 构建器源码核对）：dockerfile 可指定 Dockerfile 路径与构建上下文；static 的发布目录与 SPA 开关虽然 Dokploy 自己的表单不露出，但构建器读的就是 `publishDirectory` / `isStaticSpa`，故一并开放；**static 不跑任何构建命令**（只是 `COPY <发布目录>` 进 nginx 镜像），表单与 CLI 帮助里写明「仓库里得直接有产物，要先 build 的走 dockerfile」。与另一种方式无关的字段传 `null`，与 Dokploy 控制台一致。③ **管理员配置落点**：`dokploy_setting` 加 `project_id` / `environment_id` / `ssh_key_id`，控制台从 `project.all`（含 environments）与 `sshKey.allForApps` 拉下拉清单、拉不到退回手填；新版 Dokploy 的 application 必须建在环境下，老版本没有 environments 的项目无法作为落点。未配齐时自助建应用回 503 `DOKPLOY_PROVISIONING_UNCONFIGURED`，文案指到「系统设置 → Dokploy」。SSH key 允许为空（只能建公开仓库的应用）。④ **两种来源**：`managed=true` 平台托管（改 Git / 构建字段同步写回 Dokploy，先写 Dokploy 再落库；删除连 `application.delete` 一起、Dokploy 404 视为已删、其他失败不动平台记录）；`managed=false` 管理员挂载既有 application（`POST /api/apps/mount`，决策 27 的选择器只留给这条路且接口收到 `/api/admin/dokploy/applications`，仅管理员；构建配置字段拒改；删除只解绑）。⑤ **部署授权**：`app.deploy_approved` 用户自建默认 false、管理员自建与挂载默认 true；部署门禁顺序为成员资格 → 检查报告 → 授权，未授权回 403 `DEPLOY_NOT_APPROVED` 并写 `approval_requested_at`，控制台据此显示「待授权 · 有人尝试部署」与待授权筛选；管理员 `POST/DELETE /api/apps/:slug/approve` 授权 / 撤销，一次授权永久有效。`AppInfo` 拆出 `isMember`（成员资格：日志 / env / 失败详情按它判）与 `canDeploy = isMember && deployApproved`。⑥ **应用 env**：`GET/PUT /api/apps/:slug/env`，runtime = Dokploy `env`、build = `buildArgs`，都是 dotenv 文本；`application.saveEnvironment` 是整体写，故推送前先 `application.one` 读全量，只替换目标区块、`buildSecrets` / `createEnvFile` 原样回写；差异用 `packages/shared/src/dotenv.ts` 的保守解析算 key 级 added / changed / removed，值不进响应与审计；权限收到应用成员，读写各落审计。第一版只支持本地文件 / 文本推送，「从平台环境变量库取值推送」留作后续。⑦ **控制台部署按钮**：决策 #8 要求缺报告即拒绝，控制台没有本地代码可扫；取「允许但显眼标注」——请求必须显式 `source=console` 且不带报告（`source=cli` 缺报告仍 400），`deployment.source` 落库、`DeploymentMeta.source` 回给三端，CLI 打「控制台 ⚠ 未做密钥扫描」、控制台打「控制台」标签，与 Dokploy 侧直接触发的部署同一档处理；仍过成员与授权两道门。⑧ **真机验证（容器内自建 Dokploy v0.30.5）**：自助创建 static / dockerfile 两种应用（`application.one` 核对 Git 源、SSH key、构建字段全部落对）、授权门禁被拒并留痕、管理员授权后 `eat deploy` 两种应用均构建成功并起容器（本地 git daemon 供仓库，`nginx:alpine` 预拉到宿主 dockerd）、`eat app env push/pull` 与 `update` 同步到 Dokploy、控制台桌面 / 移动双视口 Playwright 冒烟。**顺带发现 v0.30.5 的一个行为**：Git 来源的应用构建一结束（无论成败），Dokploy 就用 `getGitCommitInfo` 把构建记录的 `title` / `description` 覆盖成提交信息，决策 30 写进去的 `eat:<id>` 标记只在排队与构建期间存在。应对：`deployment` 表加 `claim` 列，首次认领时连同认领方式一起回写，之后靠回写的 id 认领时沿用当初的方式，不再把精确认过的显示成「按时间推断」；标记被覆盖前没人读过的（MCP / 控制台触发后无人查看）仍回落为时间推断并如实标 `inferred`。⑨ 配套：CLI 升 0.5.0、平台指南升 8；控制台「部署项目」页改「应用」页并改为详情弹窗内 tabs（概览 / 环境变量 / 部署记录）；server e2e 用 mock Dokploy 补齐建应用 / 回滚 / 授权门禁 / 控制台部署 / env 推拉 / 管理员清单 / 删除用例（§1.4、§3.7、§3.8、§4、§5、§6.2） |
+| 32 | 建应用时按管理员配置的后缀自动分配域名 | **管理员在「系统设置 → Dokploy」配一个域名后缀（如 `apps.example.com`）后，成员自助创建的应用自动绑定 `<slug>.<后缀>`；没配就不分配。** 域名是应用能被访问的最后一步，此前建完应用还得去 Dokploy 控制台手绑，与「用户侧不感知 Dokploy」的方向相悖。① **落点**：`dokploy_setting` 加 `domain_suffix`（存标准化后的主机名：去协议、去 `*.` / 前导点、去尾部斜杠、转小写——管理员多半会照着 DNS 通配记录或带 https:// 的地址贴，别为这个报错；只认 RFC 1123 主机名且至少两段）与 `domain_https`（true 时证书类型 `letsencrypt`，要 Dokploy 自己配好证书邮箱；false 时 `none`）。② **绑定**：建应用第四步 `domain.create`（请求体照 Dokploy 控制台表单的最小集，对 v0.30.5 真机验证：`host / path=/ / port / https / certificateType / applicationId / domainType=application`），失败与前三步一样整体回滚（`application.delete` 级联删域名）；`app` 表记 `domain`（主机名）、`domain_https`（按分配当时的开关算访问地址，管理员之后改开关不追溯）与 `dokploy_domain_id`。**slug 得先能当 DNS label**（不以连字符结尾、不超过 63 字符——`slugSchema` 比它宽），配了后缀时在建 Dokploy 应用之前就拒，别建到一半发现域名绑不上。③ **端口**：域名的流量得转发到容器监听的端口，Dokploy 侧这是域名记录的必填项，于是 `app` 加 `port`（dockerfile 应用由创建者声明，默认 3000 与 Dokploy 表单一致；`eat app create/update --port`、MCP `port`、控制台字段），**static 固定 80**——Dokploy 的 static 构建器就是 `FROM nginx:alpine`，用户改不了；改 port 或改构建方式导致转发端口变化时回写 `domain.update`（它的 zod 把 `host` 定成必填，整组关键字段带上），没域名的应用不碰。④ **暴露**：`AppInfo` 加 `port` / `domain` / `url`（含协议，未分配为 null），CLI `create` 打印访问地址、`show` / `list` 带域名，控制台列表与详情带链接，MCP 工具描述写明「url 为 null 即平台没开自动域名」；**创建结果要把默认端口说破**——dockerfile 应用没显式传端口时，CLI 追加一行「容器端口 3000 是默认值，用 `eat app update --port` 改、立即生效」，MCP `create_app` 的返回 JSON 附 `hint` 字段说同一件事，光给 `port: 3000` 一个数字 AI 未必会和「容器其实监听 8080」联系起来。⑤ **范围**：只影响之后新建的应用，存量与挂载的应用不动（挂载的域名归 Dokploy 侧）；管理员改后缀不追溯已分配的域名。DNS 通配记录 `*.<后缀>` → Dokploy 服务器由管理员自行配置。CLI 升 0.5.1、平台指南升 9，迁移 `0011_app_domain`（§3.7、§3.8、§5） |

@@ -80,9 +80,17 @@ eat login --server https://你的域名     # 或设 EAT_SERVER 环境变量
 
 MCP 接入 Claude Code：`claude mcp add --scope user eat -- eat mcp`（或把 `eat mcp` 写进 `.mcp.json`）。
 
+## 8.1 升级到「应用」版本（决策 31）的注意事项
+
+- 迁移 `0010_app_entity` 随 `db:migrate` 自动执行（容器启动时就跑），会把存量的项目 / 成员 / 部署元数据原地搬到新表，**不需要手工执行任何 SQL**；升级前照常备份数据库即可。
+- 存量项目会以「管理员挂载的既有 Dokploy 应用」出现在「应用」页：可照常部署、看日志、读写 env，但分支与构建配置仍在 Dokploy 侧维护（平台不代改）、删除只解绑不动 Dokploy；它们默认已授权部署，不会被新的授权门禁拦下。
+- 升级后管理员要到「系统设置 → Dokploy」选好自助建应用的落点（Dokploy 项目 / 环境 / SSH key），成员才能自助创建应用。
+- 想让成员建应用时自动拿到域名（决策 32）：同一页填「域名后缀」（如 `apps.example.com`），并在 DNS 里加一条指向 Dokploy 服务器的通配记录 `*.apps.example.com`；开 HTTPS 前先在 Dokploy 的 Web Server 设置里配好 Let's Encrypt 邮箱。只影响之后新建的应用，存量应用的域名仍在 Dokploy 侧维护。
+- 已安装的 `eat` CLI 必须更新（`eat self-update` 或重跑安装脚本）：旧版的 `eat project` 与 `/api/projects` 路径已不存在；MCP 客户端随 CLI 一起更新，工具名已改为 `list_apps` 等。
+
 ## 9. 自举（用平台部署平台）
 
-平台上线后，把它自己登记为一个项目（绑定 Dokploy 上的本应用），之后升级平台就是在仓库目录里：
+平台上线后，由管理员把它自己挂载为一个应用（控制台「应用 → 挂载已有应用」，绑定 Dokploy 上的本应用），之后升级平台就是在仓库目录里：
 
 ```bash
 eat deploy easy-agent-team
