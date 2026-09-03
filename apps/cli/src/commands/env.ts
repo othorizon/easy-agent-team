@@ -66,6 +66,23 @@ export async function envPull(
     );
     if (got.length === 0) process.exitCode = 1;
   }
+  // 没带 --keys 时服务端只回「有权限的那些」，一个都没有就会 values / denied 双空。
+  // 这种情况最常见（新同事第一次拉），不能什么都不说——照样给出该申请什么的引导。
+  if (got.length === 0 && res.denied.length === 0) {
+    const entry = (await api.request<CatalogEntry[]>('GET', '/api/catalog')).find(
+      (c) => c.environment.slug === envSlug,
+    );
+    if (!entry) {
+      console.error(`环境 ${envSlug} 不存在或不可见`);
+    } else if (entry.variables.length === 0) {
+      console.error(`环境 ${envSlug} 下没有对你可见的变量`);
+    } else {
+      const keys = entry.variables.map((v) => v.key);
+      console.error(`环境 ${envSlug} 下有 ${keys.length} 个变量，但你对它们都没有读取权限。`);
+      console.error(`申请权限: eat env request ${envSlug} ${keys.join(' ')} --reason "<用途说明>"`);
+    }
+    process.exitCode = 1;
+  }
 }
 
 export async function envRequest(envSlug: string, keys: string[], opts: { reason: string }): Promise<void> {
