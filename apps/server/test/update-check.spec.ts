@@ -124,22 +124,30 @@ describe('更新检测响应头搭车', () => {
 });
 
 describe('Skill 集合指纹：三类变化都要能被发现', () => {
-  /** 从响应头读指纹（走拦截器与它的 60 秒缓存） */
+  /**
+   * 从响应头读指纹（走拦截器与它的 60 秒缓存）。
+   * 必须打**需要登录**的端点：指纹是 per-user 的，拦截器在 @Public 路由上拿不到 authUser，
+   * 只会带回 CLI 版本头（此前这里打的是 /api/health，读到的一直是空串）。
+   */
   const fingerprint = async (token: string): Promise<string> => {
-    const res = await api('GET', '/api/health', { token });
+    const res = await api('GET', '/api/skills', { token });
     return res.headers[SKILL_VERSION_HEADER] ?? '';
   };
 
   it('同一用户重复请求指纹稳定', async () => {
-    expect(await fingerprint(readerToken)).toBe(await fingerprint(readerToken));
+    const first = await fingerprint(readerToken);
+    expect(first).not.toBe('');
+    expect(await fingerprint(readerToken)).toBe(first);
   });
 
-  it('新建 Skill 会改变作者的指纹（集合新增）', async () => {
-    const before = await fingerprint(authorToken);
+  it('新建 Skill 本身不改变作者的指纹，订阅它才改变（集合新增）', async () => {
+    const before = await computeFor(authorUser);
     const push = await api('POST', '/api/skills/push', { token: authorToken, payload: basePush });
     expect(push.status).toBe(201);
-    const after = await computeFor(authorUser);
-    expect(after).not.toBe(before);
+    // 指纹算的是「该同步哪些」，推送不建立订阅，所以推送本身不构成变化
+    expect(await computeFor(authorUser)).toBe(before);
+    expect((await api('POST', `/api/skills/${basePush.slug}/subscribe`, { token: authorToken })).status).toBe(201);
+    expect(await computeFor(authorUser)).not.toBe(before);
   });
 
   it('Skill 出新版本会改变指纹（版本递增）', async () => {

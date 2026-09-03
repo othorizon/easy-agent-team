@@ -67,22 +67,42 @@ const basePush = {
 };
 
 describe('推送与版本', () => {
-  it('首次推送创建 skill（v1），作者自动订阅', async () => {
+  it('首次推送创建 skill（v1），但不自动订阅（订阅由用户自行决定）', async () => {
     const r = await api('POST', '/api/skills/push', { token: authorToken, payload: basePush });
     expect(r.status).toBe(201);
     expect(r.body.currentVersion).toBe(1);
-    expect(r.body.subscribed).toBe(true);
+    expect(r.body.subscribed).toBe(false);
     expect(r.body.files).toHaveLength(2);
+    // 没订阅 = 不进自己的 sync 范围，作者身份不代表自动落到本地
+    const bundle = await api('GET', '/api/skills/sync-bundle', { token: authorToken });
+    expect(bundle.body.map((s: { slug: string }) => s.slug)).not.toContain('weekly-report');
   });
 
-  it('再次推送出 v2 并更新元信息', async () => {
+  it('作者自行订阅后才进入自己的 sync 范围（relation=own）', async () => {
+    expect((await api('POST', '/api/skills/weekly-report/subscribe', { token: authorToken })).status).toBe(201);
+    const bundle = await api('GET', '/api/skills/sync-bundle', { token: authorToken });
+    expect(bundle.body.find((s: { slug: string }) => s.slug === 'weekly-report').relation).toBe('own');
+  });
+
+  it('退订自己的 skill 后再推新版本，不会被重新订阅上', async () => {
+    expect((await api('DELETE', '/api/skills/weekly-report/subscribe', { token: authorToken })).status).toBe(200);
+    const push = await api('POST', '/api/skills/push', {
+      token: authorToken,
+      payload: { ...basePush, content: '# 周报生成 v1.1' },
+    });
+    expect(push.body.subscribed).toBe(false);
+    // 后续用例仍以「作者已订阅」为前提，订回来
+    expect((await api('POST', '/api/skills/weekly-report/subscribe', { token: authorToken })).status).toBe(201);
+  });
+
+  it('再次推送出新版本并更新元信息', async () => {
     const r = await api('POST', '/api/skills/push', {
       token: authorToken,
       payload: { ...basePush, content: '# 周报生成 v2', changelog: '优化模板' },
     });
-    expect(r.body.currentVersion).toBe(2);
+    expect(r.body.currentVersion).toBe(3);
     const versions = await api('GET', '/api/skills/weekly-report/versions', { token: authorToken });
-    expect(versions.body.map((v: { version: number }) => v.version)).toEqual([2, 1]);
+    expect(versions.body.map((v: { version: number }) => v.version)).toEqual([3, 2, 1]);
     expect(versions.body[0].changelog).toBe('优化模板');
   });
 
@@ -132,7 +152,7 @@ describe('可见性与订阅', () => {
     const r = await api('GET', '/api/skills/sync-bundle', { token: readerToken });
     const item = r.body.find((s: { slug: string }) => s.slug === 'weekly-report');
     expect(item).toBeTruthy();
-    expect(item.version).toBe(2);
+    expect(item.version).toBe(3);
     expect(item.content).toBe('# 周报生成 v2');
     expect(item.relation).toBe('subscribed');
     expect(item.files.find((f: { path: string }) => f.path === 'scripts/fetch.sh').executable).toBe(true);

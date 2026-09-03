@@ -37,7 +37,8 @@ export function SkillsPage() {
   const create = useMutation({
     mutationFn: (v: PushSkillRequest) => api('POST', '/api/skills/push', v),
     onSuccess: () => {
-      toast.success('Skill 已创建');
+      // 创建不代表订阅（决策 34）：不提一句的话，作者会以为 eat sync 就该带上它
+      toast.success('Skill 已创建；想让它随 eat sync 落到本地，记得订阅一下');
       setCreating(false);
       void queryClient.invalidateQueries({ queryKey: ['skills'] });
     },
@@ -51,7 +52,8 @@ export function SkillsPage() {
         description={
           <>
             订阅后在本地运行 <InlineCode>eat sync</InlineCode> 即落地到 <InlineCode>~/.claude/skills</InlineCode>
-            ；本地已有的 skill 目录可用 <InlineCode>eat skill push &lt;目录&gt;</InlineCode> 上传纳管。
+            ；本地已有的 skill 目录可用 <InlineCode>eat skill push &lt;目录&gt;</InlineCode> 上传纳管，
+            <InlineCode>eat skill export &lt;slug&gt;</InlineCode> 把这里的 skill 下载到本地目录。
           </>
         }
         actions={

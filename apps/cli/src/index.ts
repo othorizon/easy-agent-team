@@ -20,7 +20,7 @@ import {
   runLogs,
   scanOnly,
 } from './commands/app.js';
-import { skillList, skillPush, skillSubscribe, skillUnsubscribe } from './commands/skill.js';
+import { skillExport, skillList, skillPush, skillSubscribe, skillUnsubscribe } from './commands/skill.js';
 import { selfUpdate } from './commands/self-update.js';
 import { sync } from './commands/sync.js';
 import { startMcpServer } from './mcp.js';
@@ -58,7 +58,7 @@ env
   .action(envRequest);
 env.command('requests').description('查看我发起的权限申请与状态').action(envRequests);
 
-const skill = program.command('skill').description('Skill：上传纳管、浏览、订阅');
+const skill = program.command('skill').description('Skill：上传纳管、浏览、订阅、导出');
 skill
   .command('push <dir>')
   .description('把本地 skill 目录上传到平台（首次创建，再次推送出新版本）')
@@ -69,6 +69,12 @@ skill
   .option('--private', '设为私有（默认团队可见）')
   .action(skillPush);
 skill.command('list').description('列出平台上可见的 skill 与订阅状态').action(skillList);
+skill
+  .command('export <slug>')
+  .description('把平台上的 skill 下载到本地目录（SKILL.md + 附属文件，可直接编辑后 push）')
+  .option('--out <dir>', '导出到指定目录（默认当前目录下的 <slug>/）')
+  .option('--force', '目标目录非空时也导出（覆盖同名文件）')
+  .action(skillExport);
 skill.command('subscribe <slug>').description('订阅 skill（eat sync 时落地本地）').action(skillSubscribe);
 skill.command('unsubscribe <slug>').description('退订 skill').action(skillUnsubscribe);
 

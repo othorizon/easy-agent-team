@@ -365,6 +365,9 @@ describe('经验沉淀', () => {
     expect(r.body.aiUsed).toBe(false);
     expect(r.body.skillSlug).toBe('exp-duizhang');
 
+    // 沉淀给自己（grantedToHelper=true）：helper 侧也建订阅（push 不再代劳）
+    const helperBundle = await api('GET', '/api/skills/sync-bundle', { token: helperToken });
+    expect(helperBundle.body.map((s: { slug: string }) => s.slug)).toContain('exp-duizhang');
     // 求助者可见、已被授予订阅、进入 sync
     const detail = await api('GET', '/api/skills/exp-duizhang', { token: requesterToken });
     expect(detail.status).toBe(200);
@@ -449,7 +452,7 @@ describe('平台 AI 接入', () => {
     });
     expect(r.status).toBe(201);
     expect(r.body.aiUsed).toBe(true);
-    // 默认不沉淀给自己（未传 grantedToHelper）：helper 的作者订阅被移除，不进其本地 sync
+    // 默认不沉淀给自己（未传 grantedToHelper）：不给 helper 建订阅，不进其本地 sync
     expect(r.body.grantedToHelper).toBe(false);
     const helperBundle = await api('GET', '/api/skills/sync-bundle', { token: helperToken });
     expect(helperBundle.body.map((s: { slug: string }) => s.slug)).not.toContain('exp-chongxiao');
