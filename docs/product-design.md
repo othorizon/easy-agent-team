@@ -133,6 +133,7 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 - 采用「平台为准」的单向同步：本地被用户手工改过的沉淀目录会提示冲突，`--force` 覆盖；
 - 每个落地的 skill 目录带 `.eat-meta.json` 记录来源与版本，便于增量更新与清理已退订项；
 - **本地已有 skill 的纳管**：`eat skill push <目录>` 把本地写好的 skill 上传到平台——首次推送创建新 Skill（自己为 Owner），再次推送产生新版本；推送后平台成为该 Skill 的事实源，本地目录转为受管目录。
+- **反向取出**：`eat skill export <slug> [--out <目录>]` 把平台上任一**自己可见**的 Skill（含未订阅的团队 Skill、内置指南）下载成普通目录（SKILL.md + 附属文件，恢复可执行位）。用途是读全文、以别人的 Skill 为底改一份自己的、或把受管目录之外的一份工作副本拿在手里。与 `eat sync` 的落地刻意不同：**不写 `.eat-meta.json`**（导出的是可自由编辑、可再 `push` 的副本，不该被 sync 当成受管目录接管）；目标目录非空时必须显式 `--force`，且 `--force` 也只覆盖同名文件、不清空目录（导出路径由用户随手指定，不能像受管目录那样删掉重建）。权限沿用既有的 `GET /api/skills/:slug`——能在 `eat skill list` / 控制台里看到的就能导出，看不到的仍是 `NOT_FOUND`，不新增任何服务端能力。
 
 💡 设计说明：不做双向同步。个人确实要改的 Skill，引导在平台上改或改完 `push`（平台是唯一事实源），避免版本发散。
 
@@ -363,6 +364,8 @@ CLI 与 MCP Server 同一个产物分发（平台自托管下载：类 Unix `cur
 |---|---|
 | `eat login` / `eat logout` / `eat whoami` | 设备码登录、登出、查看当前身份 |
 | `eat sync [--global\|--project\|--dir <dir>]` | 同步 Skill + MCP 配置到本地（模板 + 订阅 + 自建 + 沉淀经验）；默认全局，`--project` 装到当前项目 |
+| `eat skill list` / `eat skill subscribe / unsubscribe <slug>` | 浏览平台上可见的 skill 与订阅状态 / 订阅 / 退订 |
+| `eat skill export <slug> [--out <dir>] [--force]` | 把可见的 skill 下载成本地目录（SKILL.md + 附属文件，不写 `.eat-meta.json`，可直接编辑后 push）（§3.2.3） |
 | `eat skill push <dir>` | 把本地已有 skill 上传纳管（首次创建、再次推送出新版本） |
 | `eat env list [env]` | 列出可见环境与变量清单（key + 备注 + 权限状态） |
 | `eat env pull <env> [--format dotenv]` | 拉取有权限的变量值，写入 `.env` 或输出 |

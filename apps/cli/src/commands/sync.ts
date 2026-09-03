@@ -26,7 +26,7 @@ function readMeta(dir: string): EatMeta | null {
 }
 
 /** 防御性校验：落地路径必须在 skill 目录内（服务端已校验，此处双保险） */
-function safeJoin(base: string, rel: string): string {
+export function safeJoin(base: string, rel: string): string {
   const target = path.resolve(base, rel);
   if (target !== base && !target.startsWith(base + path.sep)) {
     throw new Error(`非法文件路径: ${rel}`);
