@@ -324,8 +324,11 @@ export type TriggerDeployRequest = z.infer<typeof triggerDeploySchema>;
 export const deploymentStatusSchema = z.enum(['queued', 'running', 'done', 'error', 'cancelled', 'archived']);
 export type DeploymentStatus = z.infer<typeof deploymentStatusSchema>;
 
-/** 部署来源：platform=经 eat 平台触发 / dokploy=直接在 Dokploy 侧触发，未经平台门禁 */
-export const deploymentOriginSchema = z.enum(['platform', 'dokploy']);
+/**
+ * 部署来源：platform=经 eat 平台触发 / external=绕过平台、直接在部署后台（Dokploy）触发，未经平台门禁。
+ * 取值不叫 dokploy：这个枚举会原样回给 CLI / MCP，而部署后台是平台的内部实现，对 AI 没有意义（决策 33）。
+ */
+export const deploymentOriginSchema = z.enum(['platform', 'external']);
 export type DeploymentOrigin = z.infer<typeof deploymentOriginSchema>;
 
 /**

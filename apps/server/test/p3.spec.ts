@@ -400,11 +400,11 @@ describe('Dokploy 应用清单（决策 27：管理员挂载既有应用时快�
     mockProjectAll = defaultMock;
   });
 
-  it('Dokploy 停用时回 503 DOKPLOY_UNAVAILABLE', async () => {
+  it('Dokploy 停用时回 503 DEPLOY_BACKEND_UNAVAILABLE', async () => {
     await api('PUT', '/api/admin/dokploy-settings', { token: adminToken, payload: fullSettings({ enabled: false }) });
     const res = await api('GET', '/api/admin/dokploy/applications', { token: adminToken });
     expect(res.status).toBe(503);
-    expect(res.body.error).toBe('DOKPLOY_UNAVAILABLE');
+    expect(res.body.error).toBe('DEPLOY_BACKEND_UNAVAILABLE');
     // 复原，后续用例依赖 Dokploy 可用
     await api('PUT', '/api/admin/dokploy-settings', { token: adminToken, payload: fullSettings() });
   });
@@ -418,7 +418,7 @@ describe('应用：自助创建与挂载（决策 31）', () => {
       payload: { slug: 'crm-tool', name: 'CRM 小工具', repoUrl: 'git@git.example.com:team/crm.git', buildType: 'dockerfile' },
     });
     expect(r.status).toBe(503);
-    expect(r.body.error).toBe('DOKPLOY_PROVISIONING_UNCONFIGURED');
+    expect(r.body.error).toBe('DEPLOY_BACKEND_UNCONFIGURED');
     expect(r.body.message).toContain('系统设置');
     expect(dokCalls).toHaveLength(0);
     await api('PUT', '/api/admin/dokploy-settings', { token: adminToken, payload: fullSettings() });
@@ -536,7 +536,7 @@ describe('应用：自助创建与挂载（决策 31）', () => {
       payload: { slug: 'broken', name: '坏分支', repoUrl: 'https://git.example.com/b.git', branch: 'bad branch', buildType: 'dockerfile' },
     });
     expect(r.status).toBe(503);
-    expect(r.body.error).toBe('DOKPLOY_UNAVAILABLE');
+    expect(r.body.error).toBe('DEPLOY_BACKEND_UNAVAILABLE');
     expect(r.body.message).toContain('Git 源');
     expect(dokCalls.map((c) => c.op)).toEqual(['create', 'git', 'delete']);
     expect(dokCalls[2].body).toEqual({ applicationId: 'app-created-3' });
@@ -834,7 +834,7 @@ describe('部署门禁与部署记录（决策 30）', () => {
     expect(mine.platform.report.passed).toBe(true);
 
     const fromConsole = list.body.find((d: Record<string, never>) => d.deploymentId === 'build-console');
-    expect(fromConsole.origin).toBe('dokploy');
+    expect(fromConsole.origin).toBe('external');
     expect(fromConsole.platform).toBeNull();
   });
 
@@ -954,7 +954,7 @@ describe('部署门禁与部署记录（决策 30）', () => {
     mockBuilds = [{ deploymentId: 'build-console-late', title: 'Manual deployment', description: '', status: 'done', createdAt: iso() }];
     const list = await api('GET', '/api/apps/crm-tool/deployments', { token: memberToken });
     const row = list.body.find((d: Record<string, never>) => d.deploymentId === 'build-console-late');
-    expect(row.origin).toBe('dokploy');
+    expect(row.origin).toBe('external');
     expect(row.platform).toBeNull();
   });
 });

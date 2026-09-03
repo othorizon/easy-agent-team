@@ -214,7 +214,7 @@ function DokploySettingsCard() {
   return (
     <Card>
       <CardContent>
-        <h2 className="mb-1 text-sm font-semibold">Dokploy 接入</h2>
+        <h2 className="mb-1 text-sm font-semibold">部署后台接入（Dokploy）</h2>
         <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
           部署托管挂载 Dokploy：平台通过其 API 建应用、触发部署与查询状态。API Token 加密存储。
           成员自助创建的应用会建在下面选定的 Dokploy 项目 / 环境下并绑定所选 SSH key（key 需先在 Dokploy 里创建）。

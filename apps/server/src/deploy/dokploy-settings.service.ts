@@ -113,7 +113,10 @@ export class DokploySettingsService {
   async client(): Promise<DokployClient> {
     const row = await this.settingsRow();
     if (!row || !row.enabled) {
-      throw new ServiceUnavailableException({ error: 'DOKPLOY_UNAVAILABLE', message: 'Dokploy 未配置或已停用（系统设置 → Dokploy）' });
+      throw new ServiceUnavailableException({
+        error: 'DEPLOY_BACKEND_UNAVAILABLE',
+        message: '部署后台未配置或已停用，请管理员到「系统设置 → 部署后台接入」处理',
+      });
     }
     return new DokployClient({ apiUrl: row.apiUrl, apiToken: decryptSecret(row.apiTokenEncrypted) });
   }
@@ -127,8 +130,8 @@ export class DokploySettingsService {
     const row = await this.settingsRow();
     if (!row || row.projectId === '' || row.environmentId === '') {
       throw new ServiceUnavailableException({
-        error: 'DOKPLOY_PROVISIONING_UNCONFIGURED',
-        message: '管理员尚未配置自助创建应用所需的 Dokploy 项目与环境（系统设置 → Dokploy），配好后再试',
+        error: 'DEPLOY_BACKEND_UNCONFIGURED',
+        message: '管理员尚未配置自助创建应用的落点（系统设置 → 部署后台接入），配好后再试',
       });
     }
     return {
@@ -169,7 +172,7 @@ export class DokploySettingsService {
     try {
       return await fn();
     } catch (err) {
-      throw new ServiceUnavailableException({ error: 'DOKPLOY_UNAVAILABLE', message: `${note}: ${describe(err)}` });
+      throw new ServiceUnavailableException({ error: 'DEPLOY_BACKEND_UNAVAILABLE', message: `${note}: ${describe(err)}` });
     }
   }
 }

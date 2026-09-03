@@ -109,7 +109,7 @@ export async function deployRun(slug: string | undefined, opts: { dir?: string; 
     process.exitCode = 1;
     return;
   }
-  console.log(`检查通过，触发部署 ${app.slug} → Dokploy(${app.dokployApplicationId}) ...`);
+  console.log(`检查通过，触发部署 ${app.slug} ...`);
   let dep = await api.request<DeploymentInfo>('POST', `/api/apps/${app.slug}/deploy`, { report });
   // 触发失败服务端直接报错，走不到这里；这里拿到的必然是「已排进 Dokploy 队列」
   const metaId = dep.platform?.id;
@@ -137,7 +137,7 @@ export async function deployRun(slug: string | undefined, opts: { dir?: string; 
 
 /** 一行里说清这次部署是谁发起的、有没有过平台的密钥扫描门禁（决策 30 / 31） */
 function originNote(dep: DeploymentInfo): string {
-  if (!dep.platform) return 'Dokploy 侧触发 ⚠ 未经平台密钥扫描';
+  if (!dep.platform) return '绕过平台直接触发 ⚠ 未经密钥扫描';
   const who = `${dep.platform.triggeredByName}（${dep.platform.source === 'console' ? '控制台 ⚠ 未做密钥扫描' : 'eat 平台'}）`;
   return dep.platform.claim === 'inferred' ? `${who} ⚠ 归属按时间推断，未必准确` : who;
 }
@@ -150,7 +150,7 @@ function printDeployment(dep: DeploymentInfo): void {
   const report = dep.platform?.report;
   if (report) console.log(`检查: 扫描 ${report.scannedFiles} 个文件 / ${report.findings.length} 个问题`);
   if (dep.status === 'archived') {
-    console.log('说明: Dokploy 已清理掉这次的构建记录（每个应用只留最近 10 次），只剩平台侧元数据');
+    console.log('说明: 这次的构建记录已被清理（每个应用只保留最近 10 次），只剩平台侧元数据');
   }
   if (dep.error) console.log(`原因: ${dep.error}`);
   if (dep.status === 'error') console.log(`完整构建日志: eat app build-logs ${dep.appSlug}`);
@@ -179,8 +179,8 @@ export async function appDeployments(slug: string, opts: { all?: boolean }): Pro
   }
   console.log(
     opts.all
-      ? '\n已归档 = Dokploy 那边的构建记录已被清理，只剩平台侧元数据（谁触发的、扫描报告）'
-      : `\n共 ${rows.length} 条。Dokploy 每个应用只保留最近 10 次构建；看平台完整历史用: eat app deployments ${slug} --all`,
+      ? '\n已归档 = 构建记录已被清理，只剩平台侧元数据（谁触发的、扫描报告）'
+      : `\n共 ${rows.length} 条。每个应用只保留最近 10 次构建记录；看平台完整历史用: eat app deployments ${slug} --all`,
   );
 }
 
@@ -218,11 +218,10 @@ function printApp(a: AppInfo): void {
         : `发布目录: ${a.publishDirectory}，SPA 模式: ${a.staticSpa ? '开' : '关'}`;
     console.log(`构建: ${APP_BUILD_TYPE_LABEL[a.buildType]}（${cfg}）`);
   } else {
-    console.log('构建: 管理员挂载的既有 Dokploy 应用，构建配置在 Dokploy 侧维护');
+    console.log('构建: 管理员挂载的既有应用，构建配置由管理员在部署后台维护');
   }
   if (a.url) console.log(`域名: ${a.url}`);
-  else if (a.managed) console.log('域名: 未分配（管理员未在「系统设置 → Dokploy」配置自动域名后缀）');
-  console.log(`Dokploy application: ${a.dokployApplicationId}`);
+  else if (a.managed) console.log('域名: 未分配（管理员未配置自动域名后缀）');
   const approval = a.deployApproved
     ? `已授权（${a.approvedByName ?? '-'}，${when(a.approvedAt ?? '')}）`
     : `${approvalNote(a)}——找管理员在控制台「应用」页点「授权部署」`;
@@ -279,7 +278,7 @@ export async function appCreate(slug: string, opts: AppCreateOpts): Promise<void
   if (opts.publishDir) body.publishDirectory = opts.publishDir;
   if (opts.spa) body.staticSpa = true;
   if (opts.port !== undefined) body.port = parsePort(opts.port);
-  console.log(`在 Dokploy 上创建应用 ${slug}（${APP_BUILD_TYPE_LABEL[buildType]}，${opts.repo}）...`);
+  console.log(`创建应用 ${slug}（${APP_BUILD_TYPE_LABEL[buildType]}，${opts.repo}）...`);
   const app = await api.request<AppInfo>('POST', '/api/apps', body);
   console.log('已创建。');
   printApp(app);
@@ -337,14 +336,14 @@ export async function appDelete(slug: string, opts: { yes?: boolean }): Promise<
   if (!opts.yes) {
     console.error(
       app.managed
-        ? `将删除应用 ${slug}，并连同 Dokploy 上的应用（${app.dokployApplicationId}）一起删除，容器与部署记录不可恢复。确认请加 --yes`
-        : `将把挂载的应用 ${slug} 从平台解绑（不影响 Dokploy 上的应用本身）。确认请加 --yes`,
+        ? `将删除应用 ${slug} 及其部署（容器与部署记录不可恢复）。确认请加 --yes`
+        : `将把管理员挂载的应用 ${slug} 从平台解绑（部署后台上的应用本身保留）。确认请加 --yes`,
     );
     process.exitCode = 1;
     return;
   }
   const r = await api.request<{ ok: boolean; dokployDeleted: boolean }>('DELETE', `/api/apps/${slug}`);
-  console.log(r.dokployDeleted ? `已删除 ${slug}（含 Dokploy 上的应用）` : `已解绑 ${slug}（Dokploy 上的应用保留）`);
+  console.log(r.dokployDeleted ? `已删除 ${slug}（含部署后台上的应用与容器）` : `已解绑 ${slug}（部署后台上的应用保留）`);
 }
 
 // ---------- 应用 env 的拉取与推送（决策 31） ----------
@@ -374,7 +373,7 @@ export async function appEnvPush(slug: string, opts: { build?: boolean; file?: s
   if (!fs.existsSync(file)) throw new Error(`文件不存在: ${file}（--file 指定要推送的 dotenv 文件）`);
   const content = fs.readFileSync(file, 'utf8');
   const r = await api.request<AppEnvChange>('PUT', `/api/apps/${slug}/env`, { target, content });
-  console.log(`已用 ${file} 整体覆盖 ${slug} 的${APP_ENV_TARGET_LABEL[target]} env（Dokploy 侧下次部署生效）`);
+  console.log(`已用 ${file} 整体覆盖 ${slug} 的${APP_ENV_TARGET_LABEL[target]} env（下次部署生效）`);
   const line = (label: string, keys: string[]) => keys.length && console.log(`  ${label}: ${keys.join(', ')}`);
   line('新增', r.added);
   line('修改', r.changed);
@@ -403,7 +402,7 @@ export async function buildLogs(slug: string, opts: { tail?: string; deployment?
 
   if (opts.list) {
     if (res.recent.length === 0) {
-      console.log('Dokploy 上还没有该应用的构建记录');
+      console.log('该应用还没有构建记录');
       return;
     }
     for (const b of res.recent) {
@@ -413,7 +412,7 @@ export async function buildLogs(slug: string, opts: { tail?: string; deployment?
     return;
   }
   if (!res.deployment) {
-    console.log(`Dokploy 上还没有该应用的构建记录（eat deploy ${slug} 触发一次）`);
+    console.log(`该应用还没有构建记录（eat deploy ${slug} 触发一次）`);
     return;
   }
   const d = res.deployment;
