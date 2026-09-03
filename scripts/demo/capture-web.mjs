@@ -58,7 +58,7 @@ const clickTab = (name) => async (page) => {
 /** 每张图：谁在看、看哪一页、拍前要不要点两下 */
 const SHOTS = [
   { name: 'envs', as: 'admin', url: '/', wait: '内部 API 网关' },
-  { name: 'env-detail', as: 'admin', url: '/envs/internal-api', wait: 'INTERNAL_API_TOKEN', fullPage: true },
+  { name: 'env-detail', as: 'admin', url: '/envs/internal-api', wait: 'INTERNAL_API_TOKEN' },
   { name: 'requests', as: 'liwei', url: '/requests?tab=inbox', wait: 'INTERNAL_API_TOKEN' },
   { name: 'skills', as: 'admin', url: '/skills', wait: 'CRM 数据查询' },
   { name: 'skill-detail', as: 'admin', url: '/skills/crm-data-query', wait: '统计口径' },
