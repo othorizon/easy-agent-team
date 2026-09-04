@@ -7,3 +7,4 @@ coverage/
 .env.local
 .eat/
 .DS_Store
+.demo-casts/

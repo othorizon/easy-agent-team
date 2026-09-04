@@ -17,8 +17,12 @@ const GENERIC_PATTERNS: Array<{ re: RegExp; note: string }> = [
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'coverage', '.eat', '.venv', '__pycache__']);
 const MAX_FILE_BYTES = 1024 * 1024;
-/** 候选 token：典型密钥字符集的连续串（含空格等特殊字符的密钥不在指纹匹配覆盖内） */
-const TOKEN_RE = /[A-Za-z0-9_\-+/=.]{12,}/g;
+/**
+ * 候选 token：典型密钥字符集的连续串（含空格等特殊字符的密钥不在指纹匹配覆盖内）。
+ * `=` 只允许出现在末尾（base64 padding）：放进字符集里会把 `KEY=<密钥>` 整行吞成一个
+ * token，于是最常见的那种泄漏形式（配置文件里的赋值）反而匹配不到指纹。
+ */
+const TOKEN_RE = /[A-Za-z0-9_\-+/.]{12,}={0,2}/g;
 
 function isDotenvFile(name: string): boolean {
   return /^\.env(\..+)?$/.test(name) && name !== '.env.example' && !name.endsWith('.sample');

@@ -27,6 +27,8 @@ beforeAll(() => {
   fs.writeFileSync(path.join(dir, 'src', 'aws.ts'), 'const k = "AKIAABCDEFGHIJKLMNOP";\n');
   // 平台指纹命中（真实密钥被硬编码）
   fs.writeFileSync(path.join(dir, 'src', 'leak.ts'), `const token = "${SECRET}";\n`);
+  // 赋值形式的泄漏（KEY=<密钥>）：最常见的一种，指纹必须照样命中
+  fs.writeFileSync(path.join(dir, 'deploy.conf'), `API_TOKEN=${SECRET}\n`);
   // .env 误提交
   fs.writeFileSync(path.join(dir, '.env'), 'DB_PASSWORD=abc123\n');
   // .env.example 不算
@@ -55,9 +57,22 @@ describe('scanWorkspace', () => {
     expect(findings.some((f) => f.file === '.env.example')).toBe(false);
     expect(findings.some((f) => f.file === 'src/ok.ts')).toBe(false);
 
+    expect(rules).toContain('fingerprint:deploy.conf');
+
     const fp = findings.find((f) => f.rule === 'fingerprint')!;
     expect(fp.note).toContain('internal/API_TOKEN');
     expect(fp.line).toBe(1);
+  });
+
+  it('base64 padding 的密钥不被截断', () => {
+    const padded = 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLE=';
+    const clean = fs.mkdtempSync(path.join(os.tmpdir(), 'eat-scan-b64-'));
+    fs.writeFileSync(path.join(clean, 'app.yaml'), `secret: ${padded}\n`);
+    const { findings } = scanWorkspace(clean, [
+      { fingerprint: createHash('sha256').update(padded).digest('hex'), length: padded.length, environment: 'internal', key: 'B64' },
+    ]);
+    expect(findings.map((f) => f.rule)).toEqual(['fingerprint']);
+    fs.rmSync(clean, { recursive: true, force: true });
   });
 
   it('干净目录通过', () => {

@@ -32,6 +32,18 @@ eat 的定位由此确定：作为 AI 与人之间的协作层，让权限、信
 4. **能力分发**：角色模板批量套用，CLI / MCP 自动同步至本地 AI 工作环境。
 5. **人机协作求助**：AI 可主动向团队成员求助，答复沉淀为经验 Skill，团队知识持续累积。
 
+## 长什么样
+
+| 环境变量：元数据可见、取值受控 | 求助 → 答复 → 沉淀为经验 | 部署记录：绕过门禁的也看得见 |
+|:---:|:---:|:---:|
+| [![环境详情](docs/assets/screenshots/env-detail.png)](docs/assets/screenshots/env-detail.png) | [![求助详情](docs/assets/screenshots/help-detail.png)](docs/assets/screenshots/help-detail.png) | [![部署记录](docs/assets/screenshots/app-deployments.png)](docs/assets/screenshots/app-deployments.png) |
+
+| `eat sync` 把能力同步到本地 AI | `eat env` 申请与拉取 | `eat deploy` 的密钥扫描门禁 |
+|:---:|:---:|:---:|
+| [![eat sync](docs/assets/demos/onboard.gif)](docs/assets/demos/onboard.gif) | [![eat env](docs/assets/demos/permissions.gif)](docs/assets/demos/permissions.gif) | [![eat deploy](docs/assets/demos/deploy-gate.gif)](docs/assets/demos/deploy-gate.gif) |
+
+> 点开可看大图。控制台每个页面与 CLI 关键流程的全集：[界面截图与录屏](docs/screenshots.md)。
+
 ## 架构图
 
 ```mermaid
@@ -222,6 +234,7 @@ eat login --server http://<平台地址>
 
 ## 文档
 
+- [界面截图与录屏](docs/screenshots.md) —— 控制台每个页面与 CLI 关键流程的全集；生成方式见 [`scripts/demo/`](scripts/demo/README.md)。
 - [产品设计文档](docs/product-design.md) —— 产品与技术设计的唯一事实源，含权限模型、数据模型、接口设计与全部决策记录。
 - [部署文档](docs/deployment.md) —— 镜像构建、Dokploy 部署步骤、备份与 CLI 自举分发。
 
