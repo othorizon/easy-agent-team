@@ -154,11 +154,13 @@ async function main() {
     if (shot.prepare) await shot.prepare(page);
     if (!shot.fullPage) {
       const height = await page.evaluate(() => {
-        const dialog = document.querySelector('[role="dialog"]');
-        if (dialog) return Math.ceil(dialog.getBoundingClientRect().height) + 96;
         const main = document.querySelector('main') ?? document.body;
-        const needed = Math.ceil(main.getBoundingClientRect().top + main.scrollHeight);
-        // 侧边栏是 fixed inset-y-0：视口收得比它还矮，最下面那组导航就会被切掉
+        const dialog = document.querySelector('[role="dialog"]');
+        const needed = dialog
+          ? Math.ceil(dialog.getBoundingClientRect().height) + 96
+          : Math.ceil(main.getBoundingClientRect().top + main.scrollHeight);
+        // 侧边栏是 fixed inset-y-0：视口收得比它还矮，最下面那组导航就会被切掉。
+        // 弹窗截图同样按它兜底，几张图的画幅才一致（README 里要并排放）
         const aside = document.querySelector('aside');
         return Math.max(needed, aside ? Math.ceil(aside.scrollHeight) : 0);
       });
