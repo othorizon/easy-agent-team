@@ -32,13 +32,32 @@ export function resolvePushMeta(
   };
 }
 
+/** 终端里占两列的字符：CJK、全角标点、谚文，以及 BMP 之外的（emoji 等） */
+function charWidth(ch: string): number {
+  const cp = ch.codePointAt(0) ?? 0;
+  if (cp > 0xffff) return 2;
+  return /[\u1100-\u115f\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/.test(ch)
+    ? 2
+    : 1;
+}
+
 /**
  * 一行一条的清单里显示描述：描述可能是 SKILL.md 里 `|` 保留块的多行文本（决策 36），
- * 原样打出来会把清单撑成好几屏，这里折成单行并截断，完整内容看 eat skill export / 控制台详情页。
+ * 原样打出来会把清单撑成好几屏，这里折成单行并按**终端显示列宽**截断——
+ * 按字符数截会漏掉「一个汉字占两列」，120 个汉字实际是 240 列，照样换行。
+ * 完整内容看 eat skill export / 控制台详情页。
  */
-export function oneLine(text: string, max = 120): string {
+export function oneLine(text: string, maxWidth = 80): string {
   const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+  let width = 0;
+  let out = '';
+  for (const ch of flat) {
+    const w = charWidth(ch);
+    if (width + w > maxWidth - 1) return `${out}…`; // 末列留给省略号
+    out += ch;
+    width += w;
+  }
+  return out;
 }
 
 function collectFiles(root: string, rel = ''): SkillFile[] {
