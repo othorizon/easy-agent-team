@@ -365,7 +365,7 @@ CLI 与 MCP Server 同一个产物分发（平台自托管下载：类 Unix `cur
 |---|---|
 | `eat login` / `eat logout` / `eat whoami` | 设备码登录、登出、查看当前身份 |
 | `eat sync [--global\|--project\|--dir <dir>]` | 同步 Skill + MCP 配置到本地（模板 + 订阅 + 自建 + 沉淀经验）；默认全局，`--project` 装到当前项目 |
-| `eat skill list` / `eat skill subscribe / unsubscribe <slug>` | 浏览平台上可见的 skill 与订阅状态 / 订阅 / 退订 |
+| `eat skill list [--full]` / `eat skill subscribe / unsubscribe <slug>` | 浏览平台上可见的 skill 与订阅状态（触发描述按显示宽度截断，`--full` 看全文）/ 订阅 / 退订 |
 | `eat skill export <slug> [--out <dir>] [--force]` | 把可见的 skill 下载成本地目录（SKILL.md + 附属文件，不写 `.eat-meta.json`，可直接编辑后 push）（§3.2.3） |
 | `eat skill push <dir>` | 把本地已有 skill 上传纳管（首次创建、再次推送出新版本）；**不自动订阅**，作者要本地留一份自行 subscribe（决策 34） |
 | `eat env list [env]` | 列出可见环境与变量清单（key + 备注 + 权限状态） |
