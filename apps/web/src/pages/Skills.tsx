@@ -198,10 +198,16 @@ export function SkillsPage() {
                           {s.description}
                         </div>
                       </TableCell>
-                      <TableCell className="hidden max-w-md truncate text-muted-foreground md:table-cell">
-                        {s.description}
+                      {/* 描述列吃掉所有富余宽度、也让得出去：truncate 是 nowrap，
+                          直接写在 td 上会让它恒占一个固定宽度、把窄窗口的表格顶出横向滚动条。
+                          max-w-0 + w-full 把「能缩到多窄」交还给表格，截断交给内层 div。 */}
+                      <TableCell className="hidden w-full max-w-0 text-muted-foreground md:table-cell">
+                        <div className="truncate">{s.description}</div>
                       </TableCell>
-                      <TableCell className="hidden text-muted-foreground lg:table-cell">{s.ownerName}</TableCell>
+                      {/* 描述列会把富余宽度吃光，作者列于是被挤到最窄——不许它把名字拆成竖排 */}
+                      <TableCell className="hidden whitespace-nowrap text-muted-foreground lg:table-cell">
+                        {s.ownerName}
+                      </TableCell>
                       <TableCell className="hidden tabular-nums text-muted-foreground sm:table-cell">
                         v{s.currentVersion}
                       </TableCell>
