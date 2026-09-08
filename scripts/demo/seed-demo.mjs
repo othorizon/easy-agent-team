@@ -420,6 +420,9 @@ description: 设计稿 token 到 Tailwind 变量的映射表（草稿）。
   ];
   for (const [who, slug] of SUBS) await api('POST', `/api/skills/${slug}/subscribe`, { token: T[who] });
   console.log(`  + ${SUBS.length} 条订阅`);
+  // 上线前检查清单设为捆绑（决策 37）：全员必装、不可退订，订阅者名单里能看到「手动订阅」与「捆绑」两种来源
+  await api('PATCH', '/api/skills/release-checklist', { token: admin, body: { bundled: true } });
+  console.log('  + release-checklist 设为捆绑（全员必装）');
 
   // -------------------------------------------------------------- MCP
   step('MCP 配置');
