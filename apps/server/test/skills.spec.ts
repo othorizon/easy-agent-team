@@ -4,12 +4,14 @@ process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? 'postgres://dev@127.
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import * as bcrypt from 'bcryptjs';
+import { eq, inArray } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import * as path from 'node:path';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
+import { repairSkillDescriptions } from '../src/db/repair-descriptions';
 import * as schema from '../src/db/schema';
 
 let app: NestFastifyApplication;
@@ -260,5 +262,42 @@ describe('元信息回退到 SKILL.md frontmatter', () => {
       payload: { slug: 'pdf-tools-old-cli', name: '>-', description: '>-', content: fixed, files: [] },
     });
     expect(r.body.description).toBe('处理 PDF 文件时使用：读取、合并、 拆分、填表单与 OCR。');
+  });
+});
+
+describe('存量数据订正（启动时随迁移跑）', () => {
+  // 决策 36 的解析器只影响「之后推的版本」，已经躺在库里的坏描述得靠这一步修
+  const content = ['---', 'name: legacy-skill', 'description: >-', '  旧版 CLI 推坏的描述，', '  真正的内容在正文 frontmatter 里。', '---', '', '# 正文'].join('\n');
+
+  it('把 `>-` 与空描述按 SKILL.md 正文重新解析回来，正常的行不动', async () => {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const db = drizzle(pool, { schema });
+    const [owner] = await db.select().from(schema.users).where(eq(schema.users.email, 'author@test.dev'));
+
+    // 直接造三行存量数据：坏的 `>-`、空描述、以及一条正常的
+    const seeded = await db
+      .insert(schema.skills)
+      .values([
+        { slug: 'legacy-block', name: 'legacy-skill', description: '>-', ownerId: owner.id, currentVersion: 1 },
+        { slug: 'legacy-empty', name: 'legacy-skill', description: '', ownerId: owner.id, currentVersion: 1 },
+        { slug: 'legacy-ok', name: 'legacy-skill', description: '本来就是好的', ownerId: owner.id, currentVersion: 1 },
+      ])
+      .returning();
+    await db.insert(schema.skillVersions).values(
+      seeded.map((row) => ({ skillId: row.id, version: 1, content, createdBy: owner.id })),
+    );
+
+    const repaired = await repairSkillDescriptions(db);
+    expect(repaired.map((r) => r.slug).sort()).toEqual(['legacy-block', 'legacy-empty']);
+
+    const after = await db.select().from(schema.skills).where(inArray(schema.skills.slug, ['legacy-block', 'legacy-empty', 'legacy-ok']));
+    const bySlug = Object.fromEntries(after.map((r) => [r.slug, r.description]));
+    expect(bySlug['legacy-block']).toBe('旧版 CLI 推坏的描述， 真正的内容在正文 frontmatter 里。');
+    expect(bySlug['legacy-empty']).toBe('旧版 CLI 推坏的描述， 真正的内容在正文 frontmatter 里。');
+    expect(bySlug['legacy-ok']).toBe('本来就是好的');
+
+    // 幂等：再跑一次没有可订正的行
+    expect(await repairSkillDescriptions(db)).toEqual([]);
+    await pool.end();
   });
 });
