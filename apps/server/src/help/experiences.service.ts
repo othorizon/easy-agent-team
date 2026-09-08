@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { desc, eq } from 'drizzle-orm';
 import type { DistillRequest, ExperienceInfo, ExperienceSearchResult } from '@eat/shared';
+import { parseFrontmatter, toYamlScalar } from '@eat/shared';
 import { AiService } from '../ai/ai.service';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
@@ -145,8 +146,10 @@ export class ExperiencesService {
    * 这里统一合成；手工提供且已自带 frontmatter 的内容保留原样。
    */
   private ensureFrontmatter(slug: string, description: string, body: string): string {
-    if (/^---\r?\n/.test(body)) return body;
-    return `---\nname: ${slug}\ndescription: ${description.replace(/\s+/g, ' ').trim()}\n---\n\n${body}`;
+    if (parseFrontmatter(body).present) return body;
+    // 标题里出现 `: ` 或以 YAML 指示符开头都会写出无法解析的 frontmatter，交给 toYamlScalar 决定要不要加引号
+    const desc = toYamlScalar(description.replace(/\s+/g, ' ').trim());
+    return `---\nname: ${toYamlScalar(slug)}\ndescription: ${desc}\n---\n\n${body}`;
   }
 
   private buildThreadText(

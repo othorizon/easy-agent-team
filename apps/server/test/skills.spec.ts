@@ -210,3 +210,55 @@ describe('内置平台使用指南（决策 11）', () => {
     expect(r.status).toBe(400);
   });
 });
+
+describe('元信息回退到 SKILL.md frontmatter', () => {
+  // description 常写成折叠块标量，早期客户端解析不了，只能把 `>-` 本身推上来
+  const content = [
+    '---',
+    'name: pdf-tools',
+    'description: >-',
+    '  处理 PDF 文件时使用：读取、合并、',
+    '  拆分与填表单。',
+    '---',
+    '',
+    '# 正文',
+  ].join('\n');
+  const folded = '处理 PDF 文件时使用：读取、合并、 拆分与填表单。';
+
+  it('网页创建只贴了正文没填描述时，从 frontmatter 取（显式填的名称不被覆盖）', async () => {
+    const r = await api('POST', '/api/skills/push', {
+      token: authorToken,
+      payload: { slug: 'pdf-tools', name: 'PDF 工具', description: '', content, files: [] },
+    });
+    expect(r.status).toBe(201);
+    expect(r.body.description).toBe(folded);
+    expect(r.body.name).toBe('PDF 工具');
+  });
+
+  it('旧版 CLI 把块标量指示符本身当元信息推上来时，同样回退到 frontmatter', async () => {
+    const r = await api('POST', '/api/skills/push', {
+      token: authorToken,
+      payload: { slug: 'pdf-tools-old-cli', name: '>-', description: '>-', content, files: [] },
+    });
+    expect(r.status).toBe(201);
+    expect(r.body.name).toBe('pdf-tools');
+    expect(r.body.description).toBe(folded);
+  });
+
+  it('显式传的描述优先于 frontmatter', async () => {
+    const r = await api('POST', '/api/skills/push', {
+      token: authorToken,
+      payload: { slug: 'pdf-tools-explicit', name: 'PDF 工具', description: '我自己写的描述', content, files: [] },
+    });
+    expect(r.body.description).toBe('我自己写的描述');
+  });
+
+  it('推新版本时描述跟着 frontmatter 一起更新（老版本的 `>-` 就此被修好）', async () => {
+    const fixed = content.replace('拆分与填表单。', '拆分、填表单与 OCR。');
+    const r = await api('POST', '/api/skills/push', {
+      token: authorToken,
+      payload: { slug: 'pdf-tools-old-cli', name: '>-', description: '>-', content: fixed, files: [] },
+    });
+    expect(r.body.description).toBe('处理 PDF 文件时使用：读取、合并、 拆分、填表单与 OCR。');
+  });
+});

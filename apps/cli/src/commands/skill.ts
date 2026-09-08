@@ -2,6 +2,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
   PLATFORM_GUIDE_SLUG,
+  parseSkillFrontmatter,
+  slugifyName,
   type PushSkillRequest,
   type SkillDetail,
   type SkillFile,
@@ -13,25 +15,21 @@ import { safeJoin } from './sync.js';
 
 const IGNORED = new Set(['node_modules', '.git', '.eat-meta.json']);
 
-/** 简单 frontmatter 解析：仅取 name / description 两个键 */
-function parseFrontmatter(content: string): { name?: string; description?: string } {
-  const lines = content.split('\n');
-  if (lines[0]?.trim() !== '---') return {};
-  const end = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
-  if (end < 0) return {};
-  const out: { name?: string; description?: string } = {};
-  for (const line of lines.slice(1, end)) {
-    const m = line.match(/^(name|description):\s*(.+)$/);
-    if (m) out[m[1] as 'name' | 'description'] = m[2].trim();
-  }
-  return out;
-}
-
-function slugify(input: string): string {
-  return input
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+/**
+ * 推送用的元信息：命令行参数优先，其次 SKILL.md frontmatter，最后回落到目录名。
+ * frontmatter 的 description 支持块标量（`>-`、`|`）与引号跨行写法，解析在 @eat/shared。
+ */
+export function resolvePushMeta(
+  content: string,
+  dirName: string,
+  opts: { slug?: string; name?: string; description?: string },
+): { slug: string; name: string; description: string } {
+  const fm = parseSkillFrontmatter(content);
+  return {
+    slug: opts.slug ?? slugifyName(fm.name ?? dirName),
+    name: opts.name ?? fm.name ?? dirName,
+    description: opts.description ?? fm.description ?? '',
+  };
 }
 
 function collectFiles(root: string, rel = ''): SkillFile[] {
@@ -69,18 +67,19 @@ export async function skillPush(
     return;
   }
   const content = fs.readFileSync(skillMd, 'utf8');
-  const fm = parseFrontmatter(content);
-  const name = opts.name ?? fm.name ?? path.basename(root);
-  const slug = opts.slug ?? slugify(fm.name ?? path.basename(root));
+  const { slug, name, description } = resolvePushMeta(content, path.basename(root), opts);
   if (!slug) {
     console.error('错误: 无法从目录名/名称推导 slug（可能是纯中文），请用 --slug 指定');
     process.exitCode = 1;
     return;
   }
+  if (!description) {
+    console.log('提示: 没读到 description（SKILL.md frontmatter 里写，或用 --description 指定）——AI 靠它判断何时使用这个 skill');
+  }
   const payload: PushSkillRequest = {
     slug,
     name,
-    description: opts.description ?? fm.description ?? '',
+    description,
     content,
     files: collectFiles(root),
     changelog: opts.changelog ?? '',

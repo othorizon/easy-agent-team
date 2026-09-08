@@ -31,6 +31,14 @@ export const skillFileSchema = z.object({
 });
 export type SkillFile = z.infer<typeof skillFileSchema>;
 
+/** 由名称推导 slug：小写化、非字母数字折成连字符（纯中文名会得到空串，需另行指定 slug） */
+export function slugifyName(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 export const skillVisibilitySchema = z.enum(['team', 'private']);
 export type SkillVisibility = z.infer<typeof skillVisibilitySchema>;
 

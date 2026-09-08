@@ -1,4 +1,5 @@
 import type { PushSkillRequest, SkillInfo } from '@eat/shared';
+import { parseSkillFrontmatter, slugifyName } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useState } from 'react';
@@ -147,9 +148,30 @@ function CreateSkillDialog({
   onClose: () => void;
   onSubmit: (v: PushSkillRequest) => void;
 }) {
-  const { register, handleSubmit, control, formState: { errors } } = useForm<CreateFormValues>({
+  const { register, handleSubmit, control, getValues, setValue, formState: { errors } } = useForm<CreateFormValues>({
     defaultValues: { slug: '', name: '', description: '', content: '', private: false },
   });
+
+  /**
+   * 正文是整份 SKILL.md 时，从 frontmatter 回填还空着的 slug / 名称 / 触发描述——
+   * description 常写成 `>-` 折叠或 `|` 保留的多行块，解析在 @eat/shared，与 eat skill push 同一套。
+   */
+  const fillFromFrontmatter = (content: string) => {
+    const fm = parseSkillFrontmatter(content);
+    const filled: string[] = [];
+    // 长度按服务端契约截断，免得回填出一个必然被拒的值
+    const fill = (field: 'slug' | 'name' | 'description', value: string, max: number, label: string) => {
+      if (!value || getValues(field).trim()) return;
+      setValue(field, value.slice(0, max), { shouldValidate: true, shouldDirty: true });
+      filled.push(label);
+    };
+    if (fm.name) fill('slug', slugifyName(fm.name), 64, '标识');
+    if (fm.name) fill('name', fm.name, 100, '名称');
+    if (fm.description) fill('description', fm.description, 2000, '触发描述');
+    if (filled.length > 0) toast.info(`已从 SKILL.md frontmatter 填入${filled.join('、')}`);
+  };
+  const contentField = register('content', { required: '请输入正文' });
+
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-2xl">
@@ -187,14 +209,24 @@ function CreateSkillDialog({
           <Field label="触发描述" htmlFor="skill-desc" hint="AI 靠它判断何时使用这个 skill">
             <Textarea id="skill-desc" rows={2} placeholder="根据运营数据生成周报，适用于每周一汇报" {...register('description')} />
           </Field>
-          <Field label="SKILL.md 正文" htmlFor="skill-content" required error={errors.content?.message}>
+          <Field
+            label="SKILL.md 正文"
+            htmlFor="skill-content"
+            required
+            error={errors.content?.message}
+            hint="可直接粘贴整份 SKILL.md：上面空着的字段会从 frontmatter 自动填入"
+          >
             <Textarea
               id="skill-content"
               rows={10}
               className="font-mono text-[13px]"
               placeholder={'# 周报生成\n\n步骤……'}
               aria-invalid={!!errors.content}
-              {...register('content', { required: '请输入正文' })}
+              {...contentField}
+              onBlur={(e) => {
+                void contentField.onBlur(e);
+                fillFromFrontmatter(e.target.value);
+              }}
             />
           </Field>
           <Field label="可见性">

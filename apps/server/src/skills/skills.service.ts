@@ -15,6 +15,8 @@ import type {
   UpdateSkillRequest,
 } from '@eat/shared';
 import {
+  isBlockScalarIndicator,
+  parseSkillFrontmatter,
   PLATFORM_GUIDE_SLUG,
   PLATFORM_GUIDE_VERSION,
   platformGuideSyncSkill,
@@ -199,6 +201,21 @@ export class SkillsService {
   }
 
   /**
+   * 元信息以客户端传的为准，但两种情况回退到 SKILL.md frontmatter：
+   * 传空（网页创建时只贴了正文没填描述），或传上来的只是个块标量指示符
+   * （旧版 CLI ≤0.5.5 解析不了 `description: >-`，把 `>-` 本身当值推了上来）。
+   */
+  private resolveMeta(dto: PushSkillRequest): { name: string; description: string } {
+    const usable = (v: string) => v.trim() !== '' && !isBlockScalarIndicator(v);
+    if (usable(dto.name) && usable(dto.description)) return { name: dto.name, description: dto.description };
+    const fm = parseSkillFrontmatter(dto.content);
+    return {
+      name: usable(dto.name) ? dto.name : (fm.name?.slice(0, 100) ?? dto.name),
+      description: usable(dto.description) ? dto.description : (fm.description?.slice(0, 2000) ?? ''),
+    };
+  }
+
+  /**
    * 创建或推送新版本（eat skill push / 网页创建共用）。
    *
    * **不碰订阅关系**：是否让某个 skill 进自己的 sync 范围完全由用户自己决定（订阅 / 退订），
@@ -212,6 +229,7 @@ export class SkillsService {
       throw new BadRequestException({ error: 'VALIDATION_FAILED', message: `${PLATFORM_GUIDE_SLUG} 是平台内置 skill 的保留名` });
     }
 
+    const meta = this.resolveMeta(dto);
     const existing = (await this.db.select().from(skills).where(eq(skills.slug, dto.slug)).limit(1))[0];
     let skill: SkillRow;
     if (existing) {
@@ -224,8 +242,8 @@ export class SkillsService {
         .insert(skills)
         .values({
           slug: dto.slug,
-          name: dto.name,
-          description: dto.description,
+          name: meta.name,
+          description: meta.description,
           ownerId: user.id,
           visibility: dto.visibility ?? 'team',
         })
@@ -245,8 +263,8 @@ export class SkillsService {
       .update(skills)
       .set({
         currentVersion: nextVersion,
-        name: dto.name,
-        description: dto.description,
+        name: meta.name,
+        description: meta.description,
         ...(dto.visibility ? { visibility: dto.visibility } : {}),
         updatedAt: new Date(),
       })
