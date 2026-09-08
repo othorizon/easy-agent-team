@@ -21,6 +21,7 @@ import { Input, Textarea } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { TableSkeleton } from '../components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { cn } from '../lib/utils';
 import { useQueryParams } from '../lib/use-query-params';
 
 const SCOPE_OPTIONS = [
@@ -178,10 +179,7 @@ export function SkillsPage() {
                   <TableRow>
                     <TableHead>Skill</TableHead>
                     <TableHead className="hidden md:table-cell">触发描述</TableHead>
-                    <TableHead className="hidden w-24 lg:table-cell">作者</TableHead>
-                    <TableHead className="hidden w-16 sm:table-cell">版本</TableHead>
-                    <TableHead className="hidden w-24 sm:table-cell">类型</TableHead>
-                    <TableHead className="hidden w-20 sm:table-cell">订阅数</TableHead>
+                    <TableHead className="hidden w-44 lg:table-cell">作者 · 版本 · 订阅</TableHead>
                     <TableHead className="w-20">订阅</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -189,13 +187,18 @@ export function SkillsPage() {
                   {items.map((s) => (
                     <TableRow key={s.id}>
                       <TableCell>
-                        <Link to={`/skills/${s.slug}`} className="group inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                        <Link to={`/skills/${s.slug}`} className="group inline-flex flex-wrap items-center gap-x-2 gap-y-1">
                           <InlineCode className="text-primary group-hover:underline">{s.slug}</InlineCode>
                           <span className="font-medium">{s.name}</span>
+                          <SkillTags skill={s} />
                         </Link>
                         {/* 窄屏才显示的描述：truncate 是 nowrap，不封顶会把整张表撑到要横向滚动 */}
                         <div className="mt-0.5 max-w-[55vw] truncate text-xs text-muted-foreground md:hidden">
                           {s.description}
+                        </div>
+                        {/* 元信息列在窄屏收起，改挂到名称下方，免得挤出横向滚动 */}
+                        <div className="mt-1 lg:hidden">
+                          <SkillMeta skill={s} className="text-xs" />
                         </div>
                       </TableCell>
                       {/* 描述列吃掉所有富余宽度、也让得出去：truncate 是 nowrap，
@@ -204,27 +207,9 @@ export function SkillsPage() {
                       <TableCell className="hidden w-full max-w-0 text-muted-foreground md:table-cell">
                         <div className="truncate">{s.description}</div>
                       </TableCell>
-                      {/* 描述列会把富余宽度吃光，作者列于是被挤到最窄——不许它把名字拆成竖排 */}
-                      <TableCell className="hidden whitespace-nowrap text-muted-foreground lg:table-cell">
-                        {s.ownerName}
-                      </TableCell>
-                      <TableCell className="hidden tabular-nums text-muted-foreground sm:table-cell">
-                        v{s.currentVersion}
-                      </TableCell>
-                      <TableCell className="hidden sm:table-cell">
-                        <div className="flex flex-wrap gap-1">
-                          {s.bundled && <Badge variant="warning">捆绑</Badge>}
-                          {s.visibility === 'private' ? (
-                            <Badge variant="outline">私有</Badge>
-                          ) : s.visibility === 'granted' ? (
-                            <Badge variant="secondary">授予</Badge>
-                          ) : (
-                            !s.bundled && <Badge>团队</Badge>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="hidden tabular-nums text-muted-foreground sm:table-cell">
-                        {s.subscriberCount}
+                      {/* 描述列会把富余宽度吃光，这一列于是被挤到最窄——不许它把内容拆成竖排 */}
+                      <TableCell className="hidden whitespace-nowrap lg:table-cell">
+                        <SkillMeta skill={s} />
                       </TableCell>
                       <TableCell>
                         {s.subscriptionLocked ? (
@@ -267,6 +252,63 @@ export function SkillsPage() {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * 订阅人数的小人图标。lucide 的 Users（两个人）在 14px 下两个人形的笔画糊成一团，
+ * User（单人）的头又偏大，所以照它的线条风格自己画一个：头小一号、肩线更平，
+ * 小尺寸下才立得住。用图标而不是「N 人订阅」，同样的信息省掉三个汉字的宽度。
+ */
+function SubscriberGlyph() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className="size-3.5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      aria-hidden
+    >
+      <circle cx="8" cy="5.1" r="2.6" />
+      <path d="M3.2 13.3c0-2.4 2.15-3.9 4.8-3.9s4.8 1.5 4.8 3.9" />
+    </svg>
+  );
+}
+
+/**
+ * 名称旁的状态徽标：只出**非默认**状态。「团队可见」是默认值、九成行都是它，
+ * 每行挂一个纯属噪音，扫描时反而看不见真正特殊的那几条。
+ */
+function SkillTags({ skill }: { skill: SkillInfo }) {
+  return (
+    <>
+      {skill.bundled && <Badge variant="warning">捆绑</Badge>}
+      {skill.visibility === 'private' && <Badge variant="outline">私有</Badge>}
+      {skill.visibility === 'granted' && <Badge variant="secondary">授予</Badge>}
+      {skill.source === 'experience' && <Badge variant="secondary">经验</Badge>}
+    </>
+  );
+}
+
+/**
+ * 作者 · 版本 · 订阅人数，合成一行小字——这三项各占一列不值当，
+ * 挤到最后还会把作者名拆成竖排。订阅数用图标而不是「N 人订阅」，省一半宽度。
+ */
+function SkillMeta({ skill, className }: { skill: SkillInfo; className?: string }) {
+  return (
+    <span className={cn('inline-flex items-center gap-1.5 whitespace-nowrap text-muted-foreground', className)}>
+      <span className="truncate">{skill.ownerName}</span>
+      <span aria-hidden>·</span>
+      <span className="tabular-nums">v{skill.currentVersion}</span>
+      <span aria-hidden>·</span>
+      <span className="inline-flex items-center gap-0.5" title={`${skill.subscriberCount} 人订阅`}>
+        <SubscriberGlyph />
+        <span className="tabular-nums">{skill.subscriberCount}</span>
+        <span className="sr-only">人订阅</span>
+      </span>
+    </span>
   );
 }
 

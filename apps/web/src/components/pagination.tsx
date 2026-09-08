@@ -43,6 +43,11 @@ export function Pagination({
 }) {
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const [jump, setJump] = React.useState('');
+  // pageSize 来自 URL、用户可以手改成任意值；不在预设里就临时补进选项，
+  // 否则 Select 找不到匹配项、下拉会渲染成一个空框
+  const sizeOptions = PAGE_SIZE_OPTIONS.includes(pageSize)
+    ? PAGE_SIZE_OPTIONS
+    : [...PAGE_SIZE_OPTIONS, pageSize].sort((a, b) => a - b);
 
   const go = (p: number) => onPageChange(Math.min(pageCount, Math.max(1, p)));
   const submitJump = () => {
@@ -60,7 +65,7 @@ export function Pagination({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {PAGE_SIZE_OPTIONS.map((n) => (
+            {sizeOptions.map((n) => (
               <SelectItem key={n} value={String(n)}>
                 {n} 条/页
               </SelectItem>
