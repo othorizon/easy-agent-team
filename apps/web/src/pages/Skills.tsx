@@ -174,10 +174,14 @@ export function SkillsPage() {
             <Empty text={filtered ? '没有符合条件的 Skill' : '还没有 Skill'} />
           ) : (
             <>
-              <Table>
+              {/* table-fixed：列宽只由表头说了算，不再被单元格里最长的那段内容反推。
+                  否则截断用的 nowrap 内容会给每一列压出一个「最小宽度」，窄窗口下互相挤、
+                  最后顶出横向滚动条（这一版之前正是这么坏的） */}
+              <Table className="table-fixed">
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Skill</TableHead>
+                    {/* 宽屏给 Skill 列固定三分之一，剩下的归描述列；窄屏没有描述列，它自动吃满 */}
+                    <TableHead className="md:w-[34%]">Skill</TableHead>
                     <TableHead className="hidden md:table-cell">触发描述</TableHead>
                     <TableHead className="hidden w-44 lg:table-cell">作者 · 版本 · 订阅</TableHead>
                     <TableHead className="w-20">订阅</TableHead>
@@ -187,28 +191,33 @@ export function SkillsPage() {
                   {items.map((s) => (
                     <TableRow key={s.id}>
                       <TableCell>
-                        <Link to={`/skills/${s.slug}`} className="group inline-flex flex-wrap items-center gap-x-2 gap-y-1">
-                          <InlineCode className="text-primary group-hover:underline">{s.slug}</InlineCode>
-                          <span className="font-medium">{s.name}</span>
-                          <SkillTags skill={s} />
+                        <Link
+                          to={`/skills/${s.slug}`}
+                          className="group inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1"
+                        >
+                          <InlineCode className="break-all text-primary group-hover:underline">{s.slug}</InlineCode>
+                          {/* 名称与徽标绑成一组：否则换行时徽标会被甩到下一行单独站着。
+                              基线对齐而非居中——名称折成两行时，居中会把徽标吊在两行中间；
+                              基线对齐则让 12px 的徽标文字与 14px 的名称落在同一条基线上。 */}
+                          <span className="inline-flex min-w-0 items-baseline gap-2">
+                            <span className="line-clamp-2 min-w-0 font-medium" title={s.name}>
+                              {s.name}
+                            </span>
+                            <SkillTags skill={s} />
+                          </span>
                         </Link>
-                        {/* 窄屏才显示的描述：truncate 是 nowrap，不封顶会把整张表撑到要横向滚动 */}
-                        <div className="mt-0.5 max-w-[55vw] truncate text-xs text-muted-foreground md:hidden">
-                          {s.description}
-                        </div>
+                        {/* 窄屏才显示的描述：截断宽度跟着列走（见上面的 max-w-0） */}
+                        <div className="mt-0.5 truncate text-xs text-muted-foreground md:hidden">{s.description}</div>
                         {/* 元信息列在窄屏收起，改挂到名称下方，免得挤出横向滚动 */}
                         <div className="mt-1 lg:hidden">
                           <SkillMeta skill={s} className="text-xs" />
                         </div>
                       </TableCell>
-                      {/* 描述列吃掉所有富余宽度、也让得出去：truncate 是 nowrap，
-                          直接写在 td 上会让它恒占一个固定宽度、把窄窗口的表格顶出横向滚动条。
-                          max-w-0 + w-full 把「能缩到多窄」交还给表格，截断交给内层 div。 */}
-                      <TableCell className="hidden w-full max-w-0 text-muted-foreground md:table-cell">
+                      <TableCell className="hidden text-muted-foreground md:table-cell">
                         <div className="truncate">{s.description}</div>
                       </TableCell>
-                      {/* 描述列会把富余宽度吃光，这一列于是被挤到最窄——不许它把内容拆成竖排 */}
-                      <TableCell className="hidden whitespace-nowrap lg:table-cell">
+                      {/* 固定列宽下，超长的作者名要裁掉而不是溢出到邻列 */}
+                      <TableCell className="hidden overflow-hidden lg:table-cell">
                         <SkillMeta skill={s} />
                       </TableCell>
                       <TableCell>
@@ -264,7 +273,7 @@ function SubscriberGlyph() {
   return (
     <svg
       viewBox="0 0 16 16"
-      className="size-3.5"
+      className="size-3.5 translate-y-px"
       fill="none"
       stroke="currentColor"
       strokeWidth="1.5"
@@ -282,6 +291,7 @@ function SubscriberGlyph() {
  * 每行挂一个纯属噪音，扫描时反而看不见真正特殊的那几条。
  */
 function SkillTags({ skill }: { skill: SkillInfo }) {
+  // 与名称的基线对齐由外层容器的 items-baseline 负责，这里不做额外微调
   return (
     <>
       {skill.bundled && <Badge variant="warning">捆绑</Badge>}
