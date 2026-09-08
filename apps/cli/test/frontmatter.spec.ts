@@ -85,6 +85,39 @@ describe('parseSkillFrontmatter：其它写法', () => {
   });
 });
 
+describe('正文永远不会被吸进描述里', () => {
+  // frontmatter 只在开闭分隔符之间解析，块标量/续行再贪心也越不过闭合的 ---
+  it('块标量是最后一个键、正文紧随其后且带缩进段落', () => {
+    const md2 = [
+      '---',
+      'name: demo',
+      'description: >-',
+      '  第一行',
+      '  第二行',
+      '---',
+      '',
+      '# 正文标题',
+      '',
+      '    缩进 4 空格的代码块',
+      '    description: 正文里也写了个像 key 的行',
+    ].join('\n');
+    expect(parseSkillFrontmatter(md2).description).toBe('第一行 第二行');
+    expect(parseFrontmatter(md2).body.trim().split('\n')[0]).toBe('# 正文标题');
+  });
+
+  it('折叠块后面直接顶着正文（中间没有空行）', () => {
+    const md2 = '---\ndescription: >-\n  只有描述\n---\n正文第一行紧贴分隔符\n';
+    expect(parseSkillFrontmatter(md2).description).toBe('只有描述');
+    expect(parseFrontmatter(md2).body.trim()).toBe('正文第一行紧贴分隔符');
+  });
+
+  it('保留块 + 正文里还有 --- 水平线', () => {
+    const md2 = '---\ndescription: |\n  第一行\n  第二行\n---\n\n正文\n\n---\n\n水平线之后\n';
+    expect(parseSkillFrontmatter(md2).description).toBe('第一行\n第二行');
+    expect(parseFrontmatter(md2).body).toContain('水平线之后');
+  });
+});
+
 describe('isBlockScalarIndicator / toYamlScalar', () => {
   it('识别旧版 CLI 推上来的块标量指示符', () => {
     for (const v of ['>-', '>', '|', '|-', '|2+', ' >- ']) expect(isBlockScalarIndicator(v)).toBe(true);
