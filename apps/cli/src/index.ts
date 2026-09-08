@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { CLI_VERSION, LOG_TAIL_DEFAULT } from '@eat/shared';
+import { CLI_VERSION, LOG_TAIL_DEFAULT, SKILL_LIST_MAX_PAGE_SIZE } from '@eat/shared';
 import { ApiError, formatErrorDetails } from './client.js';
 import { login, logout, whoami } from './commands/auth.js';
 import { envList, envPull, envRequest, envRequests } from './commands/env.js';
@@ -70,7 +70,11 @@ skill
   .action(skillPush);
 skill
   .command('list')
-  .description('列出平台上可见的 skill 与订阅状态')
+  .description('列出平台上可见的 skill 与订阅状态（默认 100 条，够用时不必翻页）')
+  .option('--search <keyword>', '按关键词过滤（匹配 slug / 名称 / 触发描述）')
+  .option('--scope <scope>', '范围: all | subscribed | unsubscribed | mine（默认 all）')
+  .option('--kind <kind>', '类型: all | team | private | granted | bundled | experience（默认 all）')
+  .option('--limit <n>', `最多返回多少条（默认 100，最大 ${SKILL_LIST_MAX_PAGE_SIZE}）`)
   .option('--full', '不截断触发描述（默认按显示宽度截断，一行一条）')
   .action(skillList);
 skill

@@ -159,6 +159,11 @@ export const skills = pgTable('skill', {
     .default('team'),
   /** 是否允许对此 skill 发起求助（P1 求助系统入口） */
   allowHelp: boolean('allow_help').notNull().default(false),
+  /**
+   * 捆绑模式（决策 37）：管理员开启后，所有非管理员成员恒为已订阅、不可退订，
+   * eat sync 总会带上；管理员自己不受影响，仍按订阅记录算。要求 visibility='team'。
+   */
+  bundled: boolean('bundled').notNull().default(false),
   source: text('source', { enum: ['manual', 'experience'] })
     .notNull()
     .default('manual'),

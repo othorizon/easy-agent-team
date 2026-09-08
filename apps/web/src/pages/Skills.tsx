@@ -1,8 +1,8 @@
-import type { PushSkillRequest, SkillInfo } from '@eat/shared';
-import { parseSkillFrontmatter, slugifyName } from '@eat/shared';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus } from 'lucide-react';
-import { useState } from 'react';
+import type { PushSkillRequest, SkillInfo, SkillListResult } from '@eat/shared';
+import { SKILL_LIST_DEFAULT_PAGE_SIZE, parseSkillFrontmatter, slugifyName } from '@eat/shared';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Plus, Search } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -11,20 +11,84 @@ import { InlineCode } from '../components/code';
 import { Empty } from '../components/empty';
 import { Field, rules } from '../components/form';
 import { PageHeader } from '../components/page-header';
+import { Pagination } from '../components/pagination';
 import { Segmented } from '../components/segmented';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { TableSkeleton } from '../components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { useQueryParams } from '../lib/use-query-params';
+
+const SCOPE_OPTIONS = [
+  { value: 'all', label: '全部范围' },
+  { value: 'subscribed', label: '已订阅' },
+  { value: 'unsubscribed', label: '未订阅' },
+  { value: 'mine', label: '我创建的' },
+];
+
+const KIND_OPTIONS = [
+  { value: 'all', label: '全部类型' },
+  { value: 'team', label: '团队可见' },
+  { value: 'private', label: '私有' },
+  { value: 'granted', label: '授予可见' },
+  { value: 'bundled', label: '捆绑' },
+  { value: 'experience', label: '经验沉淀' },
+];
 
 export function SkillsPage() {
   const queryClient = useQueryClient();
   const [creating, setCreating] = useState(false);
+  const [params, setParams] = useQueryParams({
+    q: '',
+    scope: 'all',
+    kind: 'all',
+    page: '1',
+    pageSize: String(SKILL_LIST_DEFAULT_PAGE_SIZE),
+  });
+  const page = Math.max(1, Number(params.page) || 1);
+  const pageSize = Number(params.pageSize) || SKILL_LIST_DEFAULT_PAGE_SIZE;
 
-  const skills = useQuery({ queryKey: ['skills'], queryFn: () => api<SkillInfo[]>('GET', '/api/skills') });
+  // 搜索框本地即时回显、300ms 后才落到 URL 与请求，免得每敲一个字打一次接口
+  const [search, setSearch] = useState(params.q);
+  const pushedQuery = useRef(params.q);
+  useEffect(() => {
+    if (search === params.q) return;
+    const timer = setTimeout(() => {
+      pushedQuery.current = search;
+      setParams({ q: search, page: '1' });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search, params.q]);
+  useEffect(() => {
+    // URL 上的关键词不是自己推上去的（前进后退、点了带参数的链接）时，把输入框拉回来对齐
+    if (params.q !== pushedQuery.current) {
+      pushedQuery.current = params.q;
+      setSearch(params.q);
+    }
+  }, [params.q]);
+
+  const skills = useQuery({
+    queryKey: ['skills', params.q, params.scope, params.kind, page, pageSize],
+    queryFn: () =>
+      api<SkillListResult>(
+        'GET',
+        `/api/skills?${new URLSearchParams({
+          q: params.q,
+          scope: params.scope,
+          kind: params.kind,
+          page: String(page),
+          pageSize: String(pageSize),
+        })}`,
+      ),
+    // 翻页时保留上一页内容，避免整张表闪成骨架屏
+    placeholderData: keepPreviousData,
+  });
+  const items = skills.data?.items ?? [];
+  const filtered = params.q !== '' || params.scope !== 'all' || params.kind !== 'all';
 
   const toggleSubscribe = useMutation({
     mutationFn: (s: SkillInfo) => api(s.subscribed ? 'DELETE' : 'POST', `/api/skills/${s.slug}/subscribe`),
@@ -65,57 +129,126 @@ export function SkillsPage() {
         }
       />
       <Card>
-        <CardContent>
-          {skills.isLoading ? (
-            <TableSkeleton />
-          ) : (skills.data ?? []).length === 0 ? (
-            <Empty text="还没有 Skill" />
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Skill</TableHead>
-                  <TableHead className="hidden md:table-cell">触发描述</TableHead>
-                  <TableHead className="hidden w-24 lg:table-cell">作者</TableHead>
-                  <TableHead className="hidden w-16 sm:table-cell">版本</TableHead>
-                  <TableHead className="hidden w-20 sm:table-cell">可见性</TableHead>
-                  <TableHead className="w-20">订阅</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(skills.data ?? []).map((s) => (
-                  <TableRow key={s.id}>
-                    <TableCell>
-                      <Link to={`/skills/${s.slug}`} className="group inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                        <InlineCode className="text-primary group-hover:underline">{s.slug}</InlineCode>
-                        <span className="font-medium">{s.name}</span>
-                      </Link>
-                      <div className="mt-0.5 truncate text-xs text-muted-foreground md:hidden">{s.description}</div>
-                    </TableCell>
-                    <TableCell className="hidden max-w-md truncate text-muted-foreground md:table-cell">
-                      {s.description}
-                    </TableCell>
-                    <TableCell className="hidden text-muted-foreground lg:table-cell">{s.ownerName}</TableCell>
-                    <TableCell className="hidden tabular-nums text-muted-foreground sm:table-cell">
-                      v{s.currentVersion}
-                    </TableCell>
-                    <TableCell className="hidden sm:table-cell">
-                      {s.visibility === 'private' ? <Badge variant="outline">私有</Badge> : <Badge>团队</Badge>}
-                    </TableCell>
-                    <TableCell>
-                      <Button
-                        size="sm"
-                        variant={s.subscribed ? 'outline' : 'default'}
-                        loading={toggleSubscribe.isPending && toggleSubscribe.variables?.id === s.id}
-                        onClick={() => toggleSubscribe.mutate(s)}
-                      >
-                        {s.subscribed ? '退订' : '订阅'}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
+        <CardContent className="space-y-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="relative flex-1">
+              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                className="pl-9"
+                placeholder="搜索标识 / 名称 / 触发描述"
+                aria-label="搜索 Skill"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            <Select value={params.scope} onValueChange={(v) => setParams({ scope: v, page: '1' })}>
+              <SelectTrigger className="sm:w-[132px]" aria-label="按范围筛选">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {SCOPE_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
                 ))}
-              </TableBody>
-            </Table>
+              </SelectContent>
+            </Select>
+            <Select value={params.kind} onValueChange={(v) => setParams({ kind: v, page: '1' })}>
+              <SelectTrigger className="sm:w-[132px]" aria-label="按类型筛选">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {KIND_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {skills.isPending ? (
+            <TableSkeleton />
+          ) : items.length === 0 ? (
+            <Empty text={filtered ? '没有符合条件的 Skill' : '还没有 Skill'} />
+          ) : (
+            <>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Skill</TableHead>
+                    <TableHead className="hidden md:table-cell">触发描述</TableHead>
+                    <TableHead className="hidden w-24 lg:table-cell">作者</TableHead>
+                    <TableHead className="hidden w-16 sm:table-cell">版本</TableHead>
+                    <TableHead className="hidden w-24 sm:table-cell">类型</TableHead>
+                    <TableHead className="hidden w-20 sm:table-cell">订阅数</TableHead>
+                    <TableHead className="w-20">订阅</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {items.map((s) => (
+                    <TableRow key={s.id}>
+                      <TableCell>
+                        <Link to={`/skills/${s.slug}`} className="group inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                          <InlineCode className="text-primary group-hover:underline">{s.slug}</InlineCode>
+                          <span className="font-medium">{s.name}</span>
+                        </Link>
+                        {/* 窄屏才显示的描述：truncate 是 nowrap，不封顶会把整张表撑到要横向滚动 */}
+                        <div className="mt-0.5 max-w-[55vw] truncate text-xs text-muted-foreground md:hidden">
+                          {s.description}
+                        </div>
+                      </TableCell>
+                      <TableCell className="hidden max-w-md truncate text-muted-foreground md:table-cell">
+                        {s.description}
+                      </TableCell>
+                      <TableCell className="hidden text-muted-foreground lg:table-cell">{s.ownerName}</TableCell>
+                      <TableCell className="hidden tabular-nums text-muted-foreground sm:table-cell">
+                        v{s.currentVersion}
+                      </TableCell>
+                      <TableCell className="hidden sm:table-cell">
+                        <div className="flex flex-wrap gap-1">
+                          {s.bundled && <Badge variant="warning">捆绑</Badge>}
+                          {s.visibility === 'private' ? (
+                            <Badge variant="outline">私有</Badge>
+                          ) : s.visibility === 'granted' ? (
+                            <Badge variant="secondary">授予</Badge>
+                          ) : (
+                            !s.bundled && <Badge>团队</Badge>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="hidden tabular-nums text-muted-foreground sm:table-cell">
+                        {s.subscriberCount}
+                      </TableCell>
+                      <TableCell>
+                        {s.subscriptionLocked ? (
+                          // 捆绑：对成员恒为订阅，按钮留着但禁用，比直接藏起来更少让人困惑
+                          <Button size="sm" variant="outline" disabled title="管理员已设为捆绑，全员同步且不可退订">
+                            已捆绑
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant={s.subscribed ? 'outline' : 'default'}
+                            loading={toggleSubscribe.isPending && toggleSubscribe.variables?.id === s.id}
+                            onClick={() => toggleSubscribe.mutate(s)}
+                          >
+                            {s.subscribed ? '退订' : '订阅'}
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              <Pagination
+                total={skills.data?.total ?? 0}
+                page={page}
+                pageSize={pageSize}
+                onPageChange={(p) => setParams({ page: String(p) })}
+                onPageSizeChange={(size) => setParams({ pageSize: String(size), page: '1' })}
+              />
+            </>
           )}
         </CardContent>
       </Card>

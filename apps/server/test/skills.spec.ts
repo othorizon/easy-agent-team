@@ -17,6 +17,8 @@ import * as schema from '../src/db/schema';
 let app: NestFastifyApplication;
 let authorToken: string;
 let readerToken: string;
+let adminToken: string;
+let readerId: string;
 
 async function api(
   method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
@@ -41,6 +43,7 @@ beforeAll(async () => {
   await db.insert(schema.users).values([
     { name: '作者', email: 'author@test.dev', role: 'member', passwordHash: hash },
     { name: '读者', email: 'reader@test.dev', role: 'member', passwordHash: hash },
+    { name: '管理员', email: 'admin@test.dev', role: 'admin', passwordHash: hash },
   ]);
   await pool.end();
 
@@ -51,6 +54,10 @@ beforeAll(async () => {
 
   authorToken = (await api('POST', '/api/auth/login', { payload: { email: 'author@test.dev', password: 'password123' } })).body.token;
   readerToken = (await api('POST', '/api/auth/login', { payload: { email: 'reader@test.dev', password: 'password123' } })).body.token;
+  adminToken = (await api('POST', '/api/auth/login', { payload: { email: 'admin@test.dev', password: 'password123' } })).body.token;
+  readerId = (await api('GET', '/api/users', { token: adminToken })).body.find(
+    (u: { email: string }) => u.email === 'reader@test.dev',
+  ).id;
 });
 
 afterAll(async () => {
@@ -145,7 +152,7 @@ describe('推送防护', () => {
 describe('可见性与订阅', () => {
   it('团队可见：读者能看到并订阅', async () => {
     const list = await api('GET', '/api/skills', { token: readerToken });
-    expect(list.body.map((s: { slug: string }) => s.slug)).toContain('weekly-report');
+    expect(list.body.items.map((s: { slug: string }) => s.slug)).toContain('weekly-report');
     const sub = await api('POST', '/api/skills/weekly-report/subscribe', { token: readerToken });
     expect(sub.status).toBe(201);
   });
@@ -163,7 +170,7 @@ describe('可见性与订阅', () => {
   it('改为私有后：读者不可见，sync-bundle 中消失', async () => {
     await api('PATCH', '/api/skills/weekly-report', { token: authorToken, payload: { visibility: 'private' } });
     const list = await api('GET', '/api/skills', { token: readerToken });
-    expect(list.body.map((s: { slug: string }) => s.slug)).not.toContain('weekly-report');
+    expect(list.body.items.map((s: { slug: string }) => s.slug)).not.toContain('weekly-report');
     const detail = await api('GET', '/api/skills/weekly-report', { token: readerToken });
     expect(detail.status).toBe(404);
     const bundle = await api('GET', '/api/skills/sync-bundle', { token: readerToken });
@@ -299,5 +306,239 @@ describe('存量数据订正（启动时随迁移跑）', () => {
     // 幂等：再跑一次没有可订正的行
     expect(await repairSkillDescriptions(db)).toEqual([]);
     await pool.end();
+  });
+});
+
+describe('清单筛选与分页（决策 37）', () => {
+  const slugs = ['flt-alpha', 'flt-beta', 'flt-gamma'];
+
+  beforeAll(async () => {
+    for (const slug of slugs) {
+      await api('POST', '/api/skills/push', {
+        token: authorToken,
+        payload: { slug, name: `筛选测试 ${slug}`, description: `关键词 zebra ${slug}`, content: `# ${slug}` },
+      });
+    }
+    // 读者自己的一条私有 skill，用来验证 scope=mine 与 kind=private
+    await api('POST', '/api/skills/push', {
+      token: readerToken,
+      payload: { slug: 'flt-mine', name: '读者私有', description: '关键词 zebra 私有', content: '# mine', visibility: 'private' },
+    });
+    await api('POST', '/api/skills/flt-alpha/subscribe', { token: readerToken });
+  });
+
+  it('返回分页信封，pageSize 生效且 total 是筛选后的总数', async () => {
+    const r = await api('GET', '/api/skills?q=zebra&pageSize=2', { token: readerToken });
+    expect(r.status).toBe(200);
+    expect(r.body.items).toHaveLength(2);
+    expect(r.body.total).toBe(4);
+    expect(r.body.page).toBe(1);
+    expect(r.body.pageSize).toBe(2);
+  });
+
+  it('翻页取到的是不同条目，且各页并集等于全量', async () => {
+    const p1 = await api('GET', '/api/skills?q=zebra&pageSize=2&page=1', { token: readerToken });
+    const p2 = await api('GET', '/api/skills?q=zebra&pageSize=2&page=2', { token: readerToken });
+    const all = [...p1.body.items, ...p2.body.items].map((s: { slug: string }) => s.slug);
+    expect(new Set(all).size).toBe(4);
+    expect(all).toEqual(expect.arrayContaining([...slugs, 'flt-mine']));
+    // 越界页返回空列表而不是报错，total 不变（前端跳页时不必先校验上界）
+    const p9 = await api('GET', '/api/skills?q=zebra&pageSize=2&page=9', { token: readerToken });
+    expect(p9.body.items).toHaveLength(0);
+    expect(p9.body.total).toBe(4);
+  });
+
+  it('关键词匹配 slug / 名称 / 触发描述，大小写不敏感', async () => {
+    const bySlug = await api('GET', '/api/skills?q=FLT-BETA', { token: readerToken });
+    expect(bySlug.body.items.map((s: { slug: string }) => s.slug)).toEqual(['flt-beta']);
+    const byName = await api('GET', '/api/skills?q=读者私有', { token: readerToken });
+    expect(byName.body.items.map((s: { slug: string }) => s.slug)).toEqual(['flt-mine']);
+  });
+
+  it('scope 按订阅关系与归属过滤', async () => {
+    const mine = await api('GET', '/api/skills?scope=mine', { token: readerToken });
+    expect(mine.body.items.map((s: { slug: string }) => s.slug)).toEqual(['flt-mine']);
+    const subscribed = await api('GET', '/api/skills?scope=subscribed&q=zebra', { token: readerToken });
+    expect(subscribed.body.items.map((s: { slug: string }) => s.slug)).toEqual(['flt-alpha']);
+    const unsubscribed = await api('GET', '/api/skills?scope=unsubscribed&q=zebra', { token: readerToken });
+    expect(unsubscribed.body.items.map((s: { slug: string }) => s.slug)).not.toContain('flt-alpha');
+  });
+
+  it('kind 按可见性 / 来源筛选', async () => {
+    const priv = await api('GET', '/api/skills?kind=private', { token: readerToken });
+    expect(priv.body.items.map((s: { slug: string }) => s.slug)).toEqual(['flt-mine']);
+    const team = await api('GET', '/api/skills?kind=team&q=zebra', { token: readerToken });
+    expect(team.body.items.map((s: { slug: string }) => s.slug)).not.toContain('flt-mine');
+  });
+
+  it('pageSize 超上限与非法 scope 取值被拒', async () => {
+    expect((await api('GET', '/api/skills?pageSize=1001', { token: readerToken })).status).toBe(400);
+    expect((await api('GET', '/api/skills?scope=nope', { token: readerToken })).status).toBe(400);
+    // 上限本身可用：CLI 用它一次拉全
+    expect((await api('GET', '/api/skills?pageSize=1000', { token: readerToken })).status).toBe(200);
+  });
+});
+
+describe('捆绑模式（决策 37）', () => {
+  const slug = 'bundle-kit';
+
+  beforeAll(async () => {
+    await api('POST', '/api/skills/push', {
+      token: authorToken,
+      payload: { slug, name: '全员必装', description: '捆绑测试', content: '# bundle' },
+    });
+  });
+
+  it('仅管理员可设捆绑：作者与普通成员都被拒', async () => {
+    const byAuthor = await api('PATCH', `/api/skills/${slug}`, { token: authorToken, payload: { bundled: true } });
+    expect(byAuthor.status).toBe(403);
+    const byReader = await api('PATCH', `/api/skills/${slug}`, { token: readerToken, payload: { bundled: true } });
+    expect(byReader.status).toBe(403);
+  });
+
+  it('捆绑要求团队可见：私有 skill 不能捆绑', async () => {
+    await api('PATCH', `/api/skills/${slug}`, { token: authorToken, payload: { visibility: 'private' } });
+    const r = await api('PATCH', `/api/skills/${slug}`, { token: adminToken, payload: { bundled: true } });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe('VALIDATION_FAILED');
+    await api('PATCH', `/api/skills/${slug}`, { token: authorToken, payload: { visibility: 'team' } });
+  });
+
+  it('管理员开启捆绑后：成员恒为已订阅、订阅被锁定，sync-bundle 带上且 relation=bundled', async () => {
+    const r = await api('PATCH', `/api/skills/${slug}`, { token: adminToken, payload: { bundled: true } });
+    expect(r.status).toBe(200);
+    expect(r.body.bundled).toBe(true);
+
+    const list = await api('GET', `/api/skills?q=${slug}`, { token: readerToken });
+    const item = list.body.items[0];
+    expect(item.bundled).toBe(true);
+    expect(item.subscribed).toBe(true);
+    expect(item.subscriptionLocked).toBe(true);
+
+    const bundle = await api('GET', '/api/skills/sync-bundle', { token: readerToken });
+    expect(bundle.body.find((s: { slug: string }) => s.slug === slug).relation).toBe('bundled');
+  });
+
+  it('成员退订被拒（SKILL_BUNDLED），退不掉也不影响 sync', async () => {
+    const r = await api('DELETE', `/api/skills/${slug}/subscribe`, { token: readerToken });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe('SKILL_BUNDLED');
+    const bundle = await api('GET', '/api/skills/sync-bundle', { token: readerToken });
+    expect(bundle.body.map((s: { slug: string }) => s.slug)).toContain(slug);
+  });
+
+  it('捆绑期间不能改为私有（否则会「被强制订阅却看不到」）', async () => {
+    const r = await api('PATCH', `/api/skills/${slug}`, { token: adminToken, payload: { visibility: 'private' } });
+    expect(r.status).toBe(400);
+  });
+
+  it('管理员自己不受捆绑影响：默认未订阅、可自由订阅与退订', async () => {
+    const list = await api('GET', `/api/skills?q=${slug}`, { token: adminToken });
+    expect(list.body.items[0].subscribed).toBe(false);
+    expect(list.body.items[0].subscriptionLocked).toBe(false);
+    let bundle = await api('GET', '/api/skills/sync-bundle', { token: adminToken });
+    expect(bundle.body.map((s: { slug: string }) => s.slug)).not.toContain(slug);
+
+    await api('POST', `/api/skills/${slug}/subscribe`, { token: adminToken });
+    bundle = await api('GET', '/api/skills/sync-bundle', { token: adminToken });
+    expect(bundle.body.map((s: { slug: string }) => s.slug)).toContain(slug);
+
+    expect((await api('DELETE', `/api/skills/${slug}/subscribe`, { token: adminToken })).status).toBe(200);
+    bundle = await api('GET', '/api/skills/sync-bundle', { token: adminToken });
+    expect(bundle.body.map((s: { slug: string }) => s.slug)).not.toContain(slug);
+  });
+
+  it('kind=bundled 能筛出捆绑 skill', async () => {
+    const r = await api('GET', '/api/skills?kind=bundled', { token: readerToken });
+    expect(r.body.items.map((s: { slug: string }) => s.slug)).toEqual([slug]);
+  });
+
+  it('取消捆绑后成员回到未订阅，sync-bundle 里消失', async () => {
+    const r = await api('PATCH', `/api/skills/${slug}`, { token: adminToken, payload: { bundled: false } });
+    expect(r.body.bundled).toBe(false);
+    const list = await api('GET', `/api/skills?q=${slug}`, { token: readerToken });
+    expect(list.body.items[0].subscribed).toBe(false);
+    const bundle = await api('GET', '/api/skills/sync-bundle', { token: readerToken });
+    expect(bundle.body.map((s: { slug: string }) => s.slug)).not.toContain(slug);
+  });
+});
+
+describe('订阅人数与订阅者管理（决策 37）', () => {
+  const slug = 'subs-kit';
+
+  beforeAll(async () => {
+    await api('POST', '/api/skills/push', {
+      token: authorToken,
+      payload: { slug, name: '订阅者测试', description: '统计与代订阅', content: '# subs' },
+    });
+  });
+
+  it('订阅人数按有效同步人数统计', async () => {
+    const before = await api('GET', `/api/skills?q=${slug}`, { token: authorToken });
+    expect(before.body.items[0].subscriberCount).toBe(0);
+    await api('POST', `/api/skills/${slug}/subscribe`, { token: readerToken });
+    const after = await api('GET', `/api/skills?q=${slug}`, { token: authorToken });
+    expect(after.body.items[0].subscriberCount).toBe(1);
+    // 详情页与清单口径一致
+    const detail = await api('GET', `/api/skills/${slug}`, { token: authorToken });
+    expect(detail.body.subscriberCount).toBe(1);
+  });
+
+  it('订阅者明细仅管理员可读，作者也不行', async () => {
+    expect((await api('GET', `/api/skills/${slug}/subscribers`, { token: authorToken })).status).toBe(403);
+    const r = await api('GET', `/api/skills/${slug}/subscribers`, { token: adminToken });
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual([
+      expect.objectContaining({ email: 'reader@test.dev', source: 'manual', removable: true }),
+    ]);
+  });
+
+  it('管理员可代他人订阅与取消订阅，对方 sync-bundle 随之变化', async () => {
+    const removed = await api('DELETE', `/api/skills/${slug}/subscribers/${readerId}`, { token: adminToken });
+    expect(removed.status).toBe(200);
+    let bundle = await api('GET', '/api/skills/sync-bundle', { token: readerToken });
+    expect(bundle.body.map((s: { slug: string }) => s.slug)).not.toContain(slug);
+
+    const added = await api('POST', `/api/skills/${slug}/subscribers`, { token: adminToken, payload: { userId: readerId } });
+    expect(added.status).toBe(201);
+    bundle = await api('GET', '/api/skills/sync-bundle', { token: readerToken });
+    expect(bundle.body.map((s: { slug: string }) => s.slug)).toContain(slug);
+  });
+
+  it('成员不能替别人订阅', async () => {
+    const r = await api('POST', `/api/skills/${slug}/subscribers`, { token: authorToken, payload: { userId: readerId } });
+    expect(r.status).toBe(403);
+  });
+
+  it('私有 skill 不能代订阅（对方看不到）', async () => {
+    await api('PATCH', `/api/skills/${slug}`, { token: authorToken, payload: { visibility: 'private' } });
+    const r = await api('POST', `/api/skills/${slug}/subscribers`, { token: adminToken, payload: { userId: readerId } });
+    expect(r.status).toBe(400);
+    await api('PATCH', `/api/skills/${slug}`, { token: authorToken, payload: { visibility: 'team' } });
+  });
+
+  it('捆绑 skill：人数含全体成员，且不能单独增减', async () => {
+    await api('PATCH', `/api/skills/${slug}`, { token: adminToken, payload: { bundled: true } });
+    const list = await api('GET', `/api/skills?q=${slug}`, { token: adminToken });
+    // 作者与读者两名成员（管理员自己没订阅，不计入）
+    expect(list.body.items[0].subscriberCount).toBe(2);
+    const subs = await api('GET', `/api/skills/${slug}/subscribers`, { token: adminToken });
+    expect(subs.body.every((r: { removable: boolean }) => !r.removable)).toBe(true);
+    expect(subs.body.find((r: { email: string }) => r.email === 'author@test.dev').source).toBe('bundled');
+
+    const add = await api('POST', `/api/skills/${slug}/subscribers`, { token: adminToken, payload: { userId: readerId } });
+    expect(add.body.error).toBe('SKILL_BUNDLED');
+    const remove = await api('DELETE', `/api/skills/${slug}/subscribers/${readerId}`, { token: adminToken });
+    expect(remove.body.error).toBe('SKILL_BUNDLED');
+    await api('PATCH', `/api/skills/${slug}`, { token: adminToken, payload: { bundled: false } });
+  });
+
+  it('禁用的用户不计入人数，也不能为其订阅', async () => {
+    await api('PATCH', `/api/users/${readerId}`, { token: adminToken, payload: { status: 'disabled' } });
+    const list = await api('GET', `/api/skills?q=${slug}`, { token: adminToken });
+    expect(list.body.items[0].subscriberCount).toBe(0);
+    const r = await api('POST', `/api/skills/${slug}/subscribers`, { token: adminToken, payload: { userId: readerId } });
+    expect(r.status).toBe(400);
+    await api('PATCH', `/api/users/${readerId}`, { token: adminToken, payload: { status: 'active' } });
   });
 });

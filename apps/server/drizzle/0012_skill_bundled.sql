@@ -1,0 +1,1 @@
+ALTER TABLE "skill" ADD COLUMN "bundled" boolean DEFAULT false NOT NULL;

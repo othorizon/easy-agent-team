@@ -1,12 +1,13 @@
-import type { SkillDetail, SkillVersionInfo, UpdateSkillRequest } from '@eat/shared';
+import type { SkillDetail, SkillSubscriber, SkillVersionInfo, UpdateSkillRequest } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Plus, X } from 'lucide-react';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
 import { CodeBlock, InlineCode } from '../components/code';
+import { Combobox } from '../components/combobox';
 import { Confirm } from '../components/confirm';
 import { Empty } from '../components/empty';
 import { Field } from '../components/form';
@@ -38,11 +39,13 @@ export function SkillDetailPage() {
     queryFn: () => api<SkillVersionInfo[]>('GET', `/api/skills/${slug}/versions`),
   });
 
-  const canManage = skill.data && me && (skill.data.ownerId === me.id || me.role === 'admin');
+  const isAdmin = me?.role === 'admin';
+  const canManage = skill.data && me && (skill.data.ownerId === me.id || isAdmin);
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['skill', slug] });
     void queryClient.invalidateQueries({ queryKey: ['skills'] });
+    void queryClient.invalidateQueries({ queryKey: ['skill-subscribers', slug] });
   };
 
   const update = useMutation({
@@ -90,19 +93,32 @@ export function SkillDetailPage() {
               {s.name}
             </h1>
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              {s.visibility === 'private' ? <Badge variant="outline">私有</Badge> : <Badge>团队可见</Badge>}
+              {s.visibility === 'private' ? (
+                <Badge variant="outline">私有</Badge>
+              ) : s.visibility === 'granted' ? (
+                <Badge variant="secondary">授予可见</Badge>
+              ) : (
+                <Badge>团队可见</Badge>
+              )}
+              {s.bundled && <Badge variant="warning">捆绑 · 全员必装</Badge>}
               {s.allowHelp && <Badge variant="warning">允许求助</Badge>}
               {s.source === 'experience' && <Badge variant="secondary">经验沉淀</Badge>}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant={s.subscribed ? 'outline' : 'default'}
-              loading={toggleSubscribe.isPending}
-              onClick={() => toggleSubscribe.mutate()}
-            >
-              {s.subscribed ? '退订' : '订阅'}
-            </Button>
+            {s.subscriptionLocked ? (
+              <Button variant="outline" disabled title="管理员已设为捆绑，全员同步且不可退订">
+                已捆绑
+              </Button>
+            ) : (
+              <Button
+                variant={s.subscribed ? 'outline' : 'default'}
+                loading={toggleSubscribe.isPending}
+                onClick={() => toggleSubscribe.mutate()}
+              >
+                {s.subscribed ? '退订' : '订阅'}
+              </Button>
+            )}
             {canManage && (
               <Button variant="outline" onClick={() => setEditing(true)}>
                 编辑元信息
@@ -135,6 +151,12 @@ export function SkillDetailPage() {
               <dt className="w-20 shrink-0 text-muted-foreground">当前版本</dt>
               <dd className="tabular-nums">v{s.currentVersion}</dd>
             </div>
+            <div className="flex gap-3">
+              <dt className="w-20 shrink-0 text-muted-foreground">订阅人数</dt>
+              <dd className="tabular-nums">
+                {s.subscriberCount} 人{s.bundled && <span className="ml-1 text-muted-foreground">（捆绑，全员）</span>}
+              </dd>
+            </div>
             <div className="flex gap-3 sm:col-span-2">
               <dt className="w-20 shrink-0 text-muted-foreground">触发描述</dt>
               {/* 描述可以是 SKILL.md 里 `|` 保留块的多行文本（决策 36），按原样换行显示，别挤成一坨 */}
@@ -158,6 +180,8 @@ export function SkillDetailPage() {
           <CodeBlock>{s.content}</CodeBlock>
         </CardContent>
       </Card>
+
+      {isAdmin && <SubscribersCard slug={slug} skill={s} />}
 
       <Card>
         <CardContent>
@@ -196,6 +220,7 @@ export function SkillDetailPage() {
       {editing && (
         <EditSkillDialog
           skill={s}
+          isAdmin={!!isAdmin}
           pending={update.isPending}
           onClose={() => setEditing(false)}
           onSubmit={(v) => update.mutate(v)}
@@ -210,27 +235,32 @@ interface EditFormValues {
   description: string;
   private: boolean;
   allowHelp: boolean;
+  bundled: boolean;
 }
 
 function EditSkillDialog({
   skill,
+  isAdmin,
   pending,
   onClose,
   onSubmit,
 }: {
   skill: SkillDetail;
+  isAdmin: boolean;
   pending: boolean;
   onClose: () => void;
   onSubmit: (v: UpdateSkillRequest) => void;
 }) {
-  const { register, handleSubmit, control, formState: { errors } } = useForm<EditFormValues>({
+  const { register, handleSubmit, control, watch, formState: { errors } } = useForm<EditFormValues>({
     defaultValues: {
       name: skill.name,
       description: skill.description,
       private: skill.visibility === 'private',
       allowHelp: skill.allowHelp,
+      bundled: skill.bundled,
     },
   });
+  const isPrivate = watch('private');
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
@@ -245,6 +275,7 @@ function EditSkillDialog({
               description: v.description,
               visibility: v.private ? 'private' : 'team',
               allowHelp: v.allowHelp,
+              ...(isAdmin ? { bundled: v.bundled && !v.private } : {}),
             }),
           )}
         >
@@ -277,10 +308,205 @@ function EditSkillDialog({
               render={({ field }) => <Switch checked={field.value} onCheckedChange={field.onChange} />}
             />
           </Field>
+          {/* 捆绑是替全员做决定，只有管理员能改；私有 skill 不能捆绑（会变成「被强制订阅却看不到」） */}
+          {isAdmin && (
+            <Field
+              label="捆绑模式"
+              hint={
+                isPrivate
+                  ? '私有 Skill 不能捆绑：请先改为团队可见'
+                  : '开启后所有成员恒为已订阅、不可退订，eat sync 总会同步；管理员自己不受影响'
+              }
+            >
+              <Controller
+                control={control}
+                name="bundled"
+                render={({ field }) => (
+                  <Switch checked={field.value && !isPrivate} disabled={isPrivate} onCheckedChange={field.onChange} />
+                )}
+              />
+            </Field>
+          )}
           <Button type="submit" loading={pending} className="w-full">
             保存
           </Button>
         </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const SOURCE_LABEL: Record<SkillSubscriber['source'], string> = {
+  manual: '手动订阅',
+  template: '角色模板',
+  experience: '经验沉淀',
+  bundled: '捆绑',
+};
+
+/**
+ * 订阅者明细与代订阅（仅管理员）。
+ * 这是低频管理操作，所以整块放在详情页下方，「添加订阅者」收在卡片标题右侧而不是页面主操作区。
+ */
+function SubscribersCard({ slug, skill }: { slug: string; skill: SkillDetail }) {
+  const queryClient = useQueryClient();
+  const [adding, setAdding] = useState(false);
+
+  const subscribers = useQuery({
+    queryKey: ['skill-subscribers', slug],
+    queryFn: () => api<SkillSubscriber[]>('GET', `/api/skills/${slug}/subscribers`),
+  });
+
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ['skill-subscribers', slug] });
+    void queryClient.invalidateQueries({ queryKey: ['skill', slug] });
+    void queryClient.invalidateQueries({ queryKey: ['skills'] });
+  };
+
+  const remove = useMutation({
+    mutationFn: (userId: string) => api('DELETE', `/api/skills/${slug}/subscribers/${userId}`),
+    onSuccess: () => {
+      toast.success('已取消该用户的订阅');
+      invalidate();
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '操作失败'),
+  });
+
+  const add = useMutation({
+    mutationFn: (userId: string) => api('POST', `/api/skills/${slug}/subscribers`, { userId }),
+    onSuccess: () => {
+      toast.success('已为该用户订阅，对方下次 eat sync 时落地');
+      setAdding(false);
+      invalidate();
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '操作失败'),
+  });
+
+  const rows = subscribers.data ?? [];
+  return (
+    <Card>
+      <CardContent>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold">订阅者（{skill.subscriberCount}）</h2>
+          {skill.bundled ? (
+            <span className="text-xs text-muted-foreground">捆绑 Skill：全体成员恒为订阅，取消捆绑后才能单独增减</span>
+          ) : (
+            <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
+              <Plus />
+              添加订阅者
+            </Button>
+          )}
+        </div>
+        {subscribers.isPending ? (
+          <TableSkeleton rows={2} />
+        ) : rows.length === 0 ? (
+          <Empty text="还没有人订阅" className="py-6" />
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>成员</TableHead>
+                <TableHead className="hidden w-24 sm:table-cell">来源</TableHead>
+                <TableHead className="hidden w-40 md:table-cell">订阅时间</TableHead>
+                <TableHead className="w-16" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r) => (
+                <TableRow key={r.userId}>
+                  <TableCell>
+                    <span className="font-medium">{r.name}</span>
+                    {r.role === 'admin' && (
+                      <Badge variant="outline" className="ml-2">
+                        管理员
+                      </Badge>
+                    )}
+                    <div className="truncate text-xs text-muted-foreground">{r.email}</div>
+                    <div className="text-xs text-muted-foreground sm:hidden">{SOURCE_LABEL[r.source]}</div>
+                  </TableCell>
+                  <TableCell className="hidden sm:table-cell">
+                    <Badge variant={r.source === 'bundled' ? 'warning' : 'secondary'}>{SOURCE_LABEL[r.source]}</Badge>
+                  </TableCell>
+                  <TableCell className="hidden text-muted-foreground md:table-cell">
+                    {r.subscribedAt ? formatDateTime(r.subscribedAt) : '—'}
+                  </TableCell>
+                  <TableCell>
+                    {r.removable && (
+                      <Confirm
+                        title={`取消 ${r.name} 的订阅？`}
+                        description="对方下次 eat sync 时会从本地移除这个 skill。"
+                        confirmText="取消订阅"
+                        onConfirm={() => remove.mutate(r.userId)}
+                      >
+                        <Button variant="ghost" size="icon-sm" aria-label={`取消 ${r.name} 的订阅`}>
+                          <X />
+                        </Button>
+                      </Confirm>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+      {adding && (
+        <AddSubscriberDialog
+          existing={rows.map((r) => r.userId)}
+          pending={add.isPending}
+          onClose={() => setAdding(false)}
+          onSubmit={(userId) => add.mutate(userId)}
+        />
+      )}
+    </Card>
+  );
+}
+
+interface UserRow {
+  id: string;
+  name: string;
+  email: string;
+  role: 'admin' | 'member';
+  status: 'active' | 'disabled';
+}
+
+function AddSubscriberDialog({
+  existing,
+  pending,
+  onClose,
+  onSubmit,
+}: {
+  existing: string[];
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: (userId: string) => void;
+}) {
+  const [userId, setUserId] = useState<string | null>(null);
+  const users = useQuery({ queryKey: ['users'], queryFn: () => api<UserRow[]>('GET', '/api/users') });
+  // 已订阅的与已禁用的不再列出——选了也只会被服务端拒掉
+  const options = (users.data ?? [])
+    .filter((u) => u.status === 'active' && !existing.includes(u.id))
+    .map((u) => ({ value: u.id, label: u.name, hint: u.email }));
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>添加订阅者</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-4">
+          <Field label="成员" hint="订阅后对方下次 eat sync 就会落地这个 skill">
+            <Combobox
+              groups={[{ options }]}
+              value={userId}
+              onChange={setUserId}
+              placeholder={options.length === 0 ? '没有可添加的成员' : '选择成员…'}
+              searchPlaceholder="搜索姓名 / 邮箱…"
+            />
+          </Field>
+          <Button disabled={!userId} loading={pending} onClick={() => userId && onSubmit(userId)} className="w-full">
+            添加
+          </Button>
+        </div>
       </DialogContent>
     </Dialog>
   );

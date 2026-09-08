@@ -512,7 +512,8 @@ description: 设计稿 token 到 Tailwind 变量的映射表（草稿）。
       ],
     },
   ];
-  const allSkills = await api('GET', '/api/skills', { token: admin });
+  // 清单是分页的（决策 37）：模板要按 slug 找 id，一次取满
+  const allSkills = (await api('GET', '/api/skills?pageSize=1000', { token: admin })).items;
   const allMcps = await api('GET', '/api/mcp-configs', { token: admin });
   const idOf = (type, slug) =>
     type === 'skill'

@@ -1,4 +1,12 @@
-import type { EnvironmentInfo, McpConfigInfo, SetTemplateItemsRequest, SkillInfo, TemplateInfo } from '@eat/shared';
+import type {
+  EnvironmentInfo,
+  McpConfigInfo,
+  SetTemplateItemsRequest,
+  SkillInfo,
+  SkillListResult,
+  TemplateInfo,
+} from '@eat/shared';
+import { SKILL_LIST_MAX_PAGE_SIZE } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Plus } from 'lucide-react';
 import { useState } from 'react';
@@ -28,7 +36,12 @@ export function TemplatesPage() {
   const [editingItems, setEditingItems] = useState<TemplateInfo | null>(null);
 
   const templates = useQuery({ queryKey: ['templates'], queryFn: () => api<TemplateInfo[]>('GET', '/api/templates') });
-  const skills = useQuery({ queryKey: ['skills'], queryFn: () => api<SkillInfo[]>('GET', '/api/skills'), enabled: isAdmin });
+  // 模板的条目选择器要看到全部 skill，一次取满（服务端 pageSize 上限 1000）
+  const skills = useQuery({
+    queryKey: ['skills-all'],
+    queryFn: () => api<SkillListResult>('GET', `/api/skills?pageSize=${SKILL_LIST_MAX_PAGE_SIZE}`),
+    enabled: isAdmin,
+  });
   const mcpConfigs = useQuery({ queryKey: ['mcp-configs'], queryFn: () => api<McpConfigInfo[]>('GET', '/api/mcp-configs'), enabled: isAdmin });
   const envs = useQuery({ queryKey: ['envs'], queryFn: () => api<EnvironmentInfo[]>('GET', '/api/envs'), enabled: isAdmin });
 
@@ -166,7 +179,7 @@ export function TemplatesPage() {
       {editingItems && (
         <TemplateItemsDialog
           template={editingItems}
-          skills={skills.data ?? []}
+          skills={skills.data?.items ?? []}
           mcpConfigs={mcpConfigs.data ?? []}
           envs={envs.data ?? []}
           pending={setItems.isPending}

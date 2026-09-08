@@ -2,12 +2,16 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
   PLATFORM_GUIDE_SLUG,
+  SKILL_LIST_MAX_PAGE_SIZE,
   parseSkillFrontmatter,
+  skillKindSchema,
+  skillScopeSchema,
   slugifyName,
   type PushSkillRequest,
   type SkillDetail,
   type SkillFile,
   type SkillInfo,
+  type SkillListResult,
   type SyncSkill,
 } from '@eat/shared';
 import { Api } from '../client.js';
@@ -130,21 +134,89 @@ export async function skillPush(
   }
 }
 
-export async function skillList(opts: { full?: boolean } = {}): Promise<void> {
+/** eat skill list 的默认条数：一次请求拿完，不做翻页（AI 拿到半页会当成全部） */
+export const SKILL_LIST_CLI_DEFAULT_LIMIT = 100;
+
+export interface SkillListOpts {
+  full?: boolean;
+  search?: string;
+  scope?: string;
+  kind?: string;
+  limit?: string;
+}
+
+/** --limit：默认 100，上限 1000（服务端 pageSize 的上限），非法值直接报错而不是悄悄取默认 */
+export function parseLimit(raw: string | undefined): number {
+  if (raw === undefined) return SKILL_LIST_CLI_DEFAULT_LIMIT;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > SKILL_LIST_MAX_PAGE_SIZE) {
+    throw new Error(`--limit 需为 1..${SKILL_LIST_MAX_PAGE_SIZE} 的整数`);
+  }
+  return n;
+}
+
+/** 把 CLI 参数拼成 GET /api/skills 的查询串；scope / kind 取值非法时报错并列出可选值 */
+export function buildListQuery(opts: SkillListOpts): string {
+  const params = new URLSearchParams();
+  if (opts.search) params.set('q', opts.search);
+  if (opts.scope) {
+    const parsed = skillScopeSchema.safeParse(opts.scope);
+    if (!parsed.success) throw new Error(`--scope 取值需为: ${skillScopeSchema.options.join(' | ')}`);
+    params.set('scope', parsed.data);
+  }
+  if (opts.kind) {
+    const parsed = skillKindSchema.safeParse(opts.kind);
+    if (!parsed.success) throw new Error(`--kind 取值需为: ${skillKindSchema.options.join(' | ')}`);
+    params.set('kind', parsed.data);
+  }
+  params.set('pageSize', String(parseLimit(opts.limit)));
+  return params.toString();
+}
+
+/** 清单里每条 skill 的行首标记：捆绑 ◆ / 已订阅 ● / 未订阅 ○ */
+export function listMark(s: SkillInfo): string {
+  if (s.bundled) return '◆';
+  return s.subscribed ? '●' : '○';
+}
+
+export async function skillList(opts: SkillListOpts = {}): Promise<void> {
+  let query: string;
+  try {
+    query = buildListQuery(opts);
+  } catch (e) {
+    console.error(`错误: ${(e as Error).message}`);
+    process.exitCode = 1;
+    return;
+  }
   const api = Api.fromSaved();
-  const rows = await api.request<SkillInfo[]>('GET', '/api/skills');
+  const res = await api.request<SkillListResult>('GET', `/api/skills?${query}`);
+  const rows = res.items;
   if (rows.length === 0) {
-    console.log('平台上还没有可见的 skill。用 eat skill push <目录> 上传第一个。');
+    const filtered = opts.search || opts.scope || opts.kind;
+    console.log(
+      filtered
+        ? '没有符合筛选条件的 skill（放宽 --search / --scope / --kind 再试）。'
+        : '平台上还没有可见的 skill。用 eat skill push <目录> 上传第一个。',
+    );
     return;
   }
   for (const s of rows) {
-    const mark = s.subscribed ? '●' : '○';
-    const vis = s.visibility === 'private' ? ' [私有]' : '';
+    const tags = [s.bundled ? '捆绑' : '', s.visibility === 'private' ? '私有' : ''].filter(Boolean);
+    const tag = tags.length > 0 ? ` [${tags.join(' ')}]` : '';
     // --full 时只折成单行、不截断（清单仍是一行一条，长描述自己换行）
     const desc = oneLine(s.description, opts.full ? Number.POSITIVE_INFINITY : undefined);
-    console.log(`${mark} ${s.slug} v${s.currentVersion}${vis}  ${s.name} — ${desc}（作者: ${s.ownerName}）`);
+    console.log(
+      `${listMark(s)} ${s.slug} v${s.currentVersion}${tag}  ${s.name} — ${desc}（作者: ${s.ownerName}，订阅 ${s.subscriberCount} 人）`,
+    );
   }
-  console.log('\n● 已订阅（eat sync 会落地到本地）  ○ 未订阅（eat skill subscribe <slug> 订阅）');
+  console.log(
+    '\n● 已订阅（eat sync 会落地到本地）  ○ 未订阅（eat skill subscribe <slug> 订阅）  ◆ 捆绑（管理员设定，人人同步、不可退订）',
+  );
+  if (res.total > rows.length) {
+    console.log(
+      `共 ${res.total} 条，已显示前 ${rows.length} 条：用 --search <关键词> 过滤，或 --limit <n> 放大（最多 ${SKILL_LIST_MAX_PAGE_SIZE}）。`,
+    );
+  }
   if (!opts.full && rows.some((s) => oneLine(s.description).endsWith('…'))) {
     console.log('部分触发描述过长已截断，看完整内容: eat skill list --full 或 eat skill export <slug>');
   }

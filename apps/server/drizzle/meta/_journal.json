@@ -85,6 +85,13 @@
       "when": 1788421097556,
       "tag": "0011_app_domain",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788862519621,
+      "tag": "0012_skill_bundled",
+      "breakpoints": true
     }
   ]
 }

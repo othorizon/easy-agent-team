@@ -2,7 +2,16 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { oneLine, resolveExportDir, writeSkillExport, type ExportableSkill } from '../src/commands/skill.js';
+import {
+  buildListQuery,
+  listMark,
+  oneLine,
+  parseLimit,
+  resolveExportDir,
+  writeSkillExport,
+  type ExportableSkill,
+} from '../src/commands/skill.js';
+import type { SkillInfo } from '@eat/shared';
 
 const skill = (files: ExportableSkill['files'] = []): ExportableSkill => ({
   slug: 'demo',
@@ -133,5 +142,37 @@ describe('oneLine：一行一条的清单里显示描述', () => {
     const long = '中'.repeat(400);
     expect(oneLine(long, Number.POSITIVE_INFINITY)).toBe(long);
     expect(oneLine('多\n行\n描述', Number.POSITIVE_INFINITY)).toBe('多 行 描述');
+  });
+});
+
+describe('eat skill list 的筛选与条数（决策 37）', () => {
+  it('--limit 默认 100、上限 1000，非法值报错', () => {
+    expect(parseLimit(undefined)).toBe(100);
+    expect(parseLimit('5')).toBe(5);
+    expect(parseLimit('1000')).toBe(1000);
+    for (const bad of ['0', '1001', '-3', 'abc', '1.5']) {
+      expect(() => parseLimit(bad)).toThrow(/--limit/);
+    }
+  });
+
+  it('筛选参数拼成查询串，未指定的不出现', () => {
+    expect(buildListQuery({})).toBe('pageSize=100');
+    const q = new URLSearchParams(buildListQuery({ search: '周报', scope: 'mine', kind: 'bundled', limit: '20' }));
+    expect(q.get('q')).toBe('周报');
+    expect(q.get('scope')).toBe('mine');
+    expect(q.get('kind')).toBe('bundled');
+    expect(q.get('pageSize')).toBe('20');
+  });
+
+  it('scope / kind 取值非法时报错并列出可选值', () => {
+    expect(() => buildListQuery({ scope: 'nope' })).toThrow(/subscribed/);
+    expect(() => buildListQuery({ kind: 'nope' })).toThrow(/bundled/);
+  });
+
+  it('行首标记：捆绑优先于订阅状态', () => {
+    const base = { bundled: false, subscribed: false } as SkillInfo;
+    expect(listMark(base)).toBe('○');
+    expect(listMark({ ...base, subscribed: true })).toBe('●');
+    expect(listMark({ ...base, bundled: true, subscribed: true })).toBe('◆');
   });
 });

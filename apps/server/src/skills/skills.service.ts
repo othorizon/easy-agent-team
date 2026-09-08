@@ -10,6 +10,9 @@ import type {
   PushSkillRequest,
   SkillDetail,
   SkillInfo,
+  SkillListQuery,
+  SkillListResult,
+  SkillSubscriber,
   SkillVersionInfo,
   SyncSkill,
   UpdateSkillRequest,
@@ -31,6 +34,14 @@ import { DB, type Db } from '../db/db.module';
 import { skills, skillSubscriptions, skillVersions, templateItems, users, userTemplateSelections } from '../db/schema';
 
 type SkillRow = typeof skills.$inferSelect;
+type UserRow = typeof users.$inferSelect;
+
+/** 一个 skill 的一个有效订阅者（内部结构，count 与明细共用同一份计算） */
+interface SubscriberEntry {
+  user: Pick<UserRow, 'id' | 'name' | 'email' | 'role'>;
+  source: SkillSubscriber['source'];
+  subscribedAt: Date | null;
+}
 
 /** 简易密钥泄漏扫描：平台 Token 形态与经典私钥头。宁缺毋滥，只拦高置信度的 */
 const SECRET_PATTERNS: Array<{ re: RegExp; label: string }> = [
@@ -56,6 +67,8 @@ export class SkillsService {
    */
   private canSee(skill: SkillRow, user: AuthUser, subs: Set<string>): boolean {
     if (skill.ownerId === user.id || user.role === 'admin') return true;
+    // 捆绑的 skill 人人都要同步，自然人人可见（updateMeta 已保证捆绑必为 team，这里是兜底）
+    if (skill.bundled) return true;
     if (skill.visibility === 'team') return true;
     if (skill.visibility === 'granted') return subs.has(skill.id);
     return false;
@@ -98,19 +111,106 @@ export class SkillsService {
     return new Set(rows.map((r) => r.itemId));
   }
 
-  /** 有效同步集合 = 订阅（含经验沉淀）∪（模板 − 排除） */
-  private async effectiveSkillIds(userId: string): Promise<{ subs: Set<string>; effective: Set<string> }> {
-    const [subs, template, excluded] = await Promise.all([
-      this.subscribedSkillIds(userId),
-      this.templateSkillIds(userId),
-      this.excludedSkillIds(userId),
+  /** 全部捆绑 skill 的 id（决策 37：对非管理员恒为订阅） */
+  private async bundledSkillIds(): Promise<Set<string>> {
+    const rows = await this.db.select({ id: skills.id }).from(skills).where(eq(skills.bundled, true));
+    return new Set(rows.map((r) => r.id));
+  }
+
+  /**
+   * 有效同步集合 = 订阅（含经验沉淀）∪（模板 − 排除）∪ 捆绑。
+   * 捆绑对**非管理员**无条件生效，连「排除」标记也压过去；管理员不受捆绑影响，
+   * 仍按自己的订阅记录算（决策 37）。
+   */
+  private async effectiveSkillIds(user: AuthUser): Promise<{ subs: Set<string>; effective: Set<string> }> {
+    const [subs, template, excluded, bundled] = await Promise.all([
+      this.subscribedSkillIds(user.id),
+      this.templateSkillIds(user.id),
+      this.excludedSkillIds(user.id),
+      user.role === 'admin' ? Promise.resolve(new Set<string>()) : this.bundledSkillIds(),
     ]);
     const effective = new Set(subs);
     for (const id of template) if (!excluded.has(id)) effective.add(id);
+    for (const id of bundled) effective.add(id);
     return { subs, effective };
   }
 
-  private toInfo(row: SkillRow, ownerName: string, subscribed: boolean): SkillInfo {
+  /**
+   * 一批 skill 各自的有效订阅者。人数与明细走同一份计算，避免两边口径不一致。
+   *
+   * 口径：手动/经验订阅（未排除）∪（模板选择 − 排除）∪ 捆绑覆盖的成员，且**只算启用中的用户**
+   * ——禁用的用户登录不了、也不会 sync，算进人数会让「多少人在用」失真。
+   */
+  private async effectiveSubscribers(skillRows: SkillRow[]): Promise<Map<string, SubscriberEntry[]>> {
+    const out = new Map<string, SubscriberEntry[]>();
+    if (skillRows.length === 0) return out;
+    const ids = skillRows.map((s) => s.id);
+    const anyBundled = skillRows.some((s) => s.bundled);
+
+    const [subRows, tplRows, activeUsers] = await Promise.all([
+      this.db
+        .select({
+          skillId: skillSubscriptions.skillId,
+          userId: skillSubscriptions.userId,
+          source: skillSubscriptions.source,
+          excluded: skillSubscriptions.excluded,
+          createdAt: skillSubscriptions.createdAt,
+        })
+        .from(skillSubscriptions)
+        .where(inArray(skillSubscriptions.skillId, ids)),
+      this.db
+        .select({ skillId: templateItems.itemId, userId: userTemplateSelections.userId })
+        .from(userTemplateSelections)
+        .innerJoin(templateItems, eq(userTemplateSelections.templateId, templateItems.templateId))
+        .where(and(eq(templateItems.itemType, 'skill'), inArray(templateItems.itemId, ids))),
+      this.db
+        .select({ id: users.id, name: users.name, email: users.email, role: users.role })
+        .from(users)
+        .where(eq(users.status, 'active')),
+    ]);
+
+    const userById = new Map(activeUsers.map((u) => [u.id, u]));
+    const members = anyBundled ? activeUsers.filter((u) => u.role !== 'admin') : [];
+
+    for (const skill of skillRows) {
+      const entries = new Map<string, SubscriberEntry>();
+      const excluded = new Set<string>();
+      for (const r of subRows) {
+        if (r.skillId !== skill.id) continue;
+        if (r.excluded) {
+          excluded.add(r.userId);
+          continue;
+        }
+        const u = userById.get(r.userId);
+        if (u) entries.set(r.userId, { user: u, source: r.source, subscribedAt: r.createdAt });
+      }
+      for (const r of tplRows) {
+        if (r.skillId !== skill.id || excluded.has(r.userId) || entries.has(r.userId)) continue;
+        const u = userById.get(r.userId);
+        if (u) entries.set(r.userId, { user: u, source: 'template', subscribedAt: null });
+      }
+      if (skill.bundled) {
+        for (const u of members) {
+          if (!entries.has(u.id)) entries.set(u.id, { user: u, source: 'bundled', subscribedAt: null });
+        }
+      }
+      out.set(skill.id, [...entries.values()]);
+    }
+    return out;
+  }
+
+  private async subscriberCounts(skillRows: SkillRow[]): Promise<Map<string, number>> {
+    const subs = await this.effectiveSubscribers(skillRows);
+    return new Map([...subs].map(([id, list]) => [id, list.length]));
+  }
+
+  private toInfo(
+    row: SkillRow,
+    ownerName: string,
+    user: AuthUser,
+    subscribed: boolean,
+    subscriberCount: number,
+  ): SkillInfo {
     return {
       id: row.id,
       slug: row.slug,
@@ -122,27 +222,76 @@ export class SkillsService {
       allowHelp: row.allowHelp,
       source: row.source,
       currentVersion: row.currentVersion,
+      bundled: row.bundled,
       subscribed,
+      subscriptionLocked: row.bundled && user.role !== 'admin',
+      subscriberCount,
       updatedAt: row.updatedAt.toISOString(),
     };
   }
 
-  async list(user: AuthUser): Promise<SkillInfo[]> {
+  /** kind 筛选：可见性 / 捆绑 / 来源 三类状态合成的单选（控制台就是一个下拉） */
+  private matchKind(row: SkillRow, kind: SkillListQuery['kind']): boolean {
+    switch (kind) {
+      case 'team':
+        return row.visibility === 'team';
+      case 'private':
+        return row.visibility === 'private';
+      case 'granted':
+        return row.visibility === 'granted';
+      case 'bundled':
+        return row.bundled;
+      case 'experience':
+        return row.source === 'experience';
+      default:
+        return true;
+    }
+  }
+
+  /**
+   * 清单：先按可见性过滤（依赖当前用户的订阅集，故在应用层判），再按筛选条件过滤，最后分页。
+   * 订阅人数只为**当前页**这几条算，不给整库算。
+   */
+  async list(user: AuthUser, query: SkillListQuery): Promise<SkillListResult> {
     const rows = await this.db
       .select({ skill: skills, ownerName: users.name })
       .from(skills)
       .innerJoin(users, eq(skills.ownerId, users.id))
       .orderBy(desc(skills.updatedAt));
-    const { subs, effective } = await this.effectiveSkillIds(user.id);
-    return rows
-      .filter((r) => this.canSee(r.skill, user, subs))
-      .map((r) => this.toInfo(r.skill, r.ownerName, effective.has(r.skill.id)));
+    const { subs, effective } = await this.effectiveSkillIds(user);
+
+    const keyword = query.q?.toLowerCase() ?? '';
+    const filtered = rows.filter((r) => {
+      const row = r.skill;
+      if (!this.canSee(row, user, subs)) return false;
+      if (keyword) {
+        const hay = `${row.slug}\n${row.name}\n${row.description}`.toLowerCase();
+        if (!hay.includes(keyword)) return false;
+      }
+      if (query.scope === 'subscribed' && !effective.has(row.id)) return false;
+      if (query.scope === 'unsubscribed' && effective.has(row.id)) return false;
+      if (query.scope === 'mine' && row.ownerId !== user.id) return false;
+      return this.matchKind(row, query.kind);
+    });
+
+    const start = (query.page - 1) * query.pageSize;
+    const pageRows = filtered.slice(start, start + query.pageSize);
+    const counts = await this.subscriberCounts(pageRows.map((r) => r.skill));
+    return {
+      items: pageRows.map((r) =>
+        this.toInfo(r.skill, r.ownerName, user, effective.has(r.skill.id), counts.get(r.skill.id) ?? 0),
+      ),
+      total: filtered.length,
+      page: query.page,
+      pageSize: query.pageSize,
+    };
   }
 
   async detail(user: AuthUser, slug: string): Promise<SkillDetail> {
     const skill = await this.getBySlug(slug);
-    const subsForSee = await this.subscribedSkillIds(user.id);
-    if (!this.canSee(skill, user, subsForSee)) {
+    // 订阅状态按**有效集合**判（含模板派生与捆绑），与清单页口径一致
+    const { subs, effective } = await this.effectiveSkillIds(user);
+    if (!this.canSee(skill, user, subs)) {
       throw new NotFoundException({ error: 'NOT_FOUND', message: `Skill ${slug} 不存在` });
     }
     const [owner] = await this.db.select({ name: users.name }).from(users).where(eq(users.id, skill.ownerId));
@@ -153,8 +302,9 @@ export class SkillsService {
         .where(and(eq(skillVersions.skillId, skill.id), eq(skillVersions.version, skill.currentVersion)))
         .limit(1)
     )[0];
+    const counts = await this.subscriberCounts([skill]);
     return {
-      ...this.toInfo(skill, owner?.name ?? '(已删除)', subsForSee.has(skill.id)),
+      ...this.toInfo(skill, owner?.name ?? '(已删除)', user, effective.has(skill.id), counts.get(skill.id) ?? 0),
       content: version?.content ?? '',
       files: version?.files ?? [],
     };
@@ -285,21 +435,42 @@ export class SkillsService {
     if (!this.canManage(skill, user)) {
       throw new ForbiddenException({ error: 'FORBIDDEN', message: '仅作者或管理员可修改' });
     }
+    // 捆绑是「替全员做决定」，只有管理员能改——作者对自己的 skill 也不行（决策 37）
+    if (dto.bundled !== undefined && dto.bundled !== skill.bundled && user.role !== 'admin') {
+      throw new ForbiddenException({ error: 'FORBIDDEN', message: '仅管理员可设置捆绑模式' });
+    }
+    const bundled = dto.bundled ?? skill.bundled;
+    const visibility = dto.visibility ?? skill.visibility;
+    // 捆绑要求团队可见：否则会出现「被强制订阅但看不到内容」的自相矛盾状态
+    if (bundled && visibility !== 'team') {
+      throw new BadRequestException({
+        error: 'VALIDATION_FAILED',
+        message: '捆绑模式要求 skill 为团队可见；请先改为团队可见，或先取消捆绑',
+      });
+    }
     const [row] = await this.db
       .update(skills)
       .set({
         name: dto.name ?? skill.name,
         description: dto.description ?? skill.description,
-        visibility: dto.visibility ?? skill.visibility,
+        visibility,
         allowHelp: dto.allowHelp ?? skill.allowHelp,
+        bundled,
         updatedAt: new Date(),
       })
       .where(eq(skills.id, skill.id))
       .returning();
-    await this.audit.record({ actorId: user.id, action: 'skill.updated', targetType: 'skill', targetId: skill.id, meta: { slug } });
+    await this.audit.record({
+      actorId: user.id,
+      action: bundled !== skill.bundled ? (bundled ? 'skill.bundled' : 'skill.unbundled') : 'skill.updated',
+      targetType: 'skill',
+      targetId: skill.id,
+      meta: { slug },
+    });
     const [owner] = await this.db.select({ name: users.name }).from(users).where(eq(users.id, row.ownerId));
-    const subs = await this.subscribedSkillIds(user.id);
-    return this.toInfo(row, owner?.name ?? '', subs.has(row.id));
+    const { effective } = await this.effectiveSkillIds(user);
+    const counts = await this.subscriberCounts([row]);
+    return this.toInfo(row, owner?.name ?? '', user, effective.has(row.id), counts.get(row.id) ?? 0);
   }
 
   async remove(user: AuthUser, slug: string) {
@@ -312,31 +483,24 @@ export class SkillsService {
     return { ok: true };
   }
 
-  async subscribe(user: AuthUser, slug: string) {
-    const skill = await this.getBySlug(slug);
-    if (!this.canSee(skill, user, await this.subscribedSkillIds(user.id))) {
-      throw new NotFoundException({ error: 'NOT_FOUND', message: `Skill ${slug} 不存在` });
-    }
-    // 之前排除过（模板派生）则解除排除
+  /** 订阅写入（自助订阅与管理员代订阅共用）：之前排除过（模板派生）则解除排除 */
+  private async writeSubscription(targetUserId: string, skillId: string) {
     await this.db
       .insert(skillSubscriptions)
-      .values({ userId: user.id, skillId: skill.id })
+      .values({ userId: targetUserId, skillId })
       .onConflictDoUpdate({
         target: [skillSubscriptions.userId, skillSubscriptions.skillId],
         set: { excluded: false, source: 'manual' },
       });
-    await this.audit.record({ actorId: user.id, action: 'skill.subscribed', targetType: 'skill', targetId: skill.id, meta: { slug } });
-    return { ok: true };
   }
 
-  async unsubscribe(user: AuthUser, slug: string) {
-    const skill = await this.getBySlug(slug);
-    const fromTemplate = (await this.templateSkillIds(user.id)).has(skill.id);
+  /** 退订写入：模板派生的条目退订 = 记录排除标记（模板本身不受影响），其余物理删除 */
+  private async removeSubscription(targetUserId: string, skillId: string) {
+    const fromTemplate = (await this.templateSkillIds(targetUserId)).has(skillId);
     if (fromTemplate) {
-      // 模板派生的条目：退订 = 记录排除标记（模板本身不受影响）
       await this.db
         .insert(skillSubscriptions)
-        .values({ userId: user.id, skillId: skill.id, source: 'template', excluded: true })
+        .values({ userId: targetUserId, skillId, source: 'template', excluded: true })
         .onConflictDoUpdate({
           target: [skillSubscriptions.userId, skillSubscriptions.skillId],
           set: { excluded: true },
@@ -344,9 +508,107 @@ export class SkillsService {
     } else {
       await this.db
         .delete(skillSubscriptions)
-        .where(and(eq(skillSubscriptions.userId, user.id), eq(skillSubscriptions.skillId, skill.id)));
+        .where(and(eq(skillSubscriptions.userId, targetUserId), eq(skillSubscriptions.skillId, skillId)));
     }
+  }
+
+  async subscribe(user: AuthUser, slug: string) {
+    const skill = await this.getBySlug(slug);
+    if (!this.canSee(skill, user, await this.subscribedSkillIds(user.id))) {
+      throw new NotFoundException({ error: 'NOT_FOUND', message: `Skill ${slug} 不存在` });
+    }
+    // 捆绑的 skill 本就恒为订阅，这里照常写一条记录：万一之后取消捆绑，用户自己订过的仍然留着
+    await this.writeSubscription(user.id, skill.id);
+    await this.audit.record({ actorId: user.id, action: 'skill.subscribed', targetType: 'skill', targetId: skill.id, meta: { slug } });
+    return { ok: true };
+  }
+
+  async unsubscribe(user: AuthUser, slug: string) {
+    const skill = await this.getBySlug(slug);
+    if (skill.bundled && user.role !== 'admin') {
+      throw new BadRequestException({
+        error: 'SKILL_BUNDLED',
+        message: `${slug} 已被管理员设为捆绑，对所有成员始终同步，无法退订`,
+      });
+    }
+    await this.removeSubscription(user.id, skill.id);
     await this.audit.record({ actorId: user.id, action: 'skill.unsubscribed', targetType: 'skill', targetId: skill.id, meta: { slug } });
+    return { ok: true };
+  }
+
+  /** 订阅者明细（仅管理员；鉴权在路由的 @Roles('admin') 上，故这里不再收 AuthUser） */
+  async subscribers(slug: string): Promise<SkillSubscriber[]> {
+    const skill = await this.getBySlug(slug);
+    const entries = (await this.effectiveSubscribers([skill])).get(skill.id) ?? [];
+    return entries
+      .map((e) => ({
+        userId: e.user.id,
+        name: e.user.name,
+        email: e.user.email,
+        role: e.user.role,
+        source: e.source,
+        // 捆绑强制的订阅移不掉（要先取消捆绑）；管理员不受捆绑影响，照常可移
+        removable: !(skill.bundled && e.user.role !== 'admin'),
+        subscribedAt: e.subscribedAt?.toISOString() ?? null,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
+  }
+
+  private async getTargetUser(userId: string): Promise<UserRow> {
+    const row = (await this.db.select().from(users).where(eq(users.id, userId)).limit(1))[0];
+    if (!row) throw new NotFoundException({ error: 'NOT_FOUND', message: '用户不存在' });
+    return row;
+  }
+
+  /** 管理员替他人订阅 */
+  async addSubscriber(admin: AuthUser, slug: string, targetUserId: string) {
+    const skill = await this.getBySlug(slug);
+    const target = await this.getTargetUser(targetUserId);
+    if (target.status !== 'active') {
+      throw new BadRequestException({ error: 'VALIDATION_FAILED', message: '该用户已禁用，无法为其订阅' });
+    }
+    // private 的 skill 别人看不到，订上去只会得到一条同步不下来的死订阅
+    if (skill.visibility === 'private' && skill.ownerId !== target.id) {
+      throw new BadRequestException({
+        error: 'VALIDATION_FAILED',
+        message: '该 Skill 为私有，成员看不到；请先改为团队可见（授予可见的经验 skill 可以直接订阅）',
+      });
+    }
+    if (skill.bundled && target.role !== 'admin') {
+      throw new BadRequestException({
+        error: 'SKILL_BUNDLED',
+        message: `${slug} 已是捆绑 Skill，全体成员本就恒为订阅，无需单独添加`,
+      });
+    }
+    await this.writeSubscription(target.id, skill.id);
+    await this.audit.record({
+      actorId: admin.id,
+      action: 'skill.subscriber_added',
+      targetType: 'skill',
+      targetId: skill.id,
+      meta: { slug, targetUserId: target.id, targetUserEmail: target.email },
+    });
+    return { ok: true };
+  }
+
+  /** 管理员取消他人的订阅 */
+  async removeSubscriber(admin: AuthUser, slug: string, targetUserId: string) {
+    const skill = await this.getBySlug(slug);
+    const target = await this.getTargetUser(targetUserId);
+    if (skill.bundled && target.role !== 'admin') {
+      throw new BadRequestException({
+        error: 'SKILL_BUNDLED',
+        message: `${slug} 是捆绑 Skill，成员不能单独取消；要停止分发请先取消捆绑`,
+      });
+    }
+    await this.removeSubscription(target.id, skill.id);
+    await this.audit.record({
+      actorId: admin.id,
+      action: 'skill.subscriber_removed',
+      targetType: 'skill',
+      targetId: skill.id,
+      meta: { slug, targetUserId: target.id, targetUserEmail: target.email },
+    });
     return { ok: true };
   }
 
@@ -358,7 +620,7 @@ export class SkillsService {
    */
   async bundleVersion(user: AuthUser): Promise<string> {
     const items: SkillBundleItem[] = [{ slug: PLATFORM_GUIDE_SLUG, version: PLATFORM_GUIDE_VERSION }];
-    const { subs, effective } = await this.effectiveSkillIds(user.id);
+    const { subs, effective } = await this.effectiveSkillIds(user);
     if (effective.size > 0) {
       const rows = await this.db
         .select()
@@ -373,10 +635,18 @@ export class SkillsService {
     return skillBundleVersion(items);
   }
 
+  /** 这条 skill 为什么会出现在该用户的 sync 里：own > bundled > subscribed > template */
+  private relationOf(skill: SkillRow, user: AuthUser, subs: Set<string>): SyncSkill['relation'] {
+    if (skill.ownerId === user.id) return 'own';
+    if (skill.bundled && user.role !== 'admin') return 'bundled';
+    if (subs.has(skill.id)) return 'subscribed';
+    return 'template';
+  }
+
   async syncBundle(user: AuthUser): Promise<SyncSkill[]> {
     // 内置平台使用指南对所有用户始终下发（§10 决策 11）：不落库、不可退订，随平台版本更新
     const guide = platformGuideSyncSkill();
-    const { subs, effective } = await this.effectiveSkillIds(user.id);
+    const { subs, effective } = await this.effectiveSkillIds(user);
     if (effective.size === 0) return [guide];
     const rows = await this.db
       .select()
@@ -405,10 +675,7 @@ export class SkillsService {
         name: s.name,
         description: s.description,
         source: s.source,
-        relation: (s.ownerId === user.id ? 'own' : subs.has(s.id) ? 'subscribed' : 'template') as
-          | 'own'
-          | 'subscribed'
-          | 'template',
+        relation: this.relationOf(s, user, subs),
         version: s.currentVersion,
         content: v?.content ?? '',
         files: v?.files ?? [],
