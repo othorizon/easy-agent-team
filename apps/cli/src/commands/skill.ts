@@ -32,6 +32,15 @@ export function resolvePushMeta(
   };
 }
 
+/**
+ * 一行一条的清单里显示描述：描述可能是 SKILL.md 里 `|` 保留块的多行文本（决策 36），
+ * 原样打出来会把清单撑成好几屏，这里折成单行并截断，完整内容看 eat skill export / 控制台详情页。
+ */
+export function oneLine(text: string, max = 120): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
 function collectFiles(root: string, rel = ''): SkillFile[] {
   const out: SkillFile[] = [];
   const abs = path.join(root, rel);
@@ -109,7 +118,7 @@ export async function skillList(): Promise<void> {
   for (const s of rows) {
     const mark = s.subscribed ? '●' : '○';
     const vis = s.visibility === 'private' ? ' [私有]' : '';
-    console.log(`${mark} ${s.slug} v${s.currentVersion}${vis}  ${s.name} — ${s.description}（作者: ${s.ownerName}）`);
+    console.log(`${mark} ${s.slug} v${s.currentVersion}${vis}  ${s.name} — ${oneLine(s.description)}（作者: ${s.ownerName}）`);
   }
   console.log('\n● 已订阅（eat sync 会落地到本地）  ○ 未订阅（eat skill subscribe <slug> 订阅）');
 }

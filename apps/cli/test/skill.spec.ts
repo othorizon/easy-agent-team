@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { resolveExportDir, writeSkillExport, type ExportableSkill } from '../src/commands/skill.js';
+import { oneLine, resolveExportDir, writeSkillExport, type ExportableSkill } from '../src/commands/skill.js';
 
 const skill = (files: ExportableSkill['files'] = []): ExportableSkill => ({
   slug: 'demo',
@@ -104,5 +104,18 @@ describe('writeSkillExport：写出内容', () => {
     expect(() =>
       writeSkillExport(dir, skill([{ path: '../evil', encoding: 'utf8', content: 'x', executable: false }]), false),
     ).toThrow(/非法文件路径/);
+  });
+});
+
+describe('oneLine：一行一条的清单里显示描述', () => {
+  it('多行描述（`|` 保留块）折成单行，撑不乱清单', () => {
+    expect(oneLine('第一行\n\n- 第二行\n- 第三行')).toBe('第一行 - 第二行 - 第三行');
+  });
+
+  it('超长描述截断并加省略号，短的原样', () => {
+    expect(oneLine('a'.repeat(200))).toHaveLength(120);
+    expect(oneLine('a'.repeat(200)).endsWith('…')).toBe(true);
+    expect(oneLine('短描述')).toBe('短描述');
+    expect(oneLine('')).toBe('');
   });
 });

@@ -1,5 +1,6 @@
 import type { HelpRequestDetail, HelpRequestInfo, HelpTargets } from '@eat/shared';
 import { Api } from '../client.js';
+import { oneLine } from './skill.js';
 
 const STATUS_LABEL: Record<string, string> = {
   open: '等待回复',
@@ -13,7 +14,7 @@ export async function askTargets(): Promise<void> {
   const t = await api.request<HelpTargets>('GET', '/api/helpers');
   if (t.helpers.length > 0) {
     console.log('可求助的人：');
-    for (const h of t.helpers) console.log(`  ${h.userId}  ${h.name} — ${h.description}`);
+    for (const h of t.helpers) console.log(`  ${h.userId}  ${h.name} — ${oneLine(h.description)}`);
   }
   if (t.skillAuthors.length > 0) {
     console.log('可求助的 skill（问题与 skill 相关时优先）：');

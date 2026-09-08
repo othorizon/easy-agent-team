@@ -137,7 +137,8 @@ export function SkillDetailPage() {
             </div>
             <div className="flex gap-3 sm:col-span-2">
               <dt className="w-20 shrink-0 text-muted-foreground">触发描述</dt>
-              <dd className="leading-relaxed">{s.description || '（未填写）'}</dd>
+              {/* 描述可以是 SKILL.md 里 `|` 保留块的多行文本（决策 36），按原样换行显示，别挤成一坨 */}
+              <dd className="min-w-0 whitespace-pre-line break-words leading-relaxed">{s.description || '（未填写）'}</dd>
             </div>
             {s.files.length > 0 && (
               <div className="flex gap-3 sm:col-span-2">
@@ -250,8 +251,8 @@ function EditSkillDialog({
           <Field label="名称" htmlFor="edit-name" required error={errors.name?.message}>
             <Input id="edit-name" aria-invalid={!!errors.name} {...register('name', { required: '请输入名称' })} />
           </Field>
-          <Field label="触发描述" htmlFor="edit-desc">
-            <Textarea id="edit-desc" rows={2} {...register('description')} />
+          <Field label="触发描述" htmlFor="edit-desc" hint="可多行；AI 靠它判断何时使用这个 skill">
+            <Textarea id="edit-desc" rows={4} {...register('description')} />
           </Field>
           <Field label="可见性">
             <Controller
