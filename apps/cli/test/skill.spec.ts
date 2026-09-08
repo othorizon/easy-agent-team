@@ -113,19 +113,25 @@ describe('oneLine：一行一条的清单里显示描述', () => {
   });
 
   it('超长描述截断并加省略号，短的原样', () => {
-    expect(oneLine('a'.repeat(200))).toHaveLength(80);
-    expect(oneLine('a'.repeat(200)).endsWith('…')).toBe(true);
+    expect(oneLine('a'.repeat(400))).toHaveLength(200);
+    expect(oneLine('a'.repeat(400)).endsWith('…')).toBe(true);
     expect(oneLine('短描述')).toBe('短描述');
     expect(oneLine('')).toBe('');
   });
 
-  it('按终端显示列宽截断：一个汉字算两列，中英文都不会撑出一行', () => {
+  it('按显示列宽截断：一个汉字算两列', () => {
     const width = (s: string) =>
       [...s].reduce((w, c) => w + ((c.codePointAt(0) ?? 0) > 0x2e7f ? 2 : 1), 0);
-    for (const text of ['中'.repeat(200), 'a'.repeat(200), '中a'.repeat(100)]) {
-      expect(width(oneLine(text))).toBeLessThanOrEqual(80);
+    for (const text of ['中'.repeat(400), 'a'.repeat(400), '中a'.repeat(200)]) {
+      expect(width(oneLine(text))).toBeLessThanOrEqual(200);
     }
-    // 半角字符能装满 79 列 + 省略号；汉字只装得下 39 个
-    expect(oneLine('中'.repeat(200))).toBe(`${'中'.repeat(39)}…`);
+    // 半角字符装满 199 列 + 省略号；汉字装得下 99 个
+    expect(oneLine('中'.repeat(400))).toBe(`${'中'.repeat(99)}…`);
+  });
+
+  it('给足宽度就不截断（eat skill list --full 走这条）', () => {
+    const long = '中'.repeat(400);
+    expect(oneLine(long, Number.POSITIVE_INFINITY)).toBe(long);
+    expect(oneLine('多\n行\n描述', Number.POSITIVE_INFINITY)).toBe('多 行 描述');
   });
 });

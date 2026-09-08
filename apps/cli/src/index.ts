@@ -68,7 +68,11 @@ skill
   .option('--changelog <changelog>', '本次版本说明')
   .option('--private', '设为私有（默认团队可见）')
   .action(skillPush);
-skill.command('list').description('列出平台上可见的 skill 与订阅状态').action(skillList);
+skill
+  .command('list')
+  .description('列出平台上可见的 skill 与订阅状态')
+  .option('--full', '不截断触发描述（默认按显示宽度截断，一行一条）')
+  .action(skillList);
 skill
   .command('export <slug>')
   .description('把平台上的 skill 下载到本地目录（SKILL.md + 附属文件，可直接编辑后 push）')

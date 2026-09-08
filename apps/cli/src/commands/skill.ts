@@ -43,11 +43,14 @@ function charWidth(ch: string): number {
 
 /**
  * 一行一条的清单里显示描述：描述可能是 SKILL.md 里 `|` 保留块的多行文本（决策 36），
- * 原样打出来会把清单撑成好几屏，这里折成单行并按**终端显示列宽**截断——
- * 按字符数截会漏掉「一个汉字占两列」，120 个汉字实际是 240 列，照样换行。
- * 完整内容看 eat skill export / 控制台详情页。
+ * 原样打出来会把清单撑成好几屏，这里折成单行并按**终端显示列宽**截断
+ * （按字符数截会漏掉「一个汉字占两列」，同样的数字对中文等于放宽一倍）。
+ *
+ * 200 列 ≈ 100 个汉字 / 200 个英文字符：实测团队 skill 的触发描述绝大多数落在这个长度内、
+ * 完整显示，只有把整套触发规则写进 description 的那种（官方 learn 那类，近千字符）才会被截。
+ * 想看全的：`eat skill list --full`、`eat skill export <slug>`、控制台详情页。
  */
-export function oneLine(text: string, maxWidth = 80): string {
+export function oneLine(text: string, maxWidth = 200): string {
   const flat = text.replace(/\s+/g, ' ').trim();
   let width = 0;
   let out = '';
@@ -127,7 +130,7 @@ export async function skillPush(
   }
 }
 
-export async function skillList(): Promise<void> {
+export async function skillList(opts: { full?: boolean } = {}): Promise<void> {
   const api = Api.fromSaved();
   const rows = await api.request<SkillInfo[]>('GET', '/api/skills');
   if (rows.length === 0) {
@@ -137,9 +140,14 @@ export async function skillList(): Promise<void> {
   for (const s of rows) {
     const mark = s.subscribed ? '●' : '○';
     const vis = s.visibility === 'private' ? ' [私有]' : '';
-    console.log(`${mark} ${s.slug} v${s.currentVersion}${vis}  ${s.name} — ${oneLine(s.description)}（作者: ${s.ownerName}）`);
+    // --full 时只折成单行、不截断（清单仍是一行一条，长描述自己换行）
+    const desc = oneLine(s.description, opts.full ? Number.POSITIVE_INFINITY : undefined);
+    console.log(`${mark} ${s.slug} v${s.currentVersion}${vis}  ${s.name} — ${desc}（作者: ${s.ownerName}）`);
   }
   console.log('\n● 已订阅（eat sync 会落地到本地）  ○ 未订阅（eat skill subscribe <slug> 订阅）');
+  if (!opts.full && rows.some((s) => oneLine(s.description).endsWith('…'))) {
+    console.log('部分触发描述过长已截断，看完整内容: eat skill list --full 或 eat skill export <slug>');
+  }
 }
 
 export async function skillSubscribe(slug: string): Promise<void> {
