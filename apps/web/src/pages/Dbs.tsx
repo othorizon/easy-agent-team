@@ -1,6 +1,6 @@
 import type { CreateDbInstanceRequest, DbAssignmentInfo, DbInstanceInfo } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus } from 'lucide-react';
+import { ArrowRight, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { Link } from 'react-router-dom';
@@ -22,15 +22,7 @@ import { TableSkeleton } from '../components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { useTabParam } from '../lib/use-tab-param';
-
-const STATUS_BADGE: Record<string, JSX.Element> = {
-  pending: <Badge variant="warning">待批准</Badge>,
-  active: <Badge variant="success">可用</Badge>,
-  failed: <Badge variant="destructive">执行失败</Badge>,
-  rejected: <Badge variant="outline">已驳回</Badge>,
-  disabled: <Badge variant="destructive">已禁用</Badge>,
-  deleted: <Badge variant="outline">已删除</Badge>,
-};
+import { AssignmentActions, DB_STATUS_BADGE, useAssignmentAction } from './db-shared';
 
 export function DbsPage() {
   const queryClient = useQueryClient();
@@ -77,19 +69,7 @@ export function DbsPage() {
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '申请失败'),
   });
 
-  const act = useMutation({
-    mutationFn: (v: { id: string; action: 'approve' | 'reject' | 'disable' | 'enable' | 'delete' }) =>
-      v.action === 'delete'
-        ? api('DELETE', `/api/db/assignments/${v.id}`)
-        : api('POST', `/api/db/assignments/${v.id}/${v.action}`, {}),
-    onSuccess: (res: unknown) => {
-      const r = res as DbAssignmentInfo;
-      if (r.status === 'failed') toast.error(`执行失败：${r.error}`);
-      else toast.success('已处理');
-      invalidate();
-    },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : '操作失败'),
-  });
+  const act = useAssignmentAction();
 
   const removeInstance = useMutation({
     mutationFn: (id: string) => api('DELETE', `/api/db/instances/${id}`),
@@ -104,7 +84,7 @@ export function DbsPage() {
     if (loading) return <TableSkeleton rows={2} />;
     if (rows.length === 0) return <Empty text={emptyText} className="py-6" />;
     return (
-      <Table className={admin ? 'min-w-[720px]' : 'min-w-[560px]'}>
+      <Table className={admin ? 'min-w-[760px]' : 'min-w-[600px]'}>
         <TableHeader>
           <TableRow>
             <TableHead>库</TableHead>
@@ -113,21 +93,24 @@ export function DbsPage() {
             <TableHead>用途</TableHead>
             <TableHead className="w-22">状态</TableHead>
             <TableHead className="w-40">凭证</TableHead>
-            {admin && <TableHead className="w-52">操作</TableHead>}
+            <TableHead className={admin ? 'w-64' : 'w-20'}>操作</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {rows.map((r) => (
             <TableRow key={r.id}>
               <TableCell>
-                <InlineCode>{r.dbName}</InlineCode>
+                {/* 库名即详情入口（决策 39）；操作列里再给一个显式的「详情」，不靠猜 */}
+                <Link to={`/db/${r.id}`}>
+                  <InlineCode className="text-primary hover:underline">{r.dbName}</InlineCode>
+                </Link>
               </TableCell>
               <TableCell className="text-muted-foreground whitespace-nowrap">{r.instanceName}</TableCell>
               {admin && <TableCell className="text-muted-foreground whitespace-nowrap">{r.requesterName}</TableCell>}
               <TableCell className="max-w-48 truncate text-muted-foreground" title={r.purpose}>
                 {r.purpose}
               </TableCell>
-              <TableCell>{STATUS_BADGE[r.status]}</TableCell>
+              <TableCell>{DB_STATUS_BADGE[r.status]}</TableCell>
               <TableCell>
                 {r.environmentSlug ? (
                   <Link to={`/envs/${r.environmentSlug}`}>
@@ -141,48 +124,23 @@ export function DbsPage() {
                   '—'
                 )}
               </TableCell>
-              {admin && (
-                <TableCell>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {r.status === 'pending' && (
-                      <>
-                        <Button size="sm" onClick={() => act.mutate({ id: r.id, action: 'approve' })} loading={act.isPending}>
-                          批准并建库
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={() => act.mutate({ id: r.id, action: 'reject' })}>
-                          驳回
-                        </Button>
-                      </>
-                    )}
-                    {r.status === 'active' && (
-                      <Button size="sm" variant="outline" onClick={() => act.mutate({ id: r.id, action: 'disable' })}>
-                        禁用
-                      </Button>
-                    )}
-                    {r.status === 'disabled' && (
-                      <Button size="sm" variant="outline" onClick={() => act.mutate({ id: r.id, action: 'enable' })}>
-                        恢复
-                      </Button>
-                    )}
-                    {['active', 'disabled', 'failed', 'rejected'].includes(r.status) && (
-                      <Confirm
-                        title="删除分配记录？"
-                        description={
-                          <>
-                            仅删除平台上的记录与凭证环境，<b>不会</b>删除实例上的数据库与账号；如需彻底清理，只能到数据库实例上手动删除。
-                          </>
-                        }
-                        confirmText="删除"
-                        onConfirm={() => act.mutate({ id: r.id, action: 'delete' })}
-                      >
-                        <Button size="sm" variant="outline-destructive">
-                          删除
-                        </Button>
-                      </Confirm>
-                    )}
-                  </div>
-                </TableCell>
-              )}
+              <TableCell>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Button asChild size="sm" variant="ghost" className="text-muted-foreground">
+                    <Link to={`/db/${r.id}`}>
+                      详情
+                      <ArrowRight className="size-3.5" />
+                    </Link>
+                  </Button>
+                  {admin && (
+                    <AssignmentActions
+                      row={r}
+                      pending={act.isPending && act.variables?.id === r.id}
+                      onAct={(action) => act.mutate({ id: r.id, action })}
+                    />
+                  )}
+                </div>
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>

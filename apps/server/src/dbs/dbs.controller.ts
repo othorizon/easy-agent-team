@@ -47,6 +47,12 @@ export class DbsController {
     return this.dbs.listAll();
   }
 
+  /** 详情（申请人或管理员）；`assignments/mine` 是静态段，路由器优先匹配它，不会被这里吃掉 */
+  @Get('assignments/:id')
+  get(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.dbs.get(user, id);
+  }
+
   @Post('assignments/:id/approve')
   @Roles('admin')
   approve(@Param('id') id: string, @CurrentUser() user: AuthUser) {

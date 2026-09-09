@@ -29,6 +29,7 @@ import {
 } from './components/ui/dropdown-menu';
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from './components/ui/sheet';
 import { cn } from './lib/utils';
+import { DbAssignmentDetailPage } from './pages/DbAssignmentDetail';
 import { DbsPage } from './pages/Dbs';
 import { DevicePage } from './pages/Device';
 import { EnvDetailPage } from './pages/EnvDetail';
@@ -270,6 +271,7 @@ export function App() {
       <Route path="/templates" element={<RequireAuth><TemplatesPage /></RequireAuth>} />
       <Route path="/mcp" element={<RequireAuth><McpConfigsPage /></RequireAuth>} />
       <Route path="/db" element={<RequireAuth><DbsPage /></RequireAuth>} />
+      <Route path="/db/:id" element={<RequireAuth><DbAssignmentDetailPage /></RequireAuth>} />
       <Route path="/apps" element={<RequireAuth><AppsPage /></RequireAuth>} />
       <Route path="/requests" element={<RequireAuth><RequestsPage /></RequireAuth>} />
       <Route path="/help" element={<RequireAuth><HelpPage /></RequireAuth>} />

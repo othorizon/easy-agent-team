@@ -142,7 +142,7 @@ async function main() {
       });
     }
     const list = await api('GET', `/api/envs/${e.slug}/variables`, { token });
-    envIds[e.slug] = (await api('GET', '/api/envs', { token })).find((x) => x.slug === e.slug).id;
+    envIds[e.slug] = (await api('GET', `/api/envs/${e.slug}`, { token })).id;
     for (const v of list ?? []) varIds[`${e.slug}/${v.key}`] = v.id;
   }
 

@@ -7,7 +7,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { and, count, desc, eq, ne } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, ne } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import type { CreateDbAssignmentRequest, CreateDbInstanceRequest, DbAssignmentInfo, DbInstanceInfo } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
@@ -98,26 +98,55 @@ export class DbsService {
 
   // ---------- 分配 ----------
 
+  /** 一批记录 → 契约对象：实例 / 用户 / 环境各查一次，不逐行回表 */
+  private async toInfos(rows: AssignmentRow[]): Promise<DbAssignmentInfo[]> {
+    if (rows.length === 0) return [];
+    const uniq = (ids: Array<string | null>) => [...new Set(ids.filter((id): id is string => !!id))];
+    const instanceIds = uniq(rows.map((r) => r.instanceId));
+    const userIds = uniq(rows.flatMap((r) => [r.requesterId, r.decidedBy]));
+    const envIds = uniq(rows.map((r) => r.environmentId));
+    const instanceById = new Map(
+      (await this.db.select().from(dbInstances).where(inArray(dbInstances.id, instanceIds))).map((i) => [i.id, i]),
+    );
+    const userNameById = new Map(
+      (await this.db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, userIds))).map((u) => [u.id, u.name]),
+    );
+    const envSlugById = new Map(
+      envIds.length > 0
+        ? (await this.db.select({ id: environments.id, slug: environments.slug }).from(environments).where(inArray(environments.id, envIds))).map(
+            (e) => [e.id, e.slug],
+          )
+        : [],
+    );
+    return rows.map((row) => {
+      const instance = instanceById.get(row.instanceId);
+      const envSlug = row.environmentId ? envSlugById.get(row.environmentId) : undefined;
+      return {
+        id: row.id,
+        instanceId: row.instanceId,
+        instanceName: instance?.name ?? '(已删除)',
+        instanceHost: instance?.host ?? null,
+        instancePort: instance?.port ?? null,
+        engine: instance?.engine ?? 'postgres',
+        dbName: row.dbName,
+        dbUser: row.dbUser,
+        purpose: row.purpose,
+        status: row.status,
+        requesterId: row.requesterId,
+        requesterName: userNameById.get(row.requesterId) ?? '(已删除)',
+        decidedByName: row.decidedBy ? (userNameById.get(row.decidedBy) ?? '(已删除)') : null,
+        // 环境被 Owner 直接删掉时列上已被 set null，这里只会同时为空
+        environmentId: envSlug ? row.environmentId : null,
+        environmentSlug: envSlug ?? null,
+        error: row.error,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+      };
+    });
+  }
+
   private async toInfo(row: AssignmentRow): Promise<DbAssignmentInfo> {
-    const instance = (await this.db.select().from(dbInstances).where(eq(dbInstances.id, row.instanceId)).limit(1))[0];
-    const [requester] = await this.db.select({ name: users.name }).from(users).where(eq(users.id, row.requesterId));
-    const env = row.environmentId
-      ? (await this.db.select({ slug: environments.slug }).from(environments).where(eq(environments.id, row.environmentId)).limit(1))[0]
-      : undefined;
-    return {
-      id: row.id,
-      instanceName: instance?.name ?? '(已删除)',
-      engine: instance?.engine ?? 'postgres',
-      dbName: row.dbName,
-      dbUser: row.dbUser,
-      purpose: row.purpose,
-      status: row.status,
-      requesterId: row.requesterId,
-      requesterName: requester?.name ?? '(已删除)',
-      environmentSlug: env?.slug ?? null,
-      error: row.error,
-      createdAt: row.createdAt.toISOString(),
-    };
+    return (await this.toInfos([row]))[0];
   }
 
   async createAssignment(user: AuthUser, dto: CreateDbAssignmentRequest): Promise<DbAssignmentInfo> {
@@ -147,7 +176,7 @@ export class DbsService {
       .from(dbAssignments)
       .where(and(eq(dbAssignments.requesterId, user.id), ne(dbAssignments.status, 'deleted')))
       .orderBy(desc(dbAssignments.createdAt));
-    return Promise.all(rows.map((r) => this.toInfo(r)));
+    return this.toInfos(rows);
   }
 
   async listAll(): Promise<DbAssignmentInfo[]> {
@@ -157,13 +186,22 @@ export class DbsService {
       .where(ne(dbAssignments.status, 'deleted'))
       .orderBy(desc(dbAssignments.createdAt))
       .limit(200);
-    return Promise.all(rows.map((r) => this.toInfo(r)));
+    return this.toInfos(rows);
   }
 
   private async getAssignment(id: string): Promise<AssignmentRow> {
     const row = (await this.db.select().from(dbAssignments).where(eq(dbAssignments.id, id)).limit(1))[0];
     if (!row) throw new NotFoundException({ error: 'NOT_FOUND', message: '分配记录不存在' });
     return row;
+  }
+
+  /** 详情：申请人或管理员可看（已删除的记录留库供追溯，直接访问仍能看到，只是清单里不列） */
+  async get(user: AuthUser, id: string): Promise<DbAssignmentInfo> {
+    const row = await this.getAssignment(id);
+    if (user.role !== 'admin' && row.requesterId !== user.id) {
+      throw new ForbiddenException({ error: 'FORBIDDEN', message: '仅申请人或管理员可查看该分配' });
+    }
+    return this.toInfo(row);
   }
 
   /** 批准：在实例上真实建库建号，并把凭证生成为环境（Owner=申请人） */
@@ -201,7 +239,8 @@ export class DbsService {
         source: 'db_assignment',
       })
       .returning();
-    // 仅密码敏感（加密存储、读取落审计）；主机/端口/库名/账号非敏感（明文存储、有权限者平台上直接明文可见）。读值授权不变：默认仅申请人（环境 Owner）可读
+    // 仅密码敏感（加密存储、读取落审计）；主机/端口/库名/账号非敏感（明文存储、有权限者平台上直接明文可见）。读值授权不变：默认仅申请人（环境 Owner）可读。
+    // 整组对未授权成员**完全隐藏**（决策 39）：这是某个人的项目库凭证，不是团队公共配置，别人的清单里不该出现；Owner 之后可以按需授权或打开可见
     const vars: Array<[string, string, string, boolean]> = [
       ['DB_HOST', instance.host, '数据库主机', false],
       ['DB_PORT', String(instance.port), '数据库端口', false],
@@ -217,6 +256,7 @@ export class DbsService {
         valuePlain: secret ? null : value,
         secret,
         description,
+        visibleWithoutPermission: false,
       });
     }
     await this.db

@@ -1,12 +1,13 @@
 import type {
   EnvironmentInfo,
+  EnvListResult,
   McpConfigInfo,
   SetTemplateItemsRequest,
   SkillInfo,
   SkillListResult,
   TemplateInfo,
 } from '@eat/shared';
-import { SKILL_LIST_MAX_PAGE_SIZE } from '@eat/shared';
+import { ENV_LIST_MAX_PAGE_SIZE, SKILL_LIST_MAX_PAGE_SIZE } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Plus } from 'lucide-react';
 import { useState } from 'react';
@@ -43,7 +44,12 @@ export function TemplatesPage() {
     enabled: isAdmin,
   });
   const mcpConfigs = useQuery({ queryKey: ['mcp-configs'], queryFn: () => api<McpConfigInfo[]>('GET', '/api/mcp-configs'), enabled: isAdmin });
-  const envs = useQuery({ queryKey: ['envs'], queryFn: () => api<EnvironmentInfo[]>('GET', '/api/envs'), enabled: isAdmin });
+  // 选择器要全量：一次取满上限（环境数远不到 1000）
+  const envs = useQuery({
+    queryKey: ['envs-all'],
+    queryFn: () => api<EnvListResult>('GET', `/api/envs?pageSize=${ENV_LIST_MAX_PAGE_SIZE}`),
+    enabled: isAdmin,
+  });
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['templates'] });
 
@@ -181,7 +187,7 @@ export function TemplatesPage() {
           template={editingItems}
           skills={skills.data?.items ?? []}
           mcpConfigs={mcpConfigs.data ?? []}
-          envs={envs.data ?? []}
+          envs={envs.data?.items ?? []}
           pending={setItems.isPending}
           onClose={() => setEditingItems(null)}
           onSubmit={(items) => setItems.mutate({ id: editingItems.id, items })}

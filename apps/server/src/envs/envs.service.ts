@@ -1,15 +1,19 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { and, asc, count, eq, gt, inArray, isNull, or } from 'drizzle-orm';
+import { and, asc, count, eq, gt, inArray, isNotNull, isNull, or } from 'drizzle-orm';
 import type {
   CreateEnvironmentRequest,
   CreateGrantRequest,
+  EnvironmentDbAssignment,
   EnvironmentInfo,
+  EnvListQuery,
+  EnvListResult,
   PullValuesResponse,
   UpdateEnvironmentRequest,
   UpsertVariableRequest,
@@ -19,7 +23,7 @@ import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
 import { decryptSecret, encryptSecret } from '../common/crypto';
 import { DB, type Db } from '../db/db.module';
-import { environments, envVariables, users, variableGrants } from '../db/schema';
+import { dbAssignments, dbInstances, environments, envVariables, users, variableGrants } from '../db/schema';
 
 type EnvRow = typeof environments.$inferSelect;
 type VarRow = typeof envVariables.$inferSelect;
@@ -74,18 +78,45 @@ export class EnvsService {
 
   // ---------- 环境 CRUD ----------
 
-  async listEnvironments(): Promise<EnvironmentInfo[]> {
+  /**
+   * 凭证环境 → 生成它的数据库分配（决策 39）。关系存在 db_assignment.environment_id 上，
+   * 这里反查一次拿整张映射，清单与详情共用；分配记录已不存在（实例被删级联）时查不到，环境侧显示为 null
+   */
+  private async dbAssignmentLinks(): Promise<Map<string, EnvironmentDbAssignment>> {
+    const rows = await this.db
+      .select({
+        environmentId: dbAssignments.environmentId,
+        id: dbAssignments.id,
+        dbName: dbAssignments.dbName,
+        status: dbAssignments.status,
+        instanceName: dbInstances.name,
+      })
+      .from(dbAssignments)
+      .leftJoin(dbInstances, eq(dbInstances.id, dbAssignments.instanceId))
+      .where(isNotNull(dbAssignments.environmentId));
+    const links = new Map<string, EnvironmentDbAssignment>();
+    for (const r of rows) {
+      if (!r.environmentId || links.has(r.environmentId)) continue;
+      links.set(r.environmentId, { id: r.id, dbName: r.dbName, status: r.status, instanceName: r.instanceName ?? '(已删除)' });
+    }
+    return links;
+  }
+
+  /** 全部环境（不分页、不筛选，按 slug 排序）：清单在它上面筛，catalog 直接用 */
+  private async loadEnvironments(): Promise<EnvironmentInfo[]> {
     const rows = await this.db
       .select({
         env: environments,
         ownerName: users.name,
+        ownerEmail: users.email,
         variableCount: count(envVariables.id),
       })
       .from(environments)
       .innerJoin(users, eq(environments.ownerId, users.id))
       .leftJoin(envVariables, eq(envVariables.environmentId, environments.id))
-      .groupBy(environments.id, users.name)
+      .groupBy(environments.id, users.name, users.email)
       .orderBy(asc(environments.slug));
+    const links = await this.dbAssignmentLinks();
     return rows.map((r) => ({
       id: r.env.id,
       slug: r.env.slug,
@@ -93,9 +124,62 @@ export class EnvsService {
       description: r.env.description,
       ownerId: r.env.ownerId,
       ownerName: r.ownerName,
+      ownerEmail: r.ownerEmail,
+      source: r.env.source,
+      dbAssignment: links.get(r.env.id) ?? null,
       variableCount: Number(r.variableCount),
       createdAt: r.env.createdAt.toISOString(),
     }));
+  }
+
+  /**
+   * 清单：关键词 → 计数 → 来源筛选 → 分页（决策 39）。
+   * 先按关键词收窄、在这个集合上数两类来源各几条、最后才按 source 过滤——页签上的数字要回答
+   * 「在当前搜索下切到那个页签会有几条」，source 自己不能参与计数（与 Skill 清单的 scope 计数同一思路）
+   */
+  async listEnvironments(query: EnvListQuery): Promise<EnvListResult> {
+    const all = await this.loadEnvironments();
+    const keyword = query.q?.toLowerCase() ?? '';
+    const narrowed = keyword
+      ? all.filter((e) =>
+          `${e.slug}\n${e.name}\n${e.description}\n${e.dbAssignment?.dbName ?? ''}`.toLowerCase().includes(keyword),
+        )
+      : all;
+    const counts = { manual: 0, db_assignment: 0 };
+    for (const e of narrowed) counts[e.source] += 1;
+    const filtered = query.source === 'all' ? narrowed : narrowed.filter((e) => e.source === query.source);
+    const start = (query.page - 1) * query.pageSize;
+    return {
+      items: filtered.slice(start, start + query.pageSize),
+      total: filtered.length,
+      page: query.page,
+      pageSize: query.pageSize,
+      counts,
+    };
+  }
+
+  /** 单个环境的信息（详情页用；清单已分页，靠翻清单找一条不可靠） */
+  async getEnvironment(slug: string): Promise<EnvironmentInfo> {
+    const env = await this.getEnvBySlug(slug);
+    const [owner] = await this.db.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, env.ownerId));
+    const [{ variableCount }] = await this.db
+      .select({ variableCount: count(envVariables.id) })
+      .from(envVariables)
+      .where(eq(envVariables.environmentId, env.id));
+    const links = await this.dbAssignmentLinks();
+    return {
+      id: env.id,
+      slug: env.slug,
+      name: env.name,
+      description: env.description,
+      ownerId: env.ownerId,
+      ownerName: owner?.name ?? '(已删除)',
+      ownerEmail: owner?.email ?? '',
+      source: env.source,
+      dbAssignment: links.get(env.id) ?? null,
+      variableCount: Number(variableCount),
+      createdAt: env.createdAt.toISOString(),
+    };
   }
 
   async createEnvironment(user: AuthUser, dto: CreateEnvironmentRequest) {
@@ -177,7 +261,7 @@ export class EnvsService {
 
   /** 全量清单（跨环境），供 CLI / MCP 认路 */
   async catalog(user: AuthUser) {
-    const envs = await this.listEnvironments();
+    const envs = await this.loadEnvironments();
     const result = [];
     for (const env of envs) {
       const variables = await this.listVariables(user, env.slug);
@@ -197,43 +281,59 @@ export class EnvsService {
         .limit(1)
     )[0];
     // 敏感 → 只存加密列；非敏感 → 只存明文列（切换敏感性时清掉另一列）
-    const valueColumns = dto.secret
-      ? { valueEncrypted: encryptSecret(dto.value), valuePlain: null }
-      : { valueEncrypted: null, valuePlain: dto.value };
+    const valueColumns = (secret: boolean, value: string) =>
+      secret ? { valueEncrypted: encryptSecret(value), valuePlain: null } : { valueEncrypted: null, valuePlain: value };
     let row: VarRow;
     if (existing) {
+      // 值缺省 = 保持当前值，只改备注 / 可见性 / 敏感标记，版本不动（版本只跟着值走）；
+      // 敏感标记翻转时得把现值搬到另一列，所以要先解出来再按新标记落盘
+      const valueChanged = dto.value !== undefined;
+      const columns =
+        !valueChanged && dto.secret === existing.secret
+          ? {}
+          : valueColumns(dto.secret, dto.value ?? this.readValue(existing));
       [row] = await this.db
         .update(envVariables)
         .set({
-          ...valueColumns,
+          ...columns,
           secret: dto.secret,
           description: dto.description,
           visibleWithoutPermission: dto.visibleWithoutPermission,
-          version: existing.version + 1,
+          version: valueChanged ? existing.version + 1 : existing.version,
           updatedAt: new Date(),
         })
         .where(eq(envVariables.id, existing.id))
         .returning();
+      await this.audit.record({
+        actorId: user.id,
+        action: 'variable.upserted',
+        targetType: 'env_variable',
+        targetId: row.id,
+        meta: { environment: env.slug, key: dto.key, version: row.version, valueChanged },
+      });
     } else {
+      if (dto.value === undefined) {
+        throw new BadRequestException({ error: 'VALIDATION_FAILED', message: `变量 ${dto.key} 不存在，新增变量必须提供值` });
+      }
       [row] = await this.db
         .insert(envVariables)
         .values({
           environmentId: env.id,
           key: dto.key,
-          ...valueColumns,
+          ...valueColumns(dto.secret, dto.value),
           secret: dto.secret,
           description: dto.description,
           visibleWithoutPermission: dto.visibleWithoutPermission,
         })
         .returning();
+      await this.audit.record({
+        actorId: user.id,
+        action: 'variable.upserted',
+        targetType: 'env_variable',
+        targetId: row.id,
+        meta: { environment: env.slug, key: dto.key, version: row.version, valueChanged: true },
+      });
     }
-    await this.audit.record({
-      actorId: user.id,
-      action: 'variable.upserted',
-      targetType: 'env_variable',
-      targetId: row.id,
-      meta: { environment: env.slug, key: dto.key, version: row.version },
-    });
     return this.toMeta(row, env.slug, true);
   }
 

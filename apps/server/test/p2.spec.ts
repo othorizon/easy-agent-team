@@ -205,7 +205,7 @@ describe('MCP 配置分发', () => {
 
   it('授权后引用解析为实际值', async () => {
     const envs = await api('GET', '/api/envs', { token: adminToken });
-    const env = envs.body.find((e: { slug: string }) => e.slug === 'mcp-env');
+    const env = envs.body.items.find((e: { slug: string }) => e.slug === 'mcp-env');
     const users = await api('GET', '/api/users', { token: adminToken });
     const zhang = users.body.find((u: { email: string }) => u.email === 'zhang@test.dev');
     await api('POST', '/api/envs/mcp-env/grants', {
@@ -287,14 +287,51 @@ describe('数据库账号分配（真实建库）', () => {
     expect(byKey.DB_NAME.value).toBe('proj_wang');
     expect(byKey.DB_PASSWORD.secret).toBe(true);
     expect(byKey.DB_PASSWORD.value).toBeNull();
-    // 其他成员未授权：非敏感≠免授权——清单不含值，拉取被拒
+    // 其他成员未授权：整组默认对未授权成员**完全隐藏**（决策 39）——清单里根本不出现，拉取照样被拒
     const otherVars = await api('GET', '/api/envs/db-proj-wang/variables', { token: m2Token });
-    const otherHost = otherVars.body.find((v: { key: string }) => v.key === 'DB_HOST');
-    expect(otherHost.value).toBeNull();
+    expect(otherVars.body).toEqual([]);
     const hostPull = await api('POST', '/api/envs/db-proj-wang/values', { token: m2Token, payload: { keys: ['DB_HOST'] } });
     expect(hostPull.body.denied[0].error).toBe('PERMISSION_REQUIRED');
     const other = await api('POST', '/api/envs/db-proj-wang/values', { token: m2Token, payload: { keys: ['DB_PASSWORD'] } });
     expect(other.body.denied[0].error).toBe('PERMISSION_REQUIRED');
+    // Owner 自己清单照常齐全
+    expect(vars.body).toHaveLength(5);
+    expect(vars.body.every((v: { visibleWithoutPermission: boolean }) => v.visibleWithoutPermission === false)).toBe(true);
+  });
+
+  it('凭证环境与分配记录互相回指（决策 39）：环境详情带 dbAssignment，分配详情带环境，清单可按来源筛', async () => {
+    const envDetail = await api('GET', '/api/envs/db-proj-wang', { token: m1Token });
+    expect(envDetail.status).toBe(200);
+    expect(envDetail.body).toMatchObject({
+      source: 'db_assignment',
+      ownerName: '小王',
+      dbAssignment: { id: assignmentId, dbName: 'proj_wang', instanceName: '本地测试 PG', status: 'active' },
+    });
+    const dbOnly = await api('GET', '/api/envs?source=db_assignment', { token: m2Token });
+    expect(dbOnly.body.items.map((e: { slug: string }) => e.slug)).toContain('db-proj-wang');
+    expect(dbOnly.body.counts.db_assignment).toBeGreaterThanOrEqual(1);
+    const manualOnly = await api('GET', '/api/envs?source=manual', { token: m2Token });
+    expect(manualOnly.body.items.map((e: { slug: string }) => e.slug)).not.toContain('db-proj-wang');
+    // 关键词能按库名搜到凭证环境
+    const byDbName = await api('GET', '/api/envs?q=proj_wang', { token: m2Token });
+    expect(byDbName.body.items.map((e: { slug: string }) => e.slug)).toContain('db-proj-wang');
+
+    // 分配详情：申请人与管理员可看，其他成员 403
+    const detail = await api('GET', `/api/db/assignments/${assignmentId}`, { token: m1Token });
+    expect(detail.status).toBe(200);
+    expect(detail.body).toMatchObject({
+      status: 'active',
+      dbUser: 'u_proj_wang',
+      instanceHost: '127.0.0.1',
+      instancePort: 5433,
+      environmentSlug: 'db-proj-wang',
+      environmentId: envDetail.body.id,
+      decidedByName: '管理员',
+      requesterName: '小王',
+    });
+    expect((await api('GET', `/api/db/assignments/${assignmentId}`, { token: m2Token })).status).toBe(403);
+    expect((await api('GET', `/api/db/assignments/${assignmentId}`, { token: adminToken })).status).toBe(200);
+    expect((await api('GET', '/api/db/assignments/00000000-0000-0000-0000-000000000000', { token: adminToken })).status).toBe(404);
   });
 
   it('新账号可以真实连接自己的库并建表读写', async () => {

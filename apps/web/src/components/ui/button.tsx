@@ -50,8 +50,15 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         disabled={disabled || loading}
         {...props}
       >
-        {loading && <Loader2 className="animate-spin" />}
-        {children}
+        {/* asChild 时 Slot 只接受唯一一个子元素：`loading && …` 求值出的 undefined 也算一个节点，会让它报错，所以原样透传 */}
+        {asChild ? (
+          children
+        ) : (
+          <>
+            {loading && <Loader2 className="animate-spin" />}
+            {children}
+          </>
+        )}
       </Comp>
     );
   },

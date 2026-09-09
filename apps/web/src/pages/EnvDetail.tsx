@@ -1,6 +1,14 @@
-import type { EnvironmentInfo, GrantInfo, UpdateEnvironmentRequest, UpsertVariableRequest, VariableMeta } from '@eat/shared';
+import type {
+  EnvironmentInfo,
+  GrantInfo,
+  PullValuesResponse,
+  UpdateEnvironmentRequest,
+  UpsertVariableRequest,
+  UserPublic,
+  VariableMeta,
+} from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Pencil, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, Database, Eye, EyeOff, Loader2, Pencil, Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -21,7 +29,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { TableSkeleton } from '../components/ui/skeleton';
 import { Switch } from '../components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
-import { formatDateTime } from '../lib/utils';
+import { cn, formatDateTime } from '../lib/utils';
+import { DB_STATUS_BADGE } from './db-shared';
 
 interface UserRow {
   id: string;
@@ -37,41 +46,51 @@ export function EnvDetailPage() {
   const [editing, setEditing] = useState<VariableMeta | 'new' | null>(null);
   const [editingEnv, setEditingEnv] = useState(false);
   const [granting, setGranting] = useState(false);
+  // 敏感值点眼睛后的明文，按 key 记；离开页面即忘
+  const [revealed, setRevealed] = useState<Record<string, string>>({});
+
+  const envQuery = useQuery({
+    queryKey: ['env', slug],
+    queryFn: () => api<EnvironmentInfo>('GET', `/api/envs/${slug}`),
+  });
+  const env = envQuery.data;
+  // 管理权与服务端 canManage 同口径：Owner 或管理员
+  const canManage = !!me && !!env && (me.role === 'admin' || env.ownerId === me.id);
 
   const variables = useQuery({
     queryKey: ['vars', slug],
     queryFn: () => api<VariableMeta[]>('GET', `/api/envs/${slug}/variables`),
   });
-  // 授权列表仅 Owner/管理员可查；403 时静默隐藏该区块
   const grants = useQuery({
     queryKey: ['grants', slug],
     queryFn: () => api<GrantInfo[]>('GET', `/api/envs/${slug}/grants`),
+    enabled: canManage,
     retry: false,
   });
   const users = useQuery({
     queryKey: ['users'],
     queryFn: () => api<UserRow[]>('GET', '/api/users'),
+    enabled: canManage,
   });
-  // 环境信息（名称/备注/id）：从环境列表里找
-  const envs = useQuery({
-    queryKey: ['envs'],
-    queryFn: () => api<EnvironmentInfo[]>('GET', '/api/envs'),
-  });
-
-  const canManage = !grants.isError;
-  const env = envs.data?.find((e) => e.slug === slug);
-  const envId = env?.id;
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['vars', slug] });
     void queryClient.invalidateQueries({ queryKey: ['grants', slug] });
+    void queryClient.invalidateQueries({ queryKey: ['env', slug] });
+    void queryClient.invalidateQueries({ queryKey: ['envs'] });
   };
 
   const upsert = useMutation({
     mutationFn: (v: UpsertVariableRequest) => api('POST', `/api/envs/${slug}/variables`, v),
-    onSuccess: () => {
+    onSuccess: (_data, v) => {
       toast.success('已保存');
       setEditing(null);
+      // 值可能换了，已展开的明文作废
+      setRevealed((prev) => {
+        const next = { ...prev };
+        delete next[v.key];
+        return next;
+      });
       invalidate();
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '保存失败'),
@@ -86,12 +105,26 @@ export function EnvDetailPage() {
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '删除失败'),
   });
 
+  /** 敏感值走正式的拉取通道（服务端落 secret.read 审计），不另开后门 */
+  const reveal = useMutation({
+    mutationFn: (key: string) => api<PullValuesResponse>('POST', `/api/envs/${slug}/values`, { keys: [key] }),
+    onSuccess: (res, key) => {
+      const value = res.values[key];
+      if (value === undefined) {
+        toast.error(res.denied[0]?.message ?? '无法读取该值');
+        return;
+      }
+      setRevealed((prev) => ({ ...prev, [key]: value }));
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '读取失败'),
+  });
+
   const createGrant = useMutation({
     mutationFn: (v: { userId: string; variableId?: string; expiresAt?: string }) =>
       api('POST', `/api/envs/${slug}/grants`, {
         userId: v.userId,
         variableId: v.variableId || undefined,
-        ...(v.variableId ? {} : { environmentId: envId }),
+        ...(v.variableId ? {} : { environmentId: env?.id }),
         expiresAt: v.expiresAt,
       }),
     onSuccess: () => {
@@ -116,7 +149,7 @@ export function EnvDetailPage() {
     onSuccess: () => {
       toast.success('环境已更新');
       setEditingEnv(false);
-      void queryClient.invalidateQueries({ queryKey: ['envs'] });
+      invalidate();
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '更新失败'),
   });
@@ -126,16 +159,18 @@ export function EnvDetailPage() {
     onSuccess: () => {
       toast.success('环境已删除');
       void queryClient.invalidateQueries({ queryKey: ['envs'] });
-      navigate('/');
+      navigate(env?.source === 'db_assignment' ? '/?tab=database' : '/');
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '删除失败'),
   });
+
+  const isDbEnv = env?.source === 'db_assignment';
 
   return (
     <div className="space-y-5">
       <div>
         <Link
-          to="/"
+          to={isDbEnv ? '/?tab=database' : '/'}
           className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
           <ArrowLeft className="size-3.5" />
@@ -146,9 +181,22 @@ export function EnvDetailPage() {
             <span className="inline-flex flex-wrap items-center gap-2">
               环境 <InlineCode className="text-lg">{slug}</InlineCode>
               {env?.name && <span>{env.name}</span>}
+              {isDbEnv && (
+                <Badge variant="secondary">
+                  <Database />
+                  数据库凭证
+                </Badge>
+              )}
             </span>
           }
-          description={env?.description || undefined}
+          description={
+            env && (env.description || isDbEnv) ? (
+              <>
+                {env.description}
+                {isDbEnv && <DbSourceLine env={env} />}
+              </>
+            ) : undefined
+          }
           actions={
             canManage && (
               <>
@@ -158,7 +206,11 @@ export function EnvDetailPage() {
                 </Button>
                 <Confirm
                   title={`删除环境 ${slug}？`}
-                  description="将同时删除环境下的全部变量与授权，此操作不可恢复。"
+                  description={
+                    isDbEnv
+                      ? '这是数据库分配生成的凭证环境：删除后密码无法找回，分配记录会失去凭证。如果是想回收这个库，请到「数据库」页删除分配记录。'
+                      : '将同时删除环境下的全部变量与授权，此操作不可恢复。'
+                  }
                   confirmText="删除"
                   onConfirm={() => removeEnv.mutate()}
                 >
@@ -189,7 +241,7 @@ export function EnvDetailPage() {
                 <TableRow>
                   <TableHead>Key</TableHead>
                   <TableHead className="hidden md:table-cell">备注</TableHead>
-                  <TableHead className="w-40">值</TableHead>
+                  <TableHead className="w-44">值</TableHead>
                   <TableHead className="w-24">权限</TableHead>
                   <TableHead className="hidden w-36 lg:table-cell">对未授权成员</TableHead>
                   <TableHead className="hidden w-16 sm:table-cell">版本</TableHead>
@@ -211,16 +263,20 @@ export function EnvDetailPage() {
                       {row.description}
                     </TableCell>
                     <TableCell>
-                      {row.value != null ? (
-                        <span className="inline-flex max-w-40 items-center gap-1">
-                          <InlineCode className="truncate" title={row.value}>
-                            {row.value}
-                          </InlineCode>
-                          <CopyButton text={row.value} />
-                        </span>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">••••••</span>
-                      )}
+                      <ValueCell
+                        row={row}
+                        revealed={revealed[row.key]}
+                        canReveal={canManage && row.hasAccess}
+                        revealing={reveal.isPending && reveal.variables === row.key}
+                        onReveal={() => reveal.mutate(row.key)}
+                        onHide={() =>
+                          setRevealed((prev) => {
+                            const next = { ...prev };
+                            delete next[row.key];
+                            return next;
+                          })
+                        }
+                      />
                     </TableCell>
                     <TableCell>
                       {row.hasAccess ? <Badge variant="success">可读取</Badge> : <Badge variant="outline">无权限</Badge>}
@@ -257,6 +313,8 @@ export function EnvDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      {env && <OwnerCard env={env} me={me} canManage={canManage} />}
 
       {canManage && (
         <Card>
@@ -340,6 +398,168 @@ export function EnvDetailPage() {
   );
 }
 
+/** 页头下的来源行：这组凭证是哪个库的、在哪台实例、分配现在什么状态，点过去就是分配详情（决策 39） */
+function DbSourceLine({ env }: { env: EnvironmentInfo }) {
+  const link = env.dbAssignment;
+  return (
+    <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+      <Database className="size-3.5 shrink-0" aria-hidden />
+      {link ? (
+        <>
+          <span>
+            数据库分配自动生成 · 库 <InlineCode>{link.dbName}</InlineCode> · {link.instanceName}
+          </span>
+          {DB_STATUS_BADGE[link.status]}
+          <Link to={`/db/${link.id}`} className="inline-flex items-center gap-0.5 text-primary underline-offset-3 hover:underline">
+            查看分配
+            <ArrowRight className="size-3" />
+          </Link>
+        </>
+      ) : (
+        <span>数据库分配自动生成，关联的分配记录已不存在</span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * 值列：非敏感直接明文；敏感打码，有管理权者点眼睛临时查看——走的是正式拉取接口，
+ * 服务端照常记 secret.read，和在终端里 eat env pull 一样受审计。
+ */
+function ValueCell({
+  row,
+  revealed,
+  canReveal,
+  revealing,
+  onReveal,
+  onHide,
+}: {
+  row: VariableMeta;
+  revealed: string | undefined;
+  canReveal: boolean;
+  revealing: boolean;
+  onReveal: () => void;
+  onHide: () => void;
+}) {
+  const shown = row.value ?? revealed;
+  if (shown != null) {
+    return (
+      <span className="inline-flex max-w-44 items-center gap-1">
+        <InlineCode className="truncate" title={shown}>
+          {shown}
+        </InlineCode>
+        <CopyButton text={shown} />
+        {row.value == null && (
+          <IconButton label="隐藏值" onClick={onHide}>
+            <EyeOff className="size-3.5" />
+          </IconButton>
+        )}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="text-xs tracking-widest text-muted-foreground">••••••</span>
+      {canReveal && (
+        <IconButton label="查看值（读取会记入审计）" onClick={onReveal} disabled={revealing}>
+          {revealing ? <Loader2 className="size-3.5 animate-spin" /> : <Eye className="size-3.5" />}
+        </IconButton>
+      )}
+    </span>
+  );
+}
+
+function IconButton({
+  label,
+  onClick,
+  disabled,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+      className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-60"
+    >
+      {children}
+    </button>
+  );
+}
+
+/**
+ * Owner 卡片：谁对这个环境负责、能做什么，摆在授权名单前面——授权名单是「谁被允许读」，
+ * 而 Owner 的权限不来自授权、不在名单里，不说清楚的话名单看起来像是漏了自己。
+ */
+function OwnerCard({ env, me, canManage }: { env: EnvironmentInfo; me: UserPublic | null; canManage: boolean }) {
+  const isOwner = me?.id === env.ownerId;
+  const isAdmin = me?.role === 'admin';
+  const abilities = ['读取全部变量的值，含敏感值', '新增、更新、删除变量', '授予或撤销其他成员的读取权限'];
+  return (
+    <Card>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <span
+              aria-hidden
+              className={cn(
+                'flex size-10 shrink-0 items-center justify-center rounded-full text-base font-semibold',
+                isOwner ? 'bg-primary text-primary-foreground' : 'bg-primary/10 text-primary',
+              )}
+            >
+              {env.ownerName.slice(0, 1)}
+            </span>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-[15px] leading-tight font-semibold">
+                <span className="truncate">{env.ownerName}</span>
+                {isOwner && <Badge>我</Badge>}
+              </div>
+              <div className="mt-0.5 truncate text-xs text-muted-foreground">{env.ownerEmail}</div>
+            </div>
+          </div>
+          <Badge variant="secondary" className="gap-1.5 px-2.5 py-1 text-xs">
+            <ShieldCheck className="size-3.5" />
+            环境 Owner
+          </Badge>
+        </div>
+        <div className="space-y-2.5 text-sm">
+          <p className="leading-relaxed text-foreground/80">
+            Owner 对整个环境拥有完整的读写权限，不需要出现在下面的授权名单里；平台管理员拥有同样的权限。
+          </p>
+          <ul className="flex flex-wrap gap-x-5 gap-y-1.5 text-[13px] text-muted-foreground">
+            {abilities.map((a) => (
+              <li key={a} className="inline-flex items-center gap-1.5">
+                <Check className="size-3.5 text-success" aria-hidden />
+                {a}
+              </li>
+            ))}
+          </ul>
+          {env.source === 'db_assignment' && (
+            <p className="text-[13px] leading-relaxed text-muted-foreground">
+              这个环境随数据库分配自动生成，申请人即 Owner；想让同事一起用这个库，把整个环境授权给对方即可。
+            </p>
+          )}
+          {!canManage && (
+            <p className="text-[13px] leading-relaxed text-muted-foreground">
+              需要读取这里的变量？在清单里对目标变量发起权限申请，由 Owner 或管理员审批。
+            </p>
+          )}
+          {isAdmin && !isOwner && (
+            <p className="text-[13px] leading-relaxed text-muted-foreground">你以管理员身份查看，权限与 Owner 相同。</p>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function EditEnvDialog({
   env,
   pending,
@@ -409,13 +629,24 @@ function VariableDialog({
         },
   });
   const secret = watch('secret');
+  // 更新时值留空 = 保持当前值（只改备注 / 可见性 / 敏感标记，版本不动）；非敏感变量带出的旧值没改也当没改
+  const submit = (v: VariableFormValues) => {
+    const unchanged = !isNew && (v.value === '' || v.value === editing.value);
+    onSubmit({
+      key: v.key,
+      description: v.description,
+      visibleWithoutPermission: v.visibleWithoutPermission,
+      secret: v.secret,
+      ...(unchanged ? {} : { value: v.value }),
+    });
+  };
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{isNew ? '新增变量' : `更新 ${editing.key}`}</DialogTitle>
         </DialogHeader>
-        <form className="flex flex-col gap-4" onSubmit={handleSubmit(onSubmit)}>
+        <form className="flex flex-col gap-4" onSubmit={handleSubmit(submit)}>
           <Field label="Key" htmlFor="var-key" required error={errors.key?.message}>
             <Input
               id="var-key"
@@ -439,23 +670,26 @@ function VariableDialog({
           <Field
             label={isNew ? '值' : '新值'}
             htmlFor="var-value"
-            required
+            required={isNew}
             error={errors.value?.message}
             hint={
-              secret
-                ? isNew
+              isNew
+                ? secret
                   ? '值会加密存储，读取受审计'
-                  : '更新会使旧值失效并递增版本'
-                : '非敏感配置（如服务地址、端口），明文存储'
+                  : '非敏感配置（如服务地址、端口），明文存储'
+                : secret
+                  ? '留空则保持当前值不变；填写新值会使旧值失效并递增版本'
+                  : '留空或不改则保持当前值不变；改了才递增版本'
             }
           >
             <Input
               id="var-value"
               type={secret ? 'password' : 'text'}
               autoComplete={secret ? 'new-password' : 'off'}
+              placeholder={isNew ? undefined : '不填则保持当前值'}
               className={secret ? undefined : 'font-mono'}
               aria-invalid={!!errors.value}
-              {...register('value', { required: '请输入值' })}
+              {...register('value', { required: isNew ? '请输入值' : false })}
             />
           </Field>
           <Field label="备注" htmlFor="var-desc" hint="AI 会读取，请写清楚这个变量的作用">

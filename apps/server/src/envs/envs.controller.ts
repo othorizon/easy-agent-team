@@ -1,10 +1,11 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import {
   createAccessRequestSchema,
   createEnvironmentSchema,
   createGrantSchema,
   decideAccessRequestSchema,
+  envListQuerySchema,
   pullValuesRequestSchema,
   updateEnvironmentSchema,
   upsertVariableSchema,
@@ -12,6 +13,7 @@ import {
   type CreateEnvironmentRequest,
   type CreateGrantRequest,
   type DecideAccessRequest,
+  type EnvListQuery,
   type PullValuesRequest,
   type UpdateEnvironmentRequest,
   type UpsertVariableRequest,
@@ -30,9 +32,15 @@ export class EnvsController {
 
   // ---------- 环境 ----------
 
+  /** 清单：分页信封 + 关键词 / 来源筛选（决策 39） */
   @Get('envs')
-  listEnvironments() {
-    return this.envs.listEnvironments();
+  listEnvironments(@Query(new ZodValidationPipe(envListQuerySchema)) query: EnvListQuery) {
+    return this.envs.listEnvironments(query);
+  }
+
+  @Get('envs/:slug')
+  getEnvironment(@Param('slug') slug: string) {
+    return this.envs.getEnvironment(slug);
   }
 
   @Post('envs')

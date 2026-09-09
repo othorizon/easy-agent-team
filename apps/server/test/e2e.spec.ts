@@ -246,7 +246,7 @@ describe('授权有效期与环境级授权', () => {
 
   it('环境级授权覆盖全部变量', async () => {
     const envs = await api('GET', '/api/envs', { token: adminToken });
-    const env = envs.body.find((e: { slug: string }) => e.slug === 'internal-services');
+    const env = envs.body.items.find((e: { slug: string }) => e.slug === 'internal-services');
     await api('POST', '/api/envs/internal-services/grants', {
       token: adminToken,
       payload: { userId: memberId, environmentId: env.id },
@@ -361,7 +361,7 @@ describe('非敏感变量（明文存储；读值授权模型不变）', () => {
 
   it('授权后成员可见明文值并可拉取；非敏感值读取不落 secret.read 审计', async () => {
     const envs = await api('GET', '/api/envs', { token: adminToken });
-    const env = envs.body.find((e: { slug: string }) => e.slug === 'plain-env');
+    const env = envs.body.items.find((e: { slug: string }) => e.slug === 'plain-env');
     await api('POST', '/api/envs/plain-env/grants', {
       token: adminToken,
       payload: { userId: memberId, environmentId: env.id },
@@ -423,7 +423,7 @@ describe('环境编辑与删除', () => {
     });
     expect(r.status).toBe(200);
     const envs = await api('GET', '/api/envs', { token: memberToken });
-    const env = envs.body.find((e: { slug: string }) => e.slug === 'plain-env');
+    const env = envs.body.items.find((e: { slug: string }) => e.slug === 'plain-env');
     expect(env.name).toBe('公共配置（新）');
     expect(env.description).toBe('改过的备注');
   });
@@ -431,7 +431,99 @@ describe('环境编辑与删除', () => {
   it('删除环境后从列表消失，变量一并删除', async () => {
     expect((await api('DELETE', '/api/envs/plain-env', { token: adminToken })).status).toBe(200);
     const envs = await api('GET', '/api/envs', { token: adminToken });
-    expect(envs.body.map((e: { slug: string }) => e.slug)).not.toContain('plain-env');
+    expect(envs.body.items.map((e: { slug: string }) => e.slug)).not.toContain('plain-env');
     expect((await api('GET', '/api/envs/plain-env/variables', { token: adminToken })).status).toBe(404);
+  });
+});
+
+describe('环境清单分页 / 筛选、单个环境详情、更新变量不带值（决策 39）', () => {
+  it('GET /api/envs 返回分页信封：关键词与来源筛选生效，counts 只随关键词变、不随 source 变', async () => {
+    for (const i of [1, 2, 3]) {
+      await api('POST', '/api/envs', {
+        token: adminToken,
+        payload: { slug: `page-env-${i}`, name: `分页环境 ${i}`, description: '分页用' },
+      });
+    }
+    const all = await api('GET', '/api/envs', { token: memberToken });
+    expect(all.status).toBe(200);
+    expect(all.body).toMatchObject({ page: 1, pageSize: 20 });
+    expect(all.body.total).toBeGreaterThanOrEqual(3);
+    // 本套用例没有数据库分配，全量清单就是全部手工环境
+    expect(all.body.counts).toEqual({ manual: all.body.total, db_assignment: 0 });
+
+    const paged = await api('GET', '/api/envs?q=page-env&page=2&pageSize=2', { token: memberToken });
+    expect(paged.body.total).toBe(3);
+    expect(paged.body.items).toHaveLength(1);
+    expect(paged.body.items[0].slug).toBe('page-env-3');
+    expect(paged.body.counts).toEqual({ manual: 3, db_assignment: 0 });
+
+    const dbOnly = await api('GET', '/api/envs?q=page-env&source=db_assignment', { token: memberToken });
+    expect(dbOnly.body.items).toEqual([]);
+    expect(dbOnly.body.total).toBe(0);
+    expect(dbOnly.body.counts.manual).toBe(3);
+
+    expect((await api('GET', '/api/envs?pageSize=1001', { token: memberToken })).status).toBe(400);
+    expect((await api('GET', '/api/envs?source=weird', { token: memberToken })).status).toBe(400);
+  });
+
+  it('GET /api/envs/:slug 返回单个环境（Owner、来源、变量数）；不存在 404', async () => {
+    const r = await api('GET', '/api/envs/page-env-1', { token: memberToken });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({
+      slug: 'page-env-1',
+      name: '分页环境 1',
+      ownerName: '管理员',
+      ownerEmail: 'admin@test.dev',
+      source: 'manual',
+      dbAssignment: null,
+      variableCount: 0,
+    });
+    expect((await api('GET', '/api/envs/no-such-env', { token: memberToken })).status).toBe(404);
+  });
+
+  it('更新敏感变量不带值：保持当前值、版本不变，只改备注 / 可见性 / 敏感标记；新增不带值被拒', async () => {
+    const created = await api('POST', '/api/envs/page-env-1/variables', {
+      token: adminToken,
+      payload: { key: 'KEEP_ME', value: 'v1-secret', description: '原备注' },
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.version).toBe(1);
+
+    const updated = await api('POST', '/api/envs/page-env-1/variables', {
+      token: adminToken,
+      payload: { key: 'KEEP_ME', description: '新备注', visibleWithoutPermission: false },
+    });
+    expect(updated.status).toBe(201);
+    expect(updated.body).toMatchObject({ version: 1, description: '新备注', visibleWithoutPermission: false, secret: true });
+    const pull = await api('POST', '/api/envs/page-env-1/values', { token: adminToken, payload: { keys: ['KEEP_ME'] } });
+    expect(pull.body.values.KEEP_ME).toBe('v1-secret');
+
+    // 翻转敏感标记也不用重填：现值从加密列搬到明文列，版本照旧不动
+    const plain = await api('POST', '/api/envs/page-env-1/variables', {
+      token: adminToken,
+      payload: { key: 'KEEP_ME', description: '新备注', secret: false },
+    });
+    expect(plain.body).toMatchObject({ version: 1, secret: false, value: 'v1-secret' });
+    const back = await api('POST', '/api/envs/page-env-1/variables', {
+      token: adminToken,
+      payload: { key: 'KEEP_ME', description: '新备注', secret: true },
+    });
+    expect(back.body).toMatchObject({ version: 1, secret: true, value: null });
+    const pullBack = await api('POST', '/api/envs/page-env-1/values', { token: adminToken, payload: { keys: ['KEEP_ME'] } });
+    expect(pullBack.body.values.KEEP_ME).toBe('v1-secret');
+
+    // 带值才递增版本
+    const bumped = await api('POST', '/api/envs/page-env-1/variables', {
+      token: adminToken,
+      payload: { key: 'KEEP_ME', value: 'v2', description: '新备注', secret: false },
+    });
+    expect(bumped.body).toMatchObject({ version: 2, value: 'v2' });
+
+    // 新增必须带值：zod 放行了缺省，服务端按「变量不存在」拒掉
+    const missing = await api('POST', '/api/envs/page-env-1/variables', {
+      token: adminToken,
+      payload: { key: 'NEW_NO_VALUE', description: 'x' },
+    });
+    expect(missing.status).toBe(400);
   });
 });

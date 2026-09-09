@@ -50,7 +50,11 @@ export type DbAssignmentStatus = z.infer<typeof dbAssignmentStatusSchema>;
 
 export const dbAssignmentInfoSchema = z.object({
   id: z.string(),
+  instanceId: z.string(),
   instanceName: z.string(),
+  /** 实例地址（成员在实例清单里本就可见），详情页展示用 */
+  instanceHost: z.string().nullable(),
+  instancePort: z.number().nullable(),
   engine: z.enum(['postgres', 'mysql']),
   dbName: z.string(),
   dbUser: z.string(),
@@ -58,9 +62,13 @@ export const dbAssignmentInfoSchema = z.object({
   status: dbAssignmentStatusSchema,
   requesterId: z.string(),
   requesterName: z.string(),
-  /** 凭证所在环境（active 后生成），用 eat env pull 获取 */
+  /** 最后一次处理（批准 / 驳回 / 禁用 / 恢复 / 删除）的管理员，未处理过为 null */
+  decidedByName: z.string().nullable(),
+  /** 凭证所在环境（active 后生成），用 eat env pull 获取；环境被删后为 null */
+  environmentId: z.string().nullable(),
   environmentSlug: z.string().nullable(),
   error: z.string().nullable(),
   createdAt: z.string(),
+  updatedAt: z.string(),
 });
 export type DbAssignmentInfo = z.infer<typeof dbAssignmentInfoSchema>;
