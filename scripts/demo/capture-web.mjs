@@ -64,8 +64,9 @@ const SHOTS = [
   { name: 'skill-detail', as: 'admin', url: '/skills/crm-data-query', wait: '统计口径' },
   { name: 'mcp', as: 'admin', url: '/mcp', wait: 'CRM 只读数据库' },
   { name: 'templates', as: 'wumin', url: '/templates', wait: '运营同学' },
-  { name: 'help', as: 'sunhao', url: '/help', wait: '40008' },
-  { name: 'help-detail', as: 'sunhao', url: '/help', wait: '40008', prepare: async (page) => {
+  { name: 'help', as: 'sunhao', url: '/help', wait: '首屏白屏' },
+  // 求助页默认只看「待回复」（决策 43），已解决的 40008 那条要挂上 status=all 才在列表里
+  { name: 'help-detail', as: 'sunhao', url: '/help?status=all', wait: '40008', prepare: async (page) => {
       await page.getByText('企业微信机器人发图片一直报 40008').first().click();
       await page.waitForTimeout(800);
     } },
@@ -96,7 +97,7 @@ const SHOTS = [
       await page.getByRole('button').first().click();
       await page.waitForTimeout(600);
     } },
-  { name: 'mobile-help-detail', as: 'sunhao', url: '/help', wait: '40008', viewport: MOBILE, prepare: async (page) => {
+  { name: 'mobile-help-detail', as: 'sunhao', url: '/help?status=all', wait: '40008', viewport: MOBILE, prepare: async (page) => {
       await page.getByText('企业微信机器人发图片一直报 40008').first().click();
       await page.waitForTimeout(800);
     } },

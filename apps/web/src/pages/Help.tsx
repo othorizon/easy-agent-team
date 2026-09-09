@@ -11,6 +11,7 @@ import { Combobox } from '../components/combobox';
 import { Empty } from '../components/empty';
 import { Field } from '../components/form';
 import { PageHeader } from '../components/page-header';
+import { Segmented } from '../components/segmented';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
@@ -22,7 +23,7 @@ import { Switch } from '../components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { formatDateTime } from '../lib/utils';
-import { useTabParam } from '../lib/use-tab-param';
+import { useQueryParams } from '../lib/use-query-params';
 
 export const HELP_STATUS_BADGE: Record<string, JSX.Element> = {
   open: <Badge variant="warning">等待回复</Badge>,
@@ -30,6 +31,15 @@ export const HELP_STATUS_BADGE: Record<string, JSX.Element> = {
   resolved: <Badge variant="success">已解决</Badge>,
   closed: <Badge variant="outline">已关闭</Badge>,
 };
+
+/**
+ * 状态筛选与页签（找我的 / 我发起的）是**两个正交的维度**：页签选方向，这里选进展。
+ * 「待回复」= 对话还等着某一方回应——`open` 等被求助者回复、`answered` 等求助者确认或追问；
+ * 与之相对的 `resolved` / `closed` 是不再需要任何人回应的终态。默认只看待回复的，
+ * 免得已经了结的历史把当下要处理的淹掉；两个页签共用同一个筛选值，切页签不重置。
+ */
+const PENDING_HINT = '还等着某一方回应的求助：等待回复 + 已回复但未确认解决';
+const isPending = (r: HelpRequestInfo) => r.status === 'open' || r.status === 'answered';
 
 type MyProfile =
   | { registered: false }
@@ -47,7 +57,8 @@ export function HelpPage() {
   const queryClient = useQueryClient();
   const [asking, setAsking] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
-  const [tab, setTab] = useTabParam('inbox');
+  // 方向（页签）与进展（筛选）两个维度都同步到 URL；等于默认值的不写进去
+  const [{ tab, status }, setParams] = useQueryParams({ tab: 'inbox', status: 'pending' });
 
   const profile = useQuery({ queryKey: ['helper-me'], queryFn: () => api<MyProfile>('GET', '/api/helpers/me') });
   const targets = useQuery({ queryKey: ['help-targets'], queryFn: () => api<HelpTargets>('GET', '/api/helpers') });
@@ -83,13 +94,34 @@ export function HelpPage() {
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '发起失败'),
   });
 
-  // tab 角标：找我的 = 等待我回复的数量；我发起的 = 有新回复待我确认的数量
+  // tab 角标 = 需要我出手的数量（找我的：等我回复；我发起的：有新回复待我确认），
+  // 与分段上的数量不是一回事——那个回答的是「切过去会有几条」，所以两者都留着。
   const inboxOpen = (inbox.data ?? []).filter((r) => r.status === 'open').length;
   const mineAnswered = (mine.data ?? []).filter((r) => r.status === 'answered').length;
 
-  function RequestTable({ rows, dir, loading, emptyText }: { rows: HelpRequestInfo[]; dir: 'in' | 'out'; loading: boolean; emptyText: React.ReactNode }) {
+  // 分段上的数量按**当前页签**算：切页签数字跟着变，切筛选数字不变
+  const activeRows = (tab === 'mine' ? mine : inbox).data;
+  const pendingCount = (activeRows ?? []).filter(isPending).length;
+
+  function RequestTable({ all, dir, loading, emptyText }: { all: HelpRequestInfo[]; dir: 'in' | 'out'; loading: boolean; emptyText: React.ReactNode }) {
+    const rows = status === 'pending' ? all.filter(isPending) : all;
     if (loading) return <TableSkeleton rows={2} />;
-    if (rows.length === 0) return <Empty text={emptyText} className="py-6" />;
+    if (rows.length === 0) {
+      // 全被筛掉和真的一条都没有是两回事：前者要给出口，后者才该讲怎么开始
+      return status === 'pending' && all.length > 0 ? (
+        <Empty
+          className="py-6"
+          text={`没有待回复的求助，${all.length} 条已了结的记录都在「全部」里。`}
+          action={
+            <Button variant="outline" size="sm" onClick={() => setParams({ status: 'all' })}>
+              查看全部
+            </Button>
+          }
+        />
+      ) : (
+        <Empty text={emptyText} className="py-6" />
+      );
+    }
     return (
       <Table>
         <TableHeader>
@@ -152,22 +184,52 @@ export function HelpPage() {
         }
       />
 
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList>
-          <TabsTrigger value="inbox">
-            找我的求助
-            {inboxOpen > 0 && <Badge className="px-1.5">{inboxOpen}</Badge>}
-          </TabsTrigger>
-          <TabsTrigger value="mine">
-            我发起的求助
-            {mineAnswered > 0 && <Badge className="px-1.5">{mineAnswered}</Badge>}
-          </TabsTrigger>
-        </TabsList>
+      <Tabs value={tab} onValueChange={(v) => setParams({ tab: v })}>
+        {/* 两个维度并排一行：左边页签选方向（实心轨道 = 导航），右边分段选进展（描边轨道 = 筛选），
+            外观不同才不会被当成同一组开关；窄屏下换行，筛选仍紧挨着清单 */}
+        <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <TabsList aria-label="求助方向">
+            <TabsTrigger value="inbox">
+              找我的求助
+              {inboxOpen > 0 && <Badge className="px-1.5">{inboxOpen}</Badge>}
+            </TabsTrigger>
+            <TabsTrigger value="mine">
+              我发起的求助
+              {mineAnswered > 0 && <Badge className="px-1.5">{mineAnswered}</Badge>}
+            </TabsTrigger>
+          </TabsList>
+          <Segmented
+            variant="outline"
+            ariaLabel="按进展筛选"
+            value={status}
+            onChange={(v) => setParams({ status: v })}
+            options={[
+              {
+                value: 'pending',
+                label: (
+                  <>
+                    <span title={PENDING_HINT}>待回复</span>
+                    {activeRows && <span className="text-xs tabular-nums opacity-60">{pendingCount}</span>}
+                  </>
+                ),
+              },
+              {
+                value: 'all',
+                label: (
+                  <>
+                    全部
+                    {activeRows && <span className="text-xs tabular-nums opacity-60">{activeRows.length}</span>}
+                  </>
+                ),
+              },
+            ]}
+          />
+        </div>
         <TabsContent value="inbox" className="mt-4">
           <Card>
             <CardContent>
               <RequestTable
-                rows={inbox.data ?? []}
+                all={inbox.data ?? []}
                 dir="in"
                 loading={inbox.isLoading}
                 emptyText="暂无找你的求助。完善「可求助登记」的能力描述，同事的 AI 才找得到你。"
@@ -179,7 +241,7 @@ export function HelpPage() {
           <Card>
             <CardContent>
               <RequestTable
-                rows={mine.data ?? []}
+                all={mine.data ?? []}
                 dir="out"
                 loading={mine.isLoading}
                 emptyText="暂无。AI 也可以通过 MCP 的 create_help_request 替你发起。"

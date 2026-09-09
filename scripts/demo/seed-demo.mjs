@@ -564,6 +564,18 @@ description: 设计稿 token 到 Tailwind 变量的映射表（草稿）。
       helperUserId: U.zhengnan,
     },
   });
+  // 1b) 待回复（另一个方向：孙浩的收件箱里也要有一条待他回复的，
+  //     否则求助页默认的「待回复」筛选下他那一栏是空的）
+  await api('POST', '/api/help-requests', {
+    token: T.wumin,
+    body: {
+      title: '活动页在安卓微信里首屏白屏 2 秒多，有什么排查方向吗？',
+      description:
+        '同一个活动页，iOS 微信里首屏 0.8s 左右，安卓微信（尤其是低端机）稳定白屏 2~3s。首屏只有一张头图和三个按钮，接口也都在首屏之后才发。',
+      tried: '1) 压过头图（1.2MB → 180KB）；2) 关掉了字体文件；3) Lighthouse 移动端跑分 71，LCP 2.4s；4) 换过 CDN 域名。',
+      helperUserId: U.sunhao,
+    },
+  });
   // 2) 已回复（多轮）
   const answered = await api('POST', '/api/help-requests', {
     token: T.sunhao,
