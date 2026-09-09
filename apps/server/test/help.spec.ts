@@ -466,6 +466,65 @@ describe('平台 AI 接入', () => {
   });
 });
 
+describe('回复删除', () => {
+  // 求助者用「路人C」：前面的频率限制用例已经把「运营B」这一小时的额度用光了
+  let delReqId: string;
+
+  it('仅本人可删（对方 403、第三人 404）；删掉被求助者的唯一回复后状态回到 open', async () => {
+    const r = await api('POST', '/api/help-requests', {
+      token: thirdToken,
+      payload: { title: '回复删除用例', description: '正文', tried: '无', helperUserId: helperId },
+    });
+    expect(r.status).toBe(201);
+    delReqId = r.body.id;
+    const replied = await api('POST', `/api/help-requests/${delReqId}/reply`, {
+      token: helperToken,
+      payload: { content: '手滑发的半句话' },
+    });
+    expect(replied.body.status).toBe('answered');
+    const msgId = replied.body.messages[0].id;
+
+    // 求助者看得见但删不掉；无关者连求助本身都看不见
+    expect((await api('DELETE', `/api/help-requests/${delReqId}/messages/${msgId}`, { token: thirdToken })).status).toBe(403);
+    expect((await api('DELETE', `/api/help-requests/${delReqId}/messages/${msgId}`, { token: requesterToken })).status).toBe(404);
+
+    const del = await api('DELETE', `/api/help-requests/${delReqId}/messages/${msgId}`, { token: helperToken });
+    expect(del.status).toBe(200);
+    expect(del.body.messages).toHaveLength(0);
+    expect(del.body.status).toBe('open'); // 没人回复过了，不该还挂着「已回复」
+  });
+
+  it('删掉求助者的追问后状态回到 answered；重复删除 404，乱写的 messageId 也 404', async () => {
+    await api('POST', `/api/help-requests/${delReqId}/reply`, { token: helperToken, payload: { content: '正式答复' } });
+    const asked = await api('POST', `/api/help-requests/${delReqId}/reply`, {
+      token: thirdToken,
+      payload: { content: '再追问一句（发重了）' },
+    });
+    expect(asked.body.status).toBe('open');
+    const followUpId = asked.body.messages[1].id;
+
+    const del = await api('DELETE', `/api/help-requests/${delReqId}/messages/${followUpId}`, { token: thirdToken });
+    expect(del.body.status).toBe('answered');
+    expect(del.body.messages).toHaveLength(1);
+
+    expect((await api('DELETE', `/api/help-requests/${delReqId}/messages/${followUpId}`, { token: thirdToken })).status).toBe(404);
+    expect((await api('DELETE', `/api/help-requests/${delReqId}/messages/not-a-uuid`, { token: thirdToken })).status).toBe(404);
+    // 别的求助里的消息 ID 不能跨着删（用管理员发起：过得了权限那关，404 才是路径里的求助 ID 在起作用）
+    const kept = del.body.messages[0].id;
+    expect((await api('DELETE', `/api/help-requests/${requestId}/messages/${kept}`, { token: adminToken })).status).toBe(404);
+  });
+
+  it('管理员可删任意回复；resolved 的求助删了回复也不回退状态', async () => {
+    const helperMsgId = (await api('GET', `/api/help-requests/${delReqId}`, { token: thirdToken })).body.messages[0].id;
+    await api('POST', `/api/help-requests/${delReqId}/resolve`, { token: thirdToken });
+
+    const del = await api('DELETE', `/api/help-requests/${delReqId}/messages/${helperMsgId}`, { token: adminToken });
+    expect(del.status).toBe(200);
+    expect(del.body.messages).toHaveLength(0);
+    expect(del.body.status).toBe('resolved');
+  });
+});
+
 describe('求助删除', () => {
   it('仅求助者可删（被求助者 403、无关者 404）；删除连带对话记录', async () => {
     const r = await api('POST', '/api/help-requests', {

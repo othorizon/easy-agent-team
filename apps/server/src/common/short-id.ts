@@ -7,6 +7,11 @@ const FULL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 /** UUID 前缀：首段 8 位必为 hex，更长的前缀才可能含连字符 */
 const ID_PREFIX = /^[0-9a-f]{8}[0-9a-f-]*$/i;
 
+/** 完整 UUID？用于把路径参数直接拿去和 uuid 列比较前先挡一道（否则 PG 报语法错变成 500） */
+export function isFullId(raw: string): boolean {
+  return FULL_UUID.test(raw);
+}
+
 /**
  * 把短 ID 前缀解析成完整 ID；完整 ID 原样放行。
  *

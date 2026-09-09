@@ -11,7 +11,7 @@ import { buildHelpFeishuCard, type HelpFeishuCardInput } from '@eat/shared';
 import type { CreateHelpRequest, HelpRequestDetail, HelpRequestInfo, HelpStatus } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
-import { resolveShortId } from '../common/short-id';
+import { isFullId, resolveShortId } from '../common/short-id';
 import { loadConfig } from '../config';
 import { DB, type Db } from '../db/db.module';
 import { experiences, helpMessages, helperProfiles, helpRequests, skills, users } from '../db/schema';
@@ -228,6 +228,59 @@ export class HelpService {
       `求助回复: ${row.title}`,
     );
     return this.detail(user, id);
+  }
+
+  /**
+   * 删除一条回复：本人或管理员（与「删除求助」一致的本人 / 管理员口径）。
+   * 状态按剩余消息回推——删掉被求助者的唯一回复后不该还挂着「已回复」；
+   * resolved / closed 是人工拍板的终态，不因删消息回退。
+   */
+  async removeMessage(user: AuthUser, rawId: string, messageId: string): Promise<HelpRequestDetail> {
+    const row = await this.getRow(rawId, user);
+    const id = row.id;
+    this.assertVisible(row, user);
+    // 路径参数直接进 uuid 列比较会让 PG 报语法错（500），先挡一道
+    const msg = isFullId(messageId)
+      ? (
+          await this.db
+            .select()
+            .from(helpMessages)
+            .where(and(eq(helpMessages.id, messageId), eq(helpMessages.requestId, id)))
+            .limit(1)
+        )[0]
+      : undefined;
+    if (!msg) throw new NotFoundException({ error: 'NOT_FOUND', message: '回复不存在' });
+    if (msg.senderId !== user.id && user.role !== 'admin') {
+      throw new ForbiddenException({ error: 'FORBIDDEN', message: '仅回复者本人或管理员可删除' });
+    }
+    await this.db.delete(helpMessages).where(eq(helpMessages.id, msg.id));
+
+    const nextStatus = row.status === 'open' || row.status === 'answered' ? await this.statusFromMessages(row) : null;
+    await this.db
+      .update(helpRequests)
+      .set({ ...(nextStatus && nextStatus !== row.status ? { status: nextStatus } : {}), updatedAt: sql`now()` })
+      .where(eq(helpRequests.id, id));
+    await this.audit.record({
+      actorId: user.id,
+      action: 'help.reply_deleted',
+      targetType: 'help_request',
+      targetId: id,
+      meta: { messageId: msg.id, senderId: msg.senderId },
+    });
+    return this.detail(user, id);
+  }
+
+  /** 剩余消息里最后一条来自被求助者就是 answered，否则（含一条不剩）回到 open */
+  private async statusFromMessages(row: HelpRow): Promise<HelpStatus> {
+    const last = (
+      await this.db
+        .select({ senderId: helpMessages.senderId })
+        .from(helpMessages)
+        .where(eq(helpMessages.requestId, row.id))
+        .orderBy(desc(helpMessages.createdAt))
+        .limit(1)
+    )[0];
+    return last?.senderId === row.helperId ? 'answered' : 'open';
   }
 
   /** 求助者确认解决，或被求助者标记已解决 */

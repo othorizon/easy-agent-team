@@ -94,6 +94,12 @@ export class HelpController {
     return this.help.remove(user, id);
   }
 
+  /** 删掉自己写的那条回复（管理员亦可），回整份详情让前端直接落库 */
+  @Delete('help-requests/:id/messages/:messageId')
+  removeMessage(@Param('id') id: string, @Param('messageId') messageId: string, @CurrentUser() user: AuthUser) {
+    return this.help.removeMessage(user, id, messageId);
+  }
+
   // ---------- 经验 ----------
 
   @Post('help-requests/:id/distill')

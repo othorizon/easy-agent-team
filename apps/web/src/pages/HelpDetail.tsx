@@ -1,6 +1,6 @@
 import type { DistillRequest, HelpRequestDetail } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Send } from 'lucide-react';
+import { ArrowLeft, Send, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -57,6 +57,17 @@ export function HelpDetailPage() {
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '删除失败'),
   });
+  const removeMessage = useMutation({
+    mutationFn: (messageId: string) => api('DELETE', `/api/help-requests/${id}/messages/${messageId}`),
+    onSuccess: () => {
+      toast.success('已删除回复');
+      // 删掉最后一条回复会把状态推回「待回复」，列表页的状态与排序跟着变
+      void queryClient.invalidateQueries({ queryKey: ['help-mine'] });
+      void queryClient.invalidateQueries({ queryKey: ['help-inbox'] });
+      invalidate();
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '删除失败'),
+  });
   const distill = useMutation({
     mutationFn: (v: DistillRequest) => api('POST', `/api/help-requests/${id}/distill`, v),
     onSuccess: (res: unknown) => {
@@ -72,6 +83,8 @@ export function HelpDetailPage() {
 
   if (!detail.data) return <PageLoading />;
   const r = detail.data;
+  /** 正在删除的那条回复：只让它自己转圈，别让整列回复都变 loading */
+  const deletingId = removeMessage.isPending ? removeMessage.variables : null;
   const isHelper = me?.id === r.helperId;
   const isRequester = me?.id === r.requesterId;
 
@@ -157,14 +170,35 @@ export function HelpDetailPage() {
                   {m.senderName.slice(0, 1).toUpperCase()}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium">{m.senderName}</span>
-                    {m.senderId === r.helperId && (
-                      <Badge variant="secondary" className="px-1.5 text-[10px]">
-                        被求助者
-                      </Badge>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium">{m.senderName}</span>
+                      {m.senderId === r.helperId && (
+                        <Badge variant="secondary" className="px-1.5 text-[10px]">
+                          被求助者
+                        </Badge>
+                      )}
+                      <span className="text-xs text-muted-foreground">{formatDateTime(m.createdAt)}</span>
+                    </div>
+                    {/* 自己写的回复可以删（管理员亦可）——图标常驻而非 hover 才出现，触屏上没有 hover */}
+                    {(m.senderId === me?.id || me?.role === 'admin') && (
+                      <Confirm
+                        title="删除这条回复？"
+                        description="删除后不可恢复，对方也将看不到这条内容。"
+                        confirmText="删除"
+                        onConfirm={() => removeMessage.mutate(m.id)}
+                      >
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label="删除这条回复"
+                          className="-mr-1 shrink-0 text-muted-foreground hover:text-destructive"
+                          loading={deletingId === m.id}
+                        >
+                          {deletingId !== m.id && <Trash2 className="size-3.5" />}
+                        </Button>
+                      </Confirm>
                     )}
-                    <span className="text-xs text-muted-foreground">{formatDateTime(m.createdAt)}</span>
                   </div>
                   <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-foreground/85">{m.content}</p>
                 </div>
