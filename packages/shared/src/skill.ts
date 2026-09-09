@@ -56,6 +56,18 @@ export const pushSkillSchema = z.object({
 });
 export type PushSkillRequest = z.infer<typeof pushSkillSchema>;
 
+/**
+ * 控制台在线编辑 SKILL.md（决策 42）：每次保存产生一个新版本，附属文件原样沿用。
+ * baseVersion 是编辑时看到的版本号——与服务端当前版本对不上说明别人已经推了新版本，
+ * 服务端拒绝覆盖，让编辑者先刷新看过再改。
+ */
+export const updateSkillContentSchema = z.object({
+  content: z.string().min(1).max(SKILL_FILE_MAX_BYTES, 'SKILL.md 过大'),
+  changelog: z.string().max(500).default(''),
+  baseVersion: z.number().int().positive(),
+});
+export type UpdateSkillContentRequest = z.infer<typeof updateSkillContentSchema>;
+
 export const updateSkillSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   description: z.string().max(2000).optional(),

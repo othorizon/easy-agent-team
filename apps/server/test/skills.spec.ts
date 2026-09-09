@@ -21,7 +21,7 @@ let adminToken: string;
 let readerId: string;
 
 async function api(
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
   url: string,
   opts: { token?: string; payload?: unknown } = {},
 ) {
@@ -552,5 +552,103 @@ describe('订阅人数与订阅者管理（决策 37）', () => {
     const r = await api('POST', `/api/skills/${slug}/subscribers`, { token: adminToken, payload: { userId: readerId } });
     expect(r.status).toBe(400);
     await api('PATCH', `/api/users/${readerId}`, { token: adminToken, payload: { status: 'active' } });
+  });
+});
+
+
+describe('控制台在线编辑 SKILL.md（决策 42）', () => {
+  const slug = 'edit-online';
+  const withFm = (body: string) => `---\nname: 在线编辑\ndescription: 用来验证在线编辑\n---\n\n${body}`;
+  // 上一个 describe 停用过 reader，停用会吊销 token，这里重新登一次拿有效的
+  let memberToken = '';
+  beforeAll(async () => {
+    memberToken = (await api('POST', '/api/auth/login', { payload: { email: 'reader@test.dev', password: 'password123' } }))
+      .body.token;
+  });
+
+  it('作者编辑正文 → 新版本、附属文件沿用、changelog 进版本历史', async () => {
+    const created = await api('POST', '/api/skills/push', {
+      token: authorToken,
+      payload: {
+        slug,
+        name: '在线编辑',
+        description: '用来验证在线编辑',
+        content: withFm('原始正文'),
+        files: [{ path: 'ref.md', content: '# 附件', encoding: 'utf8' }],
+      },
+    });
+    expect(created.body.currentVersion).toBe(1);
+
+    const r = await api('PUT', `/api/skills/${slug}/content`, {
+      token: authorToken,
+      payload: { content: withFm('改过的正文'), changelog: '补充了排查步骤', baseVersion: 1 },
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.currentVersion).toBe(2);
+    expect(r.body.content).toContain('改过的正文');
+    expect(r.body.files).toHaveLength(1); // 附件没在这个入口里传，必须原样留着
+
+    const versions = await api('GET', `/api/skills/${slug}/versions`, { token: authorToken });
+    expect(versions.body[0]).toMatchObject({ version: 2, changelog: '补充了排查步骤', createdBy: '作者' });
+    // 老版本仍可追溯
+    expect(versions.body.map((v: { version: number }) => v.version)).toEqual([2, 1]);
+  });
+
+  it('正文 frontmatter 是元信息事实源：写了就跟着更新，没写就保持原值', async () => {
+    const renamed = await api('PUT', `/api/skills/${slug}/content`, {
+      token: authorToken,
+      payload: {
+        content: '---\nname: 改了名字\ndescription: 也改了触发描述\n---\n\n正文',
+        baseVersion: 2,
+      },
+    });
+    expect(renamed.body.name).toBe('改了名字');
+    expect(renamed.body.description).toBe('也改了触发描述');
+
+    const noFm = await api('PUT', `/api/skills/${slug}/content`, {
+      token: authorToken,
+      payload: { content: '# 只有正文，没有 frontmatter', baseVersion: 3 },
+    });
+    expect(noFm.body.name).toBe('改了名字');
+    expect(noFm.body.description).toBe('也改了触发描述');
+    expect(noFm.body.currentVersion).toBe(4);
+  });
+
+  it('管理员可编辑他人的 skill；无关成员 403', async () => {
+    expect(
+      (await api('PUT', `/api/skills/${slug}/content`, { token: memberToken, payload: { content: '# 我改', baseVersion: 4 } }))
+        .status,
+    ).toBe(403);
+    const byAdmin = await api('PUT', `/api/skills/${slug}/content`, {
+      token: adminToken,
+      payload: { content: '# 管理员改的', baseVersion: 4 },
+    });
+    expect(byAdmin.status).toBe(200);
+    expect(byAdmin.body.currentVersion).toBe(5);
+  });
+
+  it('基于过期版本编辑被拒（409），内容没变也不产生新版本（400）', async () => {
+    const stale = await api('PUT', `/api/skills/${slug}/content`, {
+      token: authorToken,
+      payload: { content: '# 基于老版本改的', baseVersion: 2 },
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body.message).toContain('v5');
+
+    const same = await api('PUT', `/api/skills/${slug}/content`, {
+      token: authorToken,
+      payload: { content: '# 管理员改的', baseVersion: 5 },
+    });
+    expect(same.status).toBe(400);
+    expect((await api('GET', `/api/skills/${slug}`, { token: authorToken })).body.currentVersion).toBe(5);
+  });
+
+  it('密钥扫描同样生效', async () => {
+    const r = await api('PUT', `/api/skills/${slug}/content`, {
+      token: authorToken,
+      payload: { content: `token: eat_${'a'.repeat(48)}`, baseVersion: 5 },
+    });
+    expect(r.status).toBe(400);
+    expect(r.body.message).toContain('密钥');
   });
 });

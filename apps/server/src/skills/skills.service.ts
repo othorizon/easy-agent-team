@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
@@ -9,12 +10,14 @@ import { and, desc, eq, inArray } from 'drizzle-orm';
 import type {
   PushSkillRequest,
   SkillDetail,
+  SkillFile,
   SkillInfo,
   SkillListQuery,
   SkillListResult,
   SkillSubscriber,
   SkillVersionInfo,
   SyncSkill,
+  UpdateSkillContentRequest,
   UpdateSkillRequest,
 } from '@eat/shared';
 import {
@@ -342,8 +345,8 @@ export class SkillsService {
     }));
   }
 
-  /** 大小与密钥扫描；返回错误说明或 null */
-  private validatePayload(dto: PushSkillRequest): string | null {
+  /** 大小与密钥扫描（push 与在线编辑共用）；返回错误说明或 null */
+  private validatePayload(dto: { content: string; files: SkillFile[] }): string | null {
     let total = Buffer.byteLength(dto.content, 'utf8');
     const seen = new Set<string>();
     for (const f of dto.files) {
@@ -441,6 +444,69 @@ export class SkillsService {
       meta: { slug: dto.slug, version: nextVersion },
     });
     return this.detail(user, dto.slug);
+  }
+
+  /**
+   * 控制台在线编辑 SKILL.md（决策 42）：**每次保存就是一个新版本**，与 `eat skill push` 同一套
+   * 版本机制（订阅者下次 sync 自然拿到）。附属文件不在这个入口里改，原样从上一版沿用——
+   * 传空会把附件悄悄删光，这个入口只负责正文。
+   */
+  async updateContent(user: AuthUser, slug: string, dto: UpdateSkillContentRequest): Promise<SkillDetail> {
+    const skill = await this.getBySlug(slug);
+    if (!this.canManage(skill, user)) {
+      throw new ForbiddenException({ error: 'FORBIDDEN', message: '仅作者或管理员可编辑内容' });
+    }
+    // 乐观并发：编辑期间别人（CLI push / 另一个管理员）推了新版本就别覆盖，让编辑者先看过
+    if (dto.baseVersion !== skill.currentVersion) {
+      throw new ConflictException({
+        error: 'CONFLICT',
+        message: `该 Skill 已更新到 v${skill.currentVersion}（你编辑的是 v${dto.baseVersion}），请刷新后重新编辑`,
+      });
+    }
+    const current = (
+      await this.db
+        .select()
+        .from(skillVersions)
+        .where(and(eq(skillVersions.skillId, skill.id), eq(skillVersions.version, skill.currentVersion)))
+        .limit(1)
+    )[0];
+    if (current && current.content === dto.content) {
+      throw new BadRequestException({ error: 'VALIDATION_FAILED', message: '内容与当前版本一致，未产生新版本' });
+    }
+    const files = current?.files ?? [];
+    const problem = this.validatePayload({ content: dto.content, files });
+    if (problem) throw new BadRequestException({ error: 'VALIDATION_FAILED', message: problem });
+
+    // 正文的 frontmatter 是元信息的事实源（与 push 一致）：改了 name/description 就跟着更新，
+    // 没写就保持原值——不能因为正文里没有 frontmatter 就把清单上的名字抹掉。
+    const fm = parseSkillFrontmatter(dto.content);
+    const usable = (v: string | undefined): v is string => !!v && v.trim() !== '' && !isBlockScalarIndicator(v);
+    const nextVersion = skill.currentVersion + 1;
+    await this.db.insert(skillVersions).values({
+      skillId: skill.id,
+      version: nextVersion,
+      content: dto.content,
+      files,
+      changelog: dto.changelog,
+      createdBy: user.id,
+    });
+    await this.db
+      .update(skills)
+      .set({
+        currentVersion: nextVersion,
+        name: usable(fm.name) ? fm.name.slice(0, 100) : skill.name,
+        description: usable(fm.description) ? fm.description.slice(0, 2000) : skill.description,
+        updatedAt: new Date(),
+      })
+      .where(eq(skills.id, skill.id));
+    await this.audit.record({
+      actorId: user.id,
+      action: 'skill.version_pushed',
+      targetType: 'skill',
+      targetId: skill.id,
+      meta: { slug, version: nextVersion, via: 'console' },
+    });
+    return this.detail(user, slug);
   }
 
   async updateMeta(user: AuthUser, slug: string, dto: UpdateSkillRequest): Promise<SkillInfo> {

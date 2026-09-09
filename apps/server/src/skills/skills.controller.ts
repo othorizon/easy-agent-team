@@ -1,12 +1,14 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import {
   addSkillSubscriberSchema,
   pushSkillSchema,
   skillListQuerySchema,
+  updateSkillContentSchema,
   updateSkillSchema,
   type AddSkillSubscriberRequest,
   type PushSkillRequest,
   type SkillListQuery,
+  type UpdateSkillContentRequest,
   type UpdateSkillRequest,
 } from '@eat/shared';
 import { CurrentUser, Roles, type AuthUser } from '../auth/auth.decorators';
@@ -51,6 +53,16 @@ export class SkillsController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.skills.updateMeta(user, slug, body);
+  }
+
+  /** 控制台在线编辑 SKILL.md：保存即新版本（决策 42） */
+  @Put(':slug/content')
+  updateContent(
+    @Param('slug') slug: string,
+    @Body(new ZodValidationPipe(updateSkillContentSchema)) body: UpdateSkillContentRequest,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.skills.updateContent(user, slug, body);
   }
 
   @Delete(':slug')

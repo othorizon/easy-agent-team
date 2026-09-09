@@ -1,6 +1,6 @@
 import type { SkillDetail, SkillSubscriber, SkillVersionInfo, UpdateSkillRequest } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Plus, X } from 'lucide-react';
+import { ArrowLeft, Pencil, Plus, X } from 'lucide-react';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -29,6 +29,9 @@ export function SkillDetailPage() {
   const navigate = useNavigate();
   const me = getStoredUser();
   const [editing, setEditing] = useState(false);
+  /** SKILL.md 在线编辑的草稿：null = 只读展示 */
+  const [draft, setDraft] = useState<string | null>(null);
+  const [changelog, setChangelog] = useState('');
 
   const skill = useQuery({
     queryKey: ['skill', slug],
@@ -53,6 +56,19 @@ export function SkillDetailPage() {
     onSuccess: () => {
       toast.success('已保存');
       setEditing(false);
+      invalidate();
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '保存失败'),
+  });
+
+  /** 在线编辑正文：保存即新版本（决策 42） */
+  const saveContent = useMutation({
+    mutationFn: (v: { content: string; changelog: string }) =>
+      api<SkillDetail>('PUT', `/api/skills/${slug}/content`, { ...v, baseVersion: skill.data?.currentVersion ?? 0 }),
+    onSuccess: (res) => {
+      toast.success(`已保存为 v${res.currentVersion}`);
+      setDraft(null);
+      void queryClient.invalidateQueries({ queryKey: ['skill-versions', slug] });
       invalidate();
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '保存失败'),
@@ -176,8 +192,71 @@ export function SkillDetailPage() {
               </div>
             )}
           </dl>
-          <h2 className="mt-5 mb-2 text-sm font-semibold">SKILL.md</h2>
-          <CodeBlock>{s.content}</CodeBlock>
+          <div className="mt-5 mb-2 flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold">SKILL.md</h2>
+            {canManage && draft === null && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setDraft(s.content);
+                  setChangelog('');
+                }}
+              >
+                <Pencil />
+                编辑
+              </Button>
+            )}
+          </div>
+          {draft === null ? (
+            <CodeBlock>{s.content}</CodeBlock>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <Textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                spellCheck={false}
+                rows={22}
+                className="font-mono text-[13px] leading-relaxed"
+                aria-label="SKILL.md 内容"
+              />
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                保存即产生新版本（v{s.currentVersion} → v{s.currentVersion + 1}），订阅者下次{' '}
+                <InlineCode>eat sync</InlineCode> 拿到。名称与触发描述取正文 frontmatter；附属文件保持不变，要增删附件请用{' '}
+                <InlineCode>eat skill push</InlineCode>。
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  value={changelog}
+                  onChange={(e) => setChangelog(e.target.value)}
+                  placeholder="本次修改说明（可选）"
+                  maxLength={500}
+                  className="w-full sm:max-w-xs"
+                />
+                <Button
+                  loading={saveContent.isPending}
+                  disabled={draft.trim() === ''}
+                  onClick={() => saveContent.mutate({ content: draft, changelog })}
+                >
+                  保存为新版本
+                </Button>
+                {draft === s.content ? (
+                  <Button variant="outline" onClick={() => setDraft(null)}>
+                    取消
+                  </Button>
+                ) : (
+                  <Confirm
+                    title="放弃这次编辑？"
+                    description="改动不会保存。"
+                    confirmText="放弃"
+                    onConfirm={() => setDraft(null)}
+                  >
+                    <Button variant="outline">取消</Button>
+                  </Confirm>
+                )}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
