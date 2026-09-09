@@ -216,8 +216,8 @@ export function SkillDetailPage() {
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 spellCheck={false}
-                rows={22}
-                className="font-mono text-[13px] leading-relaxed"
+                // 高度按视口给，别用 rows：手机上 22 行是一大片空白，桌面上又嫌矮
+                className="h-[50vh] min-h-64 font-mono text-[13px] leading-relaxed sm:h-[34rem]"
                 aria-label="SKILL.md 内容"
               />
               <p className="text-xs leading-relaxed text-muted-foreground">
