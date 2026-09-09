@@ -261,29 +261,42 @@ export class SkillsService {
     const { subs, effective } = await this.effectiveSkillIds(user);
 
     const keyword = query.q?.toLowerCase() ?? '';
-    const filtered = rows.filter((r) => {
+    // 先按可见性 / 关键词 / kind 收窄，在这个集合上数各 scope 的条数，最后才按 scope 过滤：
+    // 分段切换上的数字要回答「在当前搜索与类型下，切到那个范围会有几条」，scope 自己不能参与计数
+    const narrowed = rows.filter((r) => {
       const row = r.skill;
       if (!this.canSee(row, user, subs)) return false;
       if (keyword) {
         const hay = `${row.slug}\n${row.name}\n${row.description}`.toLowerCase();
         if (!hay.includes(keyword)) return false;
       }
-      if (query.scope === 'subscribed' && !effective.has(row.id)) return false;
-      if (query.scope === 'unsubscribed' && effective.has(row.id)) return false;
-      if (query.scope === 'mine' && row.ownerId !== user.id) return false;
       return this.matchKind(row, query.kind);
+    });
+    const scopeCounts = { all: narrowed.length, subscribed: 0, unsubscribed: 0, mine: 0 };
+    for (const r of narrowed) {
+      if (effective.has(r.skill.id)) scopeCounts.subscribed += 1;
+      else scopeCounts.unsubscribed += 1;
+      if (r.skill.ownerId === user.id) scopeCounts.mine += 1;
+    }
+    const filtered = narrowed.filter((r) => {
+      const row = r.skill;
+      if (query.scope === 'subscribed') return effective.has(row.id);
+      if (query.scope === 'unsubscribed') return !effective.has(row.id);
+      if (query.scope === 'mine') return row.ownerId === user.id;
+      return true;
     });
 
     const start = (query.page - 1) * query.pageSize;
     const pageRows = filtered.slice(start, start + query.pageSize);
-    const counts = await this.subscriberCounts(pageRows.map((r) => r.skill));
+    const subscriberCounts = await this.subscriberCounts(pageRows.map((r) => r.skill));
     return {
       items: pageRows.map((r) =>
-        this.toInfo(r.skill, r.ownerName, user, effective.has(r.skill.id), counts.get(r.skill.id) ?? 0),
+        this.toInfo(r.skill, r.ownerName, user, effective.has(r.skill.id), subscriberCounts.get(r.skill.id) ?? 0),
       ),
       total: filtered.length,
       page: query.page,
       pageSize: query.pageSize,
+      counts: scopeCounts,
     };
   }
 

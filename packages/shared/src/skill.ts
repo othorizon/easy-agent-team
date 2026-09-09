@@ -152,6 +152,16 @@ export const skillListResultSchema = z.object({
   total: z.number(),
   page: z.number(),
   pageSize: z.number(),
+  /**
+   * 各范围下的条数：关键词与 kind 已应用、scope 不参与——回答的是「切到那个范围会有几条」，
+   * 控制台的范围分段切换把它印在选项旁（决策 38）
+   */
+  counts: z.object({
+    all: z.number(),
+    subscribed: z.number(),
+    unsubscribed: z.number(),
+    mine: z.number(),
+  }),
 });
 export type SkillListResult = z.infer<typeof skillListResultSchema>;
 

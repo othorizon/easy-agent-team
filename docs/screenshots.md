@@ -68,9 +68,10 @@ README 里挑了一部分，这里是全部。所有画面来自同一份可复�
 ![Skill 清单](assets/screenshots/skills.png)
 
 `exp-` 开头的是求助解决后沉淀下来的经验；版本号由服务端在每次 `eat skill push` 时递增。
-内置的平台使用指南（`eat-platform-guide`）不在这张表里——它不入库，`eat sync` 时直接注入到每个成员本地并置于首位。
+内置的平台使用指南（`eat-platform-guide`）不在这份清单里——它不入库，`eat sync` 时直接注入到每个成员本地并置于首位。
 标「捆绑」的（上图 `release-checklist`）是管理员设为全员必装的 Skill：对所有成员恒为已订阅、不可退订，
-`eat sync` 总会带上；清单支持按关键词、范围（已订阅 / 未订阅 / 我创建的）与类型筛选并分页。
+`eat sync` 总会带上；清单支持按关键词、范围（全部 / 已订阅 / 未订阅 / 我创建的，各带条数）与类型筛选并分页，
+订阅按钮按状态分级：未订阅是描边按钮，已订阅是灰底绿勾（悬停变「退订」），捆绑的只显示一把锁。
 
 ![Skill 详情](assets/screenshots/skill-detail.png)
 

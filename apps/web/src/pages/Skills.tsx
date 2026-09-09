@@ -1,12 +1,12 @@
 import type { PushSkillRequest, SkillInfo, SkillListResult } from '@eat/shared';
 import { SKILL_LIST_DEFAULT_PAGE_SIZE, parseSkillFrontmatter, slugifyName } from '@eat/shared';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Search } from 'lucide-react';
+import { Check, Lock, Minus, Plus, Search } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
-import { api, ApiError } from '../api';
+import { api, ApiError, getStoredUser } from '../api';
 import { InlineCode } from '../components/code';
 import { Empty } from '../components/empty';
 import { Field, rules } from '../components/form';
@@ -15,17 +15,17 @@ import { Pagination } from '../components/pagination';
 import { Segmented } from '../components/segmented';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
-import { Card, CardContent } from '../components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { TableSkeleton } from '../components/ui/skeleton';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { ListSkeleton } from '../components/ui/skeleton';
+import { formatDateTime, formatRelativeTime } from '../lib/format';
 import { cn } from '../lib/utils';
 import { useQueryParams } from '../lib/use-query-params';
 
-const SCOPE_OPTIONS = [
-  { value: 'all', label: '全部范围' },
+/** 范围是高频筛选，做成带数量的分段切换；数量键对应 SkillListResult.counts */
+const SCOPE_OPTIONS: Array<{ value: keyof SkillListResult['counts']; label: string }> = [
+  { value: 'all', label: '全部' },
   { value: 'subscribed', label: '已订阅' },
   { value: 'unsubscribed', label: '未订阅' },
   { value: 'mine', label: '我创建的' },
@@ -89,7 +89,9 @@ export function SkillsPage() {
     placeholderData: keepPreviousData,
   });
   const items = skills.data?.items ?? [];
+  const counts = skills.data?.counts;
   const filtered = params.q !== '' || params.scope !== 'all' || params.kind !== 'all';
+  const me = getStoredUser();
 
   const toggleSubscribe = useMutation({
     mutationFn: (s: SkillInfo) => api(s.subscribed ? 'DELETE' : 'POST', `/api/skills/${s.slug}/subscribe`),
@@ -129,120 +131,75 @@ export function SkillsPage() {
           </Button>
         }
       />
-      <Card>
-        <CardContent className="space-y-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <div className="relative flex-1">
-              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                className="pl-9"
-                placeholder="搜索标识 / 名称 / 触发描述"
-                aria-label="搜索 Skill"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </div>
-            <Select value={params.scope} onValueChange={(v) => setParams({ scope: v, page: '1' })}>
-              <SelectTrigger className="sm:w-[132px]" aria-label="按范围筛选">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {SCOPE_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={params.kind} onValueChange={(v) => setParams({ kind: v, page: '1' })}>
-              <SelectTrigger className="sm:w-[132px]" aria-label="按类型筛选">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {KIND_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
 
-          {skills.isPending ? (
-            <TableSkeleton />
-          ) : items.length === 0 ? (
-            <Empty text={filtered ? '没有符合条件的 Skill' : '还没有 Skill'} />
-          ) : (
-            <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Skill</TableHead>
-                    <TableHead className="hidden md:table-cell">触发描述</TableHead>
-                    <TableHead className="hidden w-44 lg:table-cell">作者 · 版本 · 订阅</TableHead>
-                    <TableHead className="w-20">订阅</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {items.map((s) => (
-                    <TableRow key={s.id}>
-                      <TableCell>
-                        <Link to={`/skills/${s.slug}`} className="group inline-flex flex-wrap items-center gap-x-2 gap-y-1">
-                          <InlineCode className="text-primary group-hover:underline">{s.slug}</InlineCode>
-                          <span className="font-medium">{s.name}</span>
-                          <SkillTags skill={s} />
-                        </Link>
-                        {/* 窄屏才显示的描述：truncate 是 nowrap，不封顶会把整张表撑到要横向滚动 */}
-                        <div className="mt-0.5 max-w-[55vw] truncate text-xs text-muted-foreground md:hidden">
-                          {s.description}
-                        </div>
-                        {/* 元信息列在窄屏收起，改挂到名称下方，免得挤出横向滚动 */}
-                        <div className="mt-1 lg:hidden">
-                          <SkillMeta skill={s} className="text-xs" />
-                        </div>
-                      </TableCell>
-                      {/* 描述列吃掉所有富余宽度、也让得出去：truncate 是 nowrap，
-                          直接写在 td 上会让它恒占一个固定宽度、把窄窗口的表格顶出横向滚动条。
-                          max-w-0 + w-full 把「能缩到多窄」交还给表格，截断交给内层 div。 */}
-                      <TableCell className="hidden w-full max-w-0 text-muted-foreground md:table-cell">
-                        <div className="truncate">{s.description}</div>
-                      </TableCell>
-                      {/* 描述列会把富余宽度吃光，这一列于是被挤到最窄——不许它把内容拆成竖排 */}
-                      <TableCell className="hidden whitespace-nowrap lg:table-cell">
-                        <SkillMeta skill={s} />
-                      </TableCell>
-                      <TableCell>
-                        {s.subscriptionLocked ? (
-                          // 捆绑：对成员恒为订阅，按钮留着但禁用，比直接藏起来更少让人困惑
-                          <Button size="sm" variant="outline" disabled title="管理员已设为捆绑，全员同步且不可退订">
-                            已捆绑
-                          </Button>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant={s.subscribed ? 'outline' : 'default'}
-                            loading={toggleSubscribe.isPending && toggleSubscribe.variables?.id === s.id}
-                            onClick={() => toggleSubscribe.mutate(s)}
-                          >
-                            {s.subscribed ? '退订' : '订阅'}
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              <Pagination
-                total={skills.data?.total ?? 0}
-                page={page}
-                pageSize={pageSize}
-                onPageChange={(p) => setParams({ page: String(p) })}
-                onPageSizeChange={(size) => setParams({ pageSize: String(size), page: '1' })}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="relative sm:w-[300px]">
+          <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            className="pl-9"
+            placeholder="搜索标识 / 名称 / 触发描述"
+            aria-label="搜索 Skill"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <Segmented
+          value={params.scope}
+          onChange={(v) => setParams({ scope: v, page: '1' })}
+          options={SCOPE_OPTIONS.map((o) => ({
+            value: o.value,
+            label: (
+              <>
+                {o.label}
+                {/* 数量回答「切过去会有几条」：已订阅的那个数就是 eat sync 会落地的条数 */}
+                {counts && <span className="ml-1 text-xs tabular-nums opacity-60">{counts[o.value]}</span>}
+              </>
+            ),
+          }))}
+        />
+        <div className="hidden flex-1 sm:block" />
+        {/* 类型是低频筛选，留在下拉；窄屏时靠右单占一行，与桌面端位置一致 */}
+        <Select value={params.kind} onValueChange={(v) => setParams({ kind: v, page: '1' })}>
+          <SelectTrigger className="w-[132px] self-end sm:self-auto" aria-label="按类型筛选">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {KIND_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value}>
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {skills.isPending ? (
+        <ListSkeleton rows={5} />
+      ) : items.length === 0 ? (
+        <Empty text={filtered ? '没有符合条件的 Skill' : '还没有 Skill'} className="border-t" />
+      ) : (
+        <div>
+          {/* 行的悬停底色要盖过左右留白，所以清单整体向外扩 12px、行内再补回来 */}
+          <div className="-mx-3 divide-y border-t">
+            {items.map((s) => (
+              <SkillRow
+                key={s.id}
+                skill={s}
+                isMine={s.ownerId === me?.id}
+                pending={toggleSubscribe.isPending && toggleSubscribe.variables?.id === s.id}
+                onToggle={() => toggleSubscribe.mutate(s)}
               />
-            </>
-          )}
-        </CardContent>
-      </Card>
+            ))}
+          </div>
+          <Pagination
+            total={skills.data?.total ?? 0}
+            page={page}
+            pageSize={pageSize}
+            onPageChange={(p) => setParams({ page: String(p) })}
+            onPageSizeChange={(size) => setParams({ pageSize: String(size), page: '1' })}
+          />
+        </div>
+      )}
 
       {creating && (
         <CreateSkillDialog
@@ -284,31 +241,169 @@ function SubscriberGlyph() {
 function SkillTags({ skill }: { skill: SkillInfo }) {
   return (
     <>
-      {skill.bundled && <Badge variant="warning">捆绑</Badge>}
+      {skill.bundled && (
+        <Badge variant="warning">
+          <Lock />
+          捆绑
+        </Badge>
+      )}
       {skill.visibility === 'private' && <Badge variant="outline">私有</Badge>}
-      {skill.visibility === 'granted' && <Badge variant="secondary">授予</Badge>}
-      {skill.source === 'experience' && <Badge variant="secondary">经验</Badge>}
+      {skill.visibility === 'granted' && <Badge variant="secondary">授予可见</Badge>}
+      {skill.source === 'experience' && <Badge variant="secondary">经验沉淀</Badge>}
     </>
   );
 }
 
 /**
- * 作者 · 版本 · 订阅人数，合成一行小字——这三项各占一列不值当，
- * 挤到最后还会把作者名拆成竖排。订阅数用图标而不是「N 人订阅」，省一半宽度。
+ * 清单的一行（决策 38）：名称 + 描述排成阅读流，slug 退为等宽小字，元信息压成一行小字，
+ * 订阅按钮按状态分级。桌面端按钮在行右侧垂直居中；窄屏挪到元信息那一行的右端、slug 并入元信息。
  */
-function SkillMeta({ skill, className }: { skill: SkillInfo; className?: string }) {
+function SkillRow({
+  skill,
+  isMine,
+  pending,
+  onToggle,
+}: {
+  skill: SkillInfo;
+  isMine: boolean;
+  pending: boolean;
+  onToggle: () => void;
+}) {
   return (
-    <span className={cn('inline-flex items-center gap-1.5 whitespace-nowrap text-muted-foreground', className)}>
-      <span className="truncate">{skill.ownerName}</span>
-      <span aria-hidden>·</span>
-      <span className="tabular-nums">v{skill.currentVersion}</span>
-      <span aria-hidden>·</span>
+    <div className="group grid gap-x-6 gap-y-2 px-3 py-3.5 transition-colors hover:bg-muted/40 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+      <div className="min-w-0 space-y-1">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+          <Link
+            to={`/skills/${skill.slug}`}
+            className="text-[15px] leading-[22px] font-semibold tracking-[-0.005em] underline-offset-3 group-hover:underline"
+          >
+            {skill.name}
+          </Link>
+          <span className="hidden font-mono text-[12.5px] text-muted-foreground sm:inline">{skill.slug}</span>
+          <SkillTags skill={skill} />
+        </div>
+        {skill.description ? (
+          // 多行描述（决策 36 的 | 块）按原换行显示，两行封顶——长描述看详情页
+          <p className="line-clamp-2 text-[13.5px] leading-relaxed break-words whitespace-pre-line text-foreground/70">
+            {skill.description}
+          </p>
+        ) : (
+          <p className="text-[13.5px] leading-relaxed text-muted-foreground/70">
+            未填写触发描述{isMine && '，AI 无法据此判断何时使用它，建议补上'}
+          </p>
+        )}
+        <div className="flex items-center justify-between gap-3 pt-0.5">
+          <SkillMeta skill={skill} isMine={isMine} />
+          <div className="sm:hidden">
+            <SubscribeAction skill={skill} pending={pending} onToggle={onToggle} />
+          </div>
+        </div>
+      </div>
+      <div className="hidden min-w-[88px] justify-end justify-self-end sm:flex">
+        <SubscribeAction skill={skill} pending={pending} onToggle={onToggle} />
+      </div>
+    </div>
+  );
+}
+
+function MetaDot({ className }: { className?: string }) {
+  return (
+    <span aria-hidden className={cn('text-muted-foreground/60', className)}>
+      ·
+    </span>
+  );
+}
+
+/**
+ * 元信息一行小字：作者 · 版本 · 订阅人数 · 更新时间。作者是自己时显示加深的「我」——
+ * 「我创建的」不值得一个徽标，但扫描时得能一眼挑出来。
+ * 窄屏把 slug 放进来（名称行不放）、去掉头像与更新时间，给右侧的按钮让位。
+ */
+function SkillMeta({ skill, isMine }: { skill: SkillInfo; isMine: boolean }) {
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
+      <span className="truncate font-mono sm:hidden">{skill.slug}</span>
+      <MetaDot className="sm:hidden" />
+      <span
+        aria-hidden
+        className={cn(
+          'hidden size-[18px] shrink-0 items-center justify-center rounded-full text-[10px] font-semibold sm:inline-flex',
+          isMine ? 'bg-primary text-primary-foreground' : 'bg-muted-foreground/15 text-foreground/70',
+        )}
+      >
+        {isMine ? '我' : skill.ownerName.slice(0, 1)}
+      </span>
+      <span className={cn('truncate', isMine && 'font-medium text-foreground')}>{isMine ? '我' : skill.ownerName}</span>
+      <MetaDot />
+      <span>v{skill.currentVersion}</span>
+      <MetaDot />
       <span className="inline-flex items-center gap-0.5" title={`${skill.subscriberCount} 人订阅`}>
         <SubscriberGlyph />
-        <span className="tabular-nums">{skill.subscriberCount}</span>
-        <span className="sr-only">人订阅</span>
+        {skill.subscriberCount}
+        <span className="sr-only sm:not-sr-only"> 人订阅</span>
       </span>
-    </span>
+      <MetaDot className="hidden sm:inline" />
+      <span className="hidden sm:inline" title={formatDateTime(skill.updatedAt)}>
+        {formatRelativeTime(skill.updatedAt)}更新
+      </span>
+    </div>
+  );
+}
+
+/**
+ * 订阅按钮按状态分级，页面上不再是一列实心黑按钮：
+ * 未订阅 = 描边（唯一需要用户动手的），已订阅 = 安静灰底 + 绿勾、悬停整行时原位变「退订」，
+ * 捆绑 = 只读的锁（禁用但留着，比藏起来少让人困惑），进行中 = 加载态防重复点。
+ * 悬停换字只在有指针的设备上发生（Tailwind 的 hover 变体自带 hover:hover 媒体查询），
+ * 触屏上按钮一直写「已订阅」、点它退订，跟「Following」类按钮的惯例一致。
+ */
+function SubscribeAction({ skill, pending, onToggle }: { skill: SkillInfo; pending: boolean; onToggle: () => void }) {
+  if (skill.subscriptionLocked) {
+    return (
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled
+        className="text-muted-foreground disabled:opacity-100"
+        title="管理员已设为捆绑，全员同步且不可退订"
+      >
+        <Lock className="size-3.5" />
+        已捆绑
+      </Button>
+    );
+  }
+  if (pending) {
+    return (
+      <Button size="sm" variant="outline" loading className="text-muted-foreground">
+        {skill.subscribed ? '退订中' : '订阅中'}
+      </Button>
+    );
+  }
+  if (skill.subscribed) {
+    return (
+      <Button
+        size="sm"
+        variant={null}
+        aria-label={`退订 ${skill.name}`}
+        onClick={onToggle}
+        className="border border-transparent bg-muted text-foreground/70 group-hover:border-destructive/30 group-hover:bg-card group-hover:text-destructive group-hover:shadow-xs group-hover:hover:bg-destructive/10"
+      >
+        <span className="inline-flex items-center gap-1 group-hover:hidden">
+          <Check className="size-3.5 text-success" />
+          已订阅
+        </span>
+        <span className="hidden items-center gap-1 group-hover:inline-flex">
+          <Minus className="size-3.5" />
+          退订
+        </span>
+      </Button>
+    );
+  }
+  return (
+    <Button size="sm" variant="outline" onClick={onToggle}>
+      <Plus className="size-3.5" />
+      订阅
+    </Button>
   );
 }
 

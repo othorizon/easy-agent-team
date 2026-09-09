@@ -364,6 +364,18 @@ describe('清单筛选与分页（决策 37）', () => {
     expect(unsubscribed.body.items.map((s: { slug: string }) => s.slug)).not.toContain('flt-alpha');
   });
 
+  it('counts 给出各范围的条数，关键词参与、scope 自身不参与（决策 38）', async () => {
+    const all = await api('GET', '/api/skills?q=zebra', { token: readerToken });
+    expect(all.body.counts).toEqual({ all: 4, subscribed: 1, unsubscribed: 3, mine: 1 });
+    // 切到某个范围后 total 变、counts 不变——分段切换上的数字就是靠这点稳定的
+    const scoped = await api('GET', '/api/skills?q=zebra&scope=subscribed', { token: readerToken });
+    expect(scoped.body.total).toBe(1);
+    expect(scoped.body.counts).toEqual(all.body.counts);
+    // kind 参与计数：私有只有读者自己那条
+    const priv = await api('GET', '/api/skills?q=zebra&kind=private', { token: readerToken });
+    expect(priv.body.counts).toEqual({ all: 1, subscribed: 0, unsubscribed: 1, mine: 1 });
+  });
+
   it('kind 按可见性 / 来源筛选', async () => {
     const priv = await api('GET', '/api/skills?kind=private', { token: readerToken });
     expect(priv.body.items.map((s: { slug: string }) => s.slug)).toEqual(['flt-mine']);
