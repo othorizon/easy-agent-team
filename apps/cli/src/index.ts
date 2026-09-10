@@ -63,8 +63,8 @@ skill
   .command('push <dir>')
   .description('把本地 skill 目录上传到平台（首次创建，再次推送出新版本）')
   .option('--slug <slug>', '平台标识（默认从 SKILL.md frontmatter 或目录名推导）')
-  .option('--name <name>', '显示名称')
-  .option('--description <description>', '触发描述（供人和 AI 判断何时使用）')
+  .option('--name <name>', '显示名称（默认取 SKILL.md frontmatter；都没有则保持平台上的原名）')
+  .option('--description <description>', '触发描述（默认取 frontmatter；都没有则保持平台上的原描述）')
   .option('--changelog <changelog>', '本次版本说明')
   .option('--private', '设为私有（默认团队可见）')
   .action(skillPush);

@@ -367,17 +367,27 @@ export class SkillsService {
   }
 
   /**
-   * 元信息以客户端传的为准，但两种情况回退到 SKILL.md frontmatter：
-   * 传空（网页创建时只贴了正文没填描述），或传上来的只是个块标量指示符
+   * 元信息按 客户端传的 → SKILL.md frontmatter → 平台上的原值 依次取第一个可用的。
+   *
+   * 「不可用」有三种：没传（CLI 在 `--name` 与 frontmatter 里都没读到时就不传这个字段）、
+   * 传了空串（网页创建时只贴了正文没填描述）、传上来的只是个块标量指示符
    * （旧版 CLI ≤0.5.5 解析不了 `description: >-`，把 `>-` 本身当值推了上来）。
+   *
+   * 最后一级回退到 existing 是决策 44：推新版本时不传 name 不是「把名字清掉」而是「没要改它」，
+   * 与控制台在线编辑（updateContent）里「frontmatter 没写就保持原值」是同一套语义。
+   * 新建时没有原值可留，name 回落到 slug（description 回落到空串，CLI 会提示补上）。
    */
-  private resolveMeta(dto: PushSkillRequest): { name: string; description: string } {
-    const usable = (v: string) => v.trim() !== '' && !isBlockScalarIndicator(v);
+  private resolveMeta(dto: PushSkillRequest, existing?: SkillRow): { name: string; description: string } {
+    const usable = (v: string | undefined): v is string => !!v && v.trim() !== '' && !isBlockScalarIndicator(v);
     if (usable(dto.name) && usable(dto.description)) return { name: dto.name, description: dto.description };
     const fm = parseSkillFrontmatter(dto.content);
     return {
-      name: usable(dto.name) ? dto.name : (fm.name?.slice(0, 100) ?? dto.name),
-      description: usable(dto.description) ? dto.description : (fm.description?.slice(0, 2000) ?? ''),
+      name: usable(dto.name) ? dto.name : usable(fm.name) ? fm.name.slice(0, 100) : (existing?.name ?? dto.slug),
+      description: usable(dto.description)
+        ? dto.description
+        : usable(fm.description)
+          ? fm.description.slice(0, 2000)
+          : (existing?.description ?? ''),
     };
   }
 
@@ -395,13 +405,14 @@ export class SkillsService {
       throw new BadRequestException({ error: 'VALIDATION_FAILED', message: `${PLATFORM_GUIDE_SLUG} 是平台内置 skill 的保留名` });
     }
 
-    const meta = this.resolveMeta(dto);
     const existing = (await this.db.select().from(skills).where(eq(skills.slug, dto.slug)).limit(1))[0];
+    if (existing && !this.canManage(existing, user)) {
+      throw new ForbiddenException({ error: 'FORBIDDEN', message: `Skill ${dto.slug} 已存在且属于他人，仅作者可推送新版本` });
+    }
+    // 元信息要能看到既有行：没传的字段保持原值，而不是被兜底值覆盖
+    const meta = this.resolveMeta(dto, existing);
     let skill: SkillRow;
     if (existing) {
-      if (!this.canManage(existing, user)) {
-        throw new ForbiddenException({ error: 'FORBIDDEN', message: `Skill ${dto.slug} 已存在且属于他人，仅作者可推送新版本` });
-      }
       skill = existing;
     } else {
       [skill] = await this.db

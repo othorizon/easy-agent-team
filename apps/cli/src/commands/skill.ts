@@ -20,19 +20,25 @@ import { safeJoin } from './sync.js';
 const IGNORED = new Set(['node_modules', '.git', '.eat-meta.json']);
 
 /**
- * 推送用的元信息：命令行参数优先，其次 SKILL.md frontmatter，最后回落到目录名。
+ * 推送用的元信息：命令行参数优先，其次 SKILL.md frontmatter。
  * frontmatter 的 description 支持块标量（`>-`、`|`）与引号跨行写法，解析在 @eat/shared。
+ *
+ * name / description 两处都读不到时返回 undefined，**不回落到目录名**（决策 44）：
+ * 目录名只用来推 slug。旧写法把目录名当 name 推上去，等于每推一次就把平台上那个
+ * 「运营周报生成」覆盖成 `weekly-report`——不传不是要改名，是没要改它，交给服务端保持原值。
  */
 export function resolvePushMeta(
   content: string,
   dirName: string,
   opts: { slug?: string; name?: string; description?: string },
-): { slug: string; name: string; description: string } {
+): { slug: string; name?: string; description?: string } {
   const fm = parseSkillFrontmatter(content);
+  // 空白值等同没有：`name:` 写了个空的话，带上去只会被服务端的 min(1) 拒掉
+  const given = (v: string | undefined): string | undefined => (v?.trim() ? v : undefined);
   return {
-    slug: opts.slug ?? slugifyName(fm.name ?? dirName),
-    name: opts.name ?? fm.name ?? dirName,
-    description: opts.description ?? fm.description ?? '',
+    slug: opts.slug ?? slugifyName(given(fm.name) ?? dirName),
+    name: given(opts.name) ?? given(fm.name),
+    description: given(opts.description) ?? given(fm.description),
   };
 }
 
@@ -108,13 +114,19 @@ export async function skillPush(
     process.exitCode = 1;
     return;
   }
-  if (!description) {
-    console.log('提示: 没读到 description（SKILL.md frontmatter 里写，或用 --description 指定）——AI 靠它判断何时使用这个 skill');
+  if (!name) {
+    console.log('提示: 没读到 name（SKILL.md frontmatter 里写，或用 --name 指定）——平台上已有的 skill 保持原名，新建的以 slug 作名称');
   }
+  if (!description) {
+    console.log(
+      '提示: 没读到 description（SKILL.md frontmatter 里写，或用 --description 指定）——AI 靠它判断何时使用这个 skill；平台上已有的描述保持不变',
+    );
+  }
+  // name / description 读不到就不放进请求体：服务端据此保持原值（决策 44）
   const payload: PushSkillRequest = {
     slug,
-    name,
-    description,
+    ...(name ? { name } : {}),
+    ...(description ? { description } : {}),
     content,
     files: collectFiles(root),
     changelog: opts.changelog ?? '',
@@ -123,7 +135,7 @@ export async function skillPush(
   const api = Api.fromSaved();
   const res = await api.request<SkillDetail>('POST', '/api/skills/push', payload);
   console.log(
-    `已推送 ${res.slug} v${res.currentVersion}（${res.files.length} 个附属文件，可见性: ${res.visibility}）`,
+    `已推送 ${res.slug} v${res.currentVersion}「${res.name}」（${res.files.length} 个附属文件，可见性: ${res.visibility}）`,
   );
   if (res.currentVersion === 1) {
     console.log('这是新建的 skill，团队成员现在可以在控制台或 eat skill list 里看到并订阅它。');

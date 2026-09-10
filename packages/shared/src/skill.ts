@@ -42,12 +42,18 @@ export function slugifyName(input: string): string {
 export const skillVisibilitySchema = z.enum(['team', 'private']);
 export type SkillVisibility = z.infer<typeof skillVisibilitySchema>;
 
-/** eat skill push / 网页创建共用 */
+/**
+ * eat skill push / 网页创建共用。
+ *
+ * name / description **缺省 = 保持平台上的原值**（决策 44）：CLI 只在 `--name` 或 SKILL.md
+ * frontmatter 里真读到时才带上这两个字段，读不到就不传——推一个没写 frontmatter 的目录上来，
+ * 不该把作者在控制台起的名字换成目录名、把触发描述抹成空。新建时没有原值可留，name 回落到 slug。
+ */
 export const pushSkillSchema = z.object({
   slug: slugSchema,
-  name: z.string().min(1).max(100),
+  name: z.string().min(1).max(100).optional(),
   /** 触发描述：供人和 AI 判断何时使用该 skill */
-  description: z.string().max(2000).default(''),
+  description: z.string().max(2000).optional(),
   /** SKILL.md 正文 */
   content: z.string().min(1).max(SKILL_FILE_MAX_BYTES, 'SKILL.md 过大'),
   files: z.array(skillFileSchema).max(50).default([]),
