@@ -272,6 +272,45 @@ describe('元信息回退到 SKILL.md frontmatter', () => {
   });
 });
 
+describe('不传 name / description 时保持平台上的原值（决策 44）', () => {
+  const slug = 'keep-meta';
+  // 目录里只有正文、没写 frontmatter：CLI 此时既读不到 name 也读不到 description，两个字段都不传
+  const bare = '# 正文\n\n没有 frontmatter 的 skill 目录。';
+
+  it('推新版本时不传 name/description → 名称与触发描述原样留着', async () => {
+    const created = await api('POST', '/api/skills/push', {
+      token: authorToken,
+      payload: { slug, name: '运营周报生成', description: '每周一汇报时使用', content: '# 初版', files: [] },
+    });
+    expect(created.status).toBe(201);
+
+    const r = await api('POST', '/api/skills/push', { token: authorToken, payload: { slug, content: bare, files: [] } });
+    expect(r.status).toBe(201);
+    expect(r.body.currentVersion).toBe(2);
+    expect(r.body.name).toBe('运营周报生成');
+    expect(r.body.description).toBe('每周一汇报时使用');
+  });
+
+  it('正文 frontmatter 写了就以它为准（与在线编辑同一套语义）', async () => {
+    const r = await api('POST', '/api/skills/push', {
+      token: authorToken,
+      payload: { slug, content: '---\nname: 周报生成 v2\ndescription: 改过的触发描述\n---\n\n正文', files: [] },
+    });
+    expect(r.body.name).toBe('周报生成 v2');
+    expect(r.body.description).toBe('改过的触发描述');
+  });
+
+  it('新建时没有原值可留：name 回落到 slug', async () => {
+    const r = await api('POST', '/api/skills/push', {
+      token: authorToken,
+      payload: { slug: 'brand-new-no-meta', content: bare, files: [] },
+    });
+    expect(r.status).toBe(201);
+    expect(r.body.name).toBe('brand-new-no-meta');
+    expect(r.body.description).toBe('');
+  });
+});
+
 describe('存量数据订正（启动时随迁移跑）', () => {
   // 决策 36 的解析器只影响「之后推的版本」，已经躺在库里的坏描述得靠这一步修
   const content = ['---', 'name: legacy-skill', 'description: >-', '  旧版 CLI 推坏的描述，', '  真正的内容在正文 frontmatter 里。', '---', '', '# 正文'].join('\n');

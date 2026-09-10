@@ -151,11 +151,24 @@ describe('resolvePushMeta：eat skill push 的元信息来源', () => {
     });
   });
 
-  it('没有 frontmatter 时回落到目录名', () => {
+  it('没有 frontmatter 时只有 slug 回落到目录名，name/description 留空（服务端保持原值，决策 44）', () => {
     expect(resolvePushMeta('# 只有正文', 'weekly-report', {})).toEqual({
       slug: 'weekly-report',
-      name: 'weekly-report',
-      description: '',
+      name: undefined,
+      description: undefined,
+    });
+  });
+
+  it('frontmatter 只写了 description 时，name 仍留空——不会被目录名顶掉', () => {
+    const r = resolvePushMeta(md('description: 处理 PDF 时使用'), 'pdf-tools', {});
+    expect(r).toEqual({ slug: 'pdf-tools', name: undefined, description: '处理 PDF 时使用' });
+  });
+
+  it('frontmatter 里写了空值等同没写（带上去只会被服务端 min(1) 拒掉）', () => {
+    expect(resolvePushMeta(md('name:   \ndescription:'), 'my-dir', {})).toEqual({
+      slug: 'my-dir',
+      name: undefined,
+      description: undefined,
     });
   });
 
