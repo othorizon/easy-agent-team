@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 13;
+export const PLATFORM_GUIDE_VERSION = 14;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -68,7 +68,7 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 | \`eat env list / pull / request\` | 环境变量：看清单 / 取值 / 申请权限 |
 | \`eat skill list / export <slug>\` | 看团队里有哪些 skill（默认 100 条；\`--search <词>\` 按关键词过滤、\`--scope subscribed|unsubscribed|mine\`、\`--kind bundled|private|experience|…\` 筛选、\`--limit <n>\` 最多 1000）/ 把某个 skill 下载到本地目录（\`--out\` 指定落点）——想读它的完整内容、或以它为底改一份自己的时用 |
 | \`eat skill push <dir>\` | 把本地写好的 skill 上传到平台纳管分享（改别人的 skill 要么你是作者，要么 \`--slug\` 换个名字推成自己的）。**推送不会自动订阅**：想让它随 \`eat sync\` 落到本地，还要 \`eat skill subscribe <slug>\` 一次 |
-| \`eat skill subscribe / unsubscribe <slug>\` | 订阅 / 退订（决定它进不进 \`eat sync\` 的范围）。清单里标 \`◆\` 的是**捆绑** skill：管理员设定、全员始终同步，退订会被拒绝，这是正常的，别反复重试 |
+| \`eat skill subscribe / unsubscribe <slug>\` | 订阅 / 退订（决定它进不进 \`eat sync\` 的范围）。清单里标 \`◆\` 的是**捆绑** skill：管理员设定、全员始终同步，退订会被拒绝，这是正常的，别反复重试；用户确实不需要它的话，请其联系管理员在控制台该 skill 的订阅者名单里为其「解除捆绑」，之后就能自行订阅 / 退订 |
 | \`eat ask create / show / reply\` | 求助的 CLI 入口 |
 | \`eat app create / update / delete <slug>\` | 自助创建应用（\`--repo\` + \`--build dockerfile|static\`，dockerfile 加 \`--port\` 声明容器端口；管理员配了后缀则自动得到域名）/ 改配置 / 删除 |
 | \`eat app env pull / push <slug> [--build]\` | 读写应用的 env（运行时；\`--build\` 为构建时），push 是整体覆盖 |

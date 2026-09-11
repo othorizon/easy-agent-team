@@ -181,9 +181,13 @@ export function buildListQuery(opts: SkillListOpts): string {
   return params.toString();
 }
 
-/** 清单里每条 skill 的行首标记：捆绑 ◆ / 已订阅 ● / 未订阅 ○ */
+/**
+ * 清单里每条 skill 的行首标记：捆绑 ◆ / 已订阅 ● / 未订阅 ○。
+ * ◆ 按「对我锁定」判而不是按 skill 本身是否捆绑：管理员与被解除捆绑的成员（决策 45）
+ * 对它照常可订可退，标 ◆ 会让图例里的「不可退订」说谎；skill 本身是捆绑的，标签列另有「捆绑」字样。
+ */
 export function listMark(s: SkillInfo): string {
-  if (s.bundled) return '◆';
+  if (s.subscriptionLocked) return '◆';
   return s.subscribed ? '●' : '○';
 }
 

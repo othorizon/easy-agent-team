@@ -1,6 +1,6 @@
-import type { SkillDetail, SkillSubscriber, SkillVersionInfo, UpdateSkillRequest } from '@eat/shared';
+import type { SkillBundleExemption, SkillDetail, SkillSubscriber, SkillVersionInfo, UpdateSkillRequest } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Pencil, Plus, X } from 'lucide-react';
+import { ArrowLeft, Lock, LockOpen, Pencil, Plus, X } from 'lucide-react';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -49,6 +49,7 @@ export function SkillDetailPage() {
     void queryClient.invalidateQueries({ queryKey: ['skill', slug] });
     void queryClient.invalidateQueries({ queryKey: ['skills'] });
     void queryClient.invalidateQueries({ queryKey: ['skill-subscribers', slug] });
+    void queryClient.invalidateQueries({ queryKey: ['skill-bundle-exemptions', slug] });
   };
 
   const update = useMutation({
@@ -425,6 +426,9 @@ const SOURCE_LABEL: Record<SkillSubscriber['source'], string> = {
 /**
  * 订阅者明细与代订阅（仅管理员）。
  * 这是低频管理操作，所以整块放在详情页下方，「添加订阅者」收在卡片标题右侧而不是页面主操作区。
+ *
+ * 捆绑 skill 上多两个动作（决策 45）：对被捆绑的成员可「解除捆绑」——此后由其自行决定订不订；
+ * 解除过的成员若没自己订，就不在订阅者名单里了，所以名单下方单列一块「已解除捆绑」供恢复。
  */
 function SubscribersCard({ slug, skill }: { slug: string; skill: SkillDetail }) {
   const queryClient = useQueryClient();
@@ -434,12 +438,19 @@ function SubscribersCard({ slug, skill }: { slug: string; skill: SkillDetail }) 
     queryKey: ['skill-subscribers', slug],
     queryFn: () => api<SkillSubscriber[]>('GET', `/api/skills/${slug}/subscribers`),
   });
+  const exemptions = useQuery({
+    queryKey: ['skill-bundle-exemptions', slug],
+    queryFn: () => api<SkillBundleExemption[]>('GET', `/api/skills/${slug}/bundle-exemptions`),
+    enabled: skill.bundled,
+  });
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['skill-subscribers', slug] });
+    void queryClient.invalidateQueries({ queryKey: ['skill-bundle-exemptions', slug] });
     void queryClient.invalidateQueries({ queryKey: ['skill', slug] });
     void queryClient.invalidateQueries({ queryKey: ['skills'] });
   };
+  const onError = (err: unknown) => toast.error(err instanceof ApiError ? err.message : '操作失败');
 
   const remove = useMutation({
     mutationFn: (userId: string) => api('DELETE', `/api/skills/${slug}/subscribers/${userId}`),
@@ -447,7 +458,7 @@ function SubscribersCard({ slug, skill }: { slug: string; skill: SkillDetail }) 
       toast.success('已取消该用户的订阅');
       invalidate();
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : '操作失败'),
+    onError,
   });
 
   const add = useMutation({
@@ -457,23 +468,43 @@ function SubscribersCard({ slug, skill }: { slug: string; skill: SkillDetail }) 
       setAdding(false);
       invalidate();
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : '操作失败'),
+    onError,
+  });
+
+  const exempt = useMutation({
+    mutationFn: (userId: string) => api('POST', `/api/skills/${slug}/bundle-exemptions`, { userId }),
+    onSuccess: () => {
+      toast.success('已解除捆绑，该成员可自行决定是否订阅');
+      invalidate();
+    },
+    onError,
+  });
+
+  const restore = useMutation({
+    mutationFn: (userId: string) => api('DELETE', `/api/skills/${slug}/bundle-exemptions/${userId}`),
+    onSuccess: () => {
+      toast.success('已恢复捆绑，对方下次 eat sync 时落地');
+      invalidate();
+    },
+    onError,
   });
 
   const rows = subscribers.data ?? [];
+  const exempted = skill.bundled ? (exemptions.data ?? []) : [];
   return (
     <Card>
       <CardContent>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-semibold">订阅者（{skill.subscriberCount}）</h2>
-          {skill.bundled ? (
-            <span className="text-xs text-muted-foreground">捆绑 Skill：全体成员恒为订阅，取消捆绑后才能单独增减</span>
-          ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            {skill.bundled && (
+              <span className="text-xs text-muted-foreground">捆绑 Skill：全体成员恒为订阅，可对个别成员解除捆绑</span>
+            )}
             <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
               <Plus />
               添加订阅者
             </Button>
-          )}
+          </div>
         </div>
         {subscribers.isPending ? (
           <TableSkeleton rows={2} />
@@ -486,7 +517,7 @@ function SubscribersCard({ slug, skill }: { slug: string; skill: SkillDetail }) 
                 <TableHead>成员</TableHead>
                 <TableHead className="hidden w-24 sm:table-cell">来源</TableHead>
                 <TableHead className="hidden w-40 md:table-cell">订阅时间</TableHead>
-                <TableHead className="w-16" />
+                <TableHead className="w-24" />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -499,6 +530,11 @@ function SubscribersCard({ slug, skill }: { slug: string; skill: SkillDetail }) 
                         管理员
                       </Badge>
                     )}
+                    {r.bundleExempt && (
+                      <Badge variant="outline" className="ml-2">
+                        已解除捆绑
+                      </Badge>
+                    )}
                     <div className="truncate text-xs text-muted-foreground">{r.email}</div>
                     <div className="text-xs text-muted-foreground sm:hidden">{SOURCE_LABEL[r.source]}</div>
                   </TableCell>
@@ -508,8 +544,8 @@ function SubscribersCard({ slug, skill }: { slug: string; skill: SkillDetail }) 
                   <TableCell className="hidden text-muted-foreground md:table-cell">
                     {r.subscribedAt ? formatDateTime(r.subscribedAt) : '—'}
                   </TableCell>
-                  <TableCell>
-                    {r.removable && (
+                  <TableCell className="text-right">
+                    {r.removable ? (
                       <Confirm
                         title={`取消 ${r.name} 的订阅？`}
                         description="对方下次 eat sync 时会从本地移除这个 skill。"
@@ -520,6 +556,20 @@ function SubscribersCard({ slug, skill }: { slug: string; skill: SkillDetail }) 
                           <X />
                         </Button>
                       </Confirm>
+                    ) : (
+                      // 被捆绑的成员：不能直接取消订阅，但可以解除对其的捆绑
+                      <Confirm
+                        title={`解除 ${r.name} 的捆绑？`}
+                        description="解除后这个 skill 对该成员不再强制订阅，由其自行决定是否订阅；未自行订阅的话，下次 eat sync 时会从本地移除。随时可以恢复捆绑。"
+                        confirmText="解除捆绑"
+                        destructive={false}
+                        onConfirm={() => exempt.mutate(r.userId)}
+                      >
+                        <Button variant="ghost" size="sm" className="text-muted-foreground" aria-label={`解除 ${r.name} 的捆绑`}>
+                          <LockOpen className="size-3.5" />
+                          解除捆绑
+                        </Button>
+                      </Confirm>
                     )}
                   </TableCell>
                 </TableRow>
@@ -527,10 +577,45 @@ function SubscribersCard({ slug, skill }: { slug: string; skill: SkillDetail }) 
             </TableBody>
           </Table>
         )}
+        {exempted.length > 0 && (
+          <div className="mt-4 border-t pt-3">
+            <h3 className="mb-2 text-xs font-medium text-muted-foreground">
+              已解除捆绑（{exempted.length}）· 这些成员自行决定是否订阅
+            </h3>
+            <ul className="divide-y">
+              {exempted.map((e) => (
+                <li key={e.userId} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                  <div className="min-w-0">
+                    <span className="font-medium">{e.name}</span>
+                    <Badge variant={e.subscribed ? 'success' : 'outline'} className="ml-2">
+                      {e.subscribed ? '已自行订阅' : '未订阅'}
+                    </Badge>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {e.email} · {e.exemptedBy} 于 {formatDateTime(e.exemptedAt)} 解除
+                    </div>
+                  </div>
+                  <Confirm
+                    title={`恢复 ${e.name} 的捆绑？`}
+                    description="恢复后这个 skill 对该成员重新强制订阅、不可退订，对方下次 eat sync 时落地。"
+                    confirmText="恢复捆绑"
+                    destructive={false}
+                    onConfirm={() => restore.mutate(e.userId)}
+                  >
+                    <Button variant="ghost" size="sm" className="text-muted-foreground" aria-label={`恢复 ${e.name} 的捆绑`}>
+                      <Lock className="size-3.5" />
+                      恢复捆绑
+                    </Button>
+                  </Confirm>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </CardContent>
       {adding && (
         <AddSubscriberDialog
           existing={rows.map((r) => r.userId)}
+          bundled={skill.bundled}
           pending={add.isPending}
           onClose={() => setAdding(false)}
           onSubmit={(userId) => add.mutate(userId)}
@@ -550,11 +635,14 @@ interface UserRow {
 
 function AddSubscriberDialog({
   existing,
+  bundled,
   pending,
   onClose,
   onSubmit,
 }: {
   existing: string[];
+  /** 捆绑 skill 上，能添加的只剩没自己订的管理员与已解除捆绑的成员（其余人本就恒为订阅、都在名单里） */
+  bundled: boolean;
   pending: boolean;
   onClose: () => void;
   onSubmit: (userId: string) => void;
@@ -573,7 +661,14 @@ function AddSubscriberDialog({
           <DialogTitle>添加订阅者</DialogTitle>
         </DialogHeader>
         <div className="flex flex-col gap-4">
-          <Field label="成员" hint="订阅后对方下次 eat sync 就会落地这个 skill">
+          <Field
+            label="成员"
+            hint={
+              bundled
+                ? '捆绑 Skill 全体成员本就恒为订阅，这里只会列出未自行订阅的管理员与已解除捆绑的成员'
+                : '订阅后对方下次 eat sync 就会落地这个 skill'
+            }
+          >
             <Combobox
               groups={[{ options }]}
               value={userId}

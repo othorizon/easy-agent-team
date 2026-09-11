@@ -595,6 +595,130 @@ describe('订阅人数与订阅者管理（决策 37）', () => {
 });
 
 
+describe('捆绑豁免：为个别成员解除捆绑（决策 45）', () => {
+  const slug = 'exempt-kit';
+  let authorId: string;
+  let adminId: string;
+  const slugsOf = (bundle: { body: Array<{ slug: string }> }) => bundle.body.map((s) => s.slug);
+
+  beforeAll(async () => {
+    await api('POST', '/api/skills/push', {
+      token: authorToken,
+      payload: { slug, name: '可豁免的必装', description: '豁免测试', content: '# exempt' },
+    });
+    await api('PATCH', `/api/skills/${slug}`, { token: adminToken, payload: { bundled: true } });
+    // 上一组用例禁用过读者账号，旧 token 已失效，重新登录一次
+    readerToken = (await api('POST', '/api/auth/login', { payload: { email: 'reader@test.dev', password: 'password123' } })).body.token;
+    const all = (await api('GET', '/api/users', { token: adminToken })).body as Array<{ id: string; email: string }>;
+    authorId = all.find((u) => u.email === 'author@test.dev')!.id;
+    adminId = all.find((u) => u.email === 'admin@test.dev')!.id;
+  });
+
+  afterAll(async () => {
+    await api('PATCH', `/api/skills/${slug}`, { token: adminToken, payload: { bundled: false } });
+  });
+
+  it('豁免接口仅管理员可用，作者也不行', async () => {
+    expect((await api('GET', `/api/skills/${slug}/bundle-exemptions`, { token: authorToken })).status).toBe(403);
+    const r = await api('POST', `/api/skills/${slug}/bundle-exemptions`, { token: authorToken, payload: { userId: readerId } });
+    expect(r.status).toBe(403);
+  });
+
+  it('非捆绑 skill 不能解除捆绑；管理员本就不受约束、也不能被解除；乱写的用户 id 是 404', async () => {
+    await api('POST', '/api/skills/push', {
+      token: authorToken,
+      payload: { slug: 'plain-kit', name: '普通', description: '非捆绑', content: '# plain' },
+    });
+    const plain = await api('POST', '/api/skills/plain-kit/bundle-exemptions', { token: adminToken, payload: { userId: readerId } });
+    expect(plain.status).toBe(400);
+    expect(plain.body.error).toBe('VALIDATION_FAILED');
+    const admin = await api('POST', `/api/skills/${slug}/bundle-exemptions`, { token: adminToken, payload: { userId: adminId } });
+    expect(admin.status).toBe(400);
+    expect((await api('DELETE', `/api/skills/${slug}/bundle-exemptions/not-a-uuid`, { token: adminToken })).status).toBe(404);
+    expect((await api('DELETE', `/api/skills/${slug}/subscribers/not-a-uuid`, { token: adminToken })).status).toBe(404);
+  });
+
+  it('解除捆绑后：成员不再被强制订阅、订阅解锁、sync-bundle 里消失、人数与名单随之变化', async () => {
+    const before = await api('GET', `/api/skills?q=${slug}`, { token: readerToken });
+    expect(before.body.items[0]).toMatchObject({ subscribed: true, subscriptionLocked: true, subscriberCount: 2 });
+
+    const r = await api('POST', `/api/skills/${slug}/bundle-exemptions`, { token: adminToken, payload: { userId: readerId } });
+    expect(r.status).toBe(201);
+
+    const after = await api('GET', `/api/skills?q=${slug}`, { token: readerToken });
+    // skill 本身仍是捆绑的，只是对这个成员不再生效
+    expect(after.body.items[0]).toMatchObject({ bundled: true, subscribed: false, subscriptionLocked: false, subscriberCount: 1 });
+    expect(slugsOf(await api('GET', '/api/skills/sync-bundle', { token: readerToken }))).not.toContain(slug);
+    // 详情页同口径
+    const detail = await api('GET', `/api/skills/${slug}`, { token: readerToken });
+    expect(detail.body).toMatchObject({ subscribed: false, subscriptionLocked: false });
+
+    const subs = await api('GET', `/api/skills/${slug}/subscribers`, { token: adminToken });
+    expect(subs.body.map((s: { email: string }) => s.email)).toEqual(['author@test.dev']);
+    expect(subs.body[0]).toMatchObject({ source: 'bundled', removable: false, bundleExempt: false });
+
+    const exemptions = await api('GET', `/api/skills/${slug}/bundle-exemptions`, { token: adminToken });
+    expect(exemptions.status).toBe(200);
+    expect(exemptions.body).toEqual([
+      expect.objectContaining({ userId: readerId, email: 'reader@test.dev', subscribed: false, exemptedBy: '管理员' }),
+    ]);
+  });
+
+  it('被解除捆绑的成员可自行订阅与退订；名单里标为已解除捆绑、可移除，relation 不再是 bundled', async () => {
+    expect((await api('POST', `/api/skills/${slug}/subscribe`, { token: readerToken })).status).toBe(201);
+    const list = await api('GET', `/api/skills?q=${slug}`, { token: readerToken });
+    expect(list.body.items[0]).toMatchObject({ subscribed: true, subscriptionLocked: false, subscriberCount: 2 });
+    const bundle = await api('GET', '/api/skills/sync-bundle', { token: readerToken });
+    expect(bundle.body.find((s: { slug: string }) => s.slug === slug).relation).toBe('subscribed');
+
+    const subs = await api('GET', `/api/skills/${slug}/subscribers`, { token: adminToken });
+    const reader = subs.body.find((s: { email: string }) => s.email === 'reader@test.dev');
+    expect(reader).toMatchObject({ source: 'manual', removable: true, bundleExempt: true });
+    const exemptions = await api('GET', `/api/skills/${slug}/bundle-exemptions`, { token: adminToken });
+    expect(exemptions.body[0].subscribed).toBe(true);
+
+    expect((await api('DELETE', `/api/skills/${slug}/subscribe`, { token: readerToken })).status).toBe(200);
+    expect(slugsOf(await api('GET', '/api/skills/sync-bundle', { token: readerToken }))).not.toContain(slug);
+  });
+
+  it('管理员可代被解除捆绑的成员订阅 / 取消订阅，其他成员仍被拒', async () => {
+    const add = await api('POST', `/api/skills/${slug}/subscribers`, { token: adminToken, payload: { userId: readerId } });
+    expect(add.status).toBe(201);
+    expect(slugsOf(await api('GET', '/api/skills/sync-bundle', { token: readerToken }))).toContain(slug);
+    const remove = await api('DELETE', `/api/skills/${slug}/subscribers/${readerId}`, { token: adminToken });
+    expect(remove.status).toBe(200);
+    expect(slugsOf(await api('GET', '/api/skills/sync-bundle', { token: readerToken }))).not.toContain(slug);
+
+    const other = await api('POST', `/api/skills/${slug}/subscribers`, { token: adminToken, payload: { userId: authorId } });
+    expect(other.body.error).toBe('SKILL_BUNDLED');
+    expect((await api('DELETE', `/api/skills/${slug}/subscribers/${authorId}`, { token: adminToken })).body.error).toBe('SKILL_BUNDLED');
+    // 未被解除的成员自己退订也照旧被拒
+    expect((await api('DELETE', `/api/skills/${slug}/subscribe`, { token: authorToken })).body.error).toBe('SKILL_BUNDLED');
+  });
+
+  it('解除是幂等的；恢复捆绑后成员重新被强制订阅，恢复也是幂等的', async () => {
+    expect((await api('POST', `/api/skills/${slug}/bundle-exemptions`, { token: adminToken, payload: { userId: readerId } })).status).toBe(201);
+    expect((await api('GET', `/api/skills/${slug}/bundle-exemptions`, { token: adminToken })).body).toHaveLength(1);
+
+    expect((await api('DELETE', `/api/skills/${slug}/bundle-exemptions/${readerId}`, { token: adminToken })).status).toBe(200);
+    const list = await api('GET', `/api/skills?q=${slug}`, { token: readerToken });
+    expect(list.body.items[0]).toMatchObject({ subscribed: true, subscriptionLocked: true, subscriberCount: 2 });
+    const bundle = await api('GET', '/api/skills/sync-bundle', { token: readerToken });
+    expect(bundle.body.find((s: { slug: string }) => s.slug === slug).relation).toBe('bundled');
+    expect((await api('GET', `/api/skills/${slug}/bundle-exemptions`, { token: adminToken })).body).toEqual([]);
+    expect((await api('DELETE', `/api/skills/${slug}/bundle-exemptions/${readerId}`, { token: adminToken })).status).toBe(200);
+  });
+
+  it('取消捆绑会清掉豁免记录：再次捆绑时全员重新必装', async () => {
+    await api('POST', `/api/skills/${slug}/bundle-exemptions`, { token: adminToken, payload: { userId: readerId } });
+    await api('PATCH', `/api/skills/${slug}`, { token: adminToken, payload: { bundled: false } });
+    expect((await api('GET', `/api/skills/${slug}/bundle-exemptions`, { token: adminToken })).body).toEqual([]);
+    await api('PATCH', `/api/skills/${slug}`, { token: adminToken, payload: { bundled: true } });
+    const list = await api('GET', `/api/skills?q=${slug}`, { token: readerToken });
+    expect(list.body.items[0]).toMatchObject({ subscribed: true, subscriptionLocked: true });
+  });
+});
+
 describe('控制台在线编辑 SKILL.md（决策 42）', () => {
   const slug = 'edit-online';
   const withFm = (body: string) => `---\nname: 在线编辑\ndescription: 用来验证在线编辑\n---\n\n${body}`;

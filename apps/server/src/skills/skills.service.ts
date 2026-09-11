@@ -9,6 +9,7 @@ import {
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import type {
   PushSkillRequest,
+  SkillBundleExemption,
   SkillDetail,
   SkillFile,
   SkillInfo,
@@ -33,8 +34,17 @@ import {
 } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
+import { isFullId } from '../common/short-id';
 import { DB, type Db } from '../db/db.module';
-import { skills, skillSubscriptions, skillVersions, templateItems, users, userTemplateSelections } from '../db/schema';
+import {
+  skillBundleExemptions,
+  skills,
+  skillSubscriptions,
+  skillVersions,
+  templateItems,
+  users,
+  userTemplateSelections,
+} from '../db/schema';
 
 type SkillRow = typeof skills.$inferSelect;
 type UserRow = typeof users.$inferSelect;
@@ -43,6 +53,8 @@ type UserRow = typeof users.$inferSelect;
 interface SubscriberEntry {
   user: Pick<UserRow, 'id' | 'name' | 'email' | 'role'>;
   source: SkillSubscriber['source'];
+  /** 捆绑 skill 上已被解除捆绑的成员（决策 45）：这条是其自己的订阅，不是捆绑强制的 */
+  bundleExempt: boolean;
   subscribedAt: Date | null;
 }
 
@@ -120,29 +132,63 @@ export class SkillsService {
     return new Set(rows.map((r) => r.id));
   }
 
+  /** 管理员为该用户解除了捆绑的 skill id（决策 45） */
+  private async exemptedSkillIds(userId: string): Promise<Set<string>> {
+    const rows = await this.db
+      .select({ skillId: skillBundleExemptions.skillId })
+      .from(skillBundleExemptions)
+      .where(eq(skillBundleExemptions.userId, userId));
+    return new Set(rows.map((r) => r.skillId));
+  }
+
+  private async isBundleExempt(userId: string, skillId: string): Promise<boolean> {
+    const row = (
+      await this.db
+        .select({ id: skillBundleExemptions.id })
+        .from(skillBundleExemptions)
+        .where(and(eq(skillBundleExemptions.userId, userId), eq(skillBundleExemptions.skillId, skillId)))
+        .limit(1)
+    )[0];
+    return !!row;
+  }
+
   /**
-   * 有效同步集合 = 订阅（含经验沉淀）∪（模板 − 排除）∪ 捆绑。
-   * 捆绑对**非管理员**无条件生效，连「排除」标记也压过去；管理员不受捆绑影响，
-   * 仍按自己的订阅记录算（决策 37）。
+   * **对该用户生效**的捆绑 skill = 全部捆绑 − 已为其解除的（决策 45）；
+   * 管理员不受捆绑影响，恒为空集（决策 37）。锁定订阅、relation=bundled、
+   * 退订被拒三处判断都以这个集合为准，别再各自去看 skill.bundled。
    */
-  private async effectiveSkillIds(user: AuthUser): Promise<{ subs: Set<string>; effective: Set<string> }> {
-    const [subs, template, excluded, bundled] = await Promise.all([
+  private async bindingSkillIds(user: AuthUser): Promise<Set<string>> {
+    if (user.role === 'admin') return new Set();
+    const [bundled, exempted] = await Promise.all([this.bundledSkillIds(), this.exemptedSkillIds(user.id)]);
+    for (const id of exempted) bundled.delete(id);
+    return bundled;
+  }
+
+  /**
+   * 有效同步集合 = 订阅（含经验沉淀）∪（模板 − 排除）∪ 对其生效的捆绑。
+   * 捆绑对**非管理员**无条件生效，连「排除」标记也压过去；管理员不受捆绑影响，
+   * 仍按自己的订阅记录算（决策 37）；被解除捆绑的成员对那个 skill 回到普通规则（决策 45）。
+   */
+  private async effectiveSkillIds(
+    user: AuthUser,
+  ): Promise<{ subs: Set<string>; effective: Set<string>; binding: Set<string> }> {
+    const [subs, template, excluded, binding] = await Promise.all([
       this.subscribedSkillIds(user.id),
       this.templateSkillIds(user.id),
       this.excludedSkillIds(user.id),
-      user.role === 'admin' ? Promise.resolve(new Set<string>()) : this.bundledSkillIds(),
+      this.bindingSkillIds(user),
     ]);
     const effective = new Set(subs);
     for (const id of template) if (!excluded.has(id)) effective.add(id);
-    for (const id of bundled) effective.add(id);
-    return { subs, effective };
+    for (const id of binding) effective.add(id);
+    return { subs, effective, binding };
   }
 
   /**
    * 一批 skill 各自的有效订阅者。人数与明细走同一份计算，避免两边口径不一致。
    *
-   * 口径：手动/经验订阅（未排除）∪（模板选择 − 排除）∪ 捆绑覆盖的成员，且**只算启用中的用户**
-   * ——禁用的用户登录不了、也不会 sync，算进人数会让「多少人在用」失真。
+   * 口径：手动/经验订阅（未排除）∪（模板选择 − 排除）∪ 捆绑覆盖的成员（减去已解除捆绑的），
+   * 且**只算启用中的用户**——禁用的用户登录不了、也不会 sync，算进人数会让「多少人在用」失真。
    */
   private async effectiveSubscribers(skillRows: SkillRow[]): Promise<Map<string, SubscriberEntry[]>> {
     const out = new Map<string, SubscriberEntry[]>();
@@ -150,7 +196,7 @@ export class SkillsService {
     const ids = skillRows.map((s) => s.id);
     const anyBundled = skillRows.some((s) => s.bundled);
 
-    const [subRows, tplRows, activeUsers] = await Promise.all([
+    const [subRows, tplRows, activeUsers, exemptRows] = await Promise.all([
       this.db
         .select({
           skillId: skillSubscriptions.skillId,
@@ -170,6 +216,12 @@ export class SkillsService {
         .select({ id: users.id, name: users.name, email: users.email, role: users.role })
         .from(users)
         .where(eq(users.status, 'active')),
+      anyBundled
+        ? this.db
+            .select({ skillId: skillBundleExemptions.skillId, userId: skillBundleExemptions.userId })
+            .from(skillBundleExemptions)
+            .where(inArray(skillBundleExemptions.skillId, ids))
+        : Promise.resolve([] as Array<{ skillId: string; userId: string }>),
     ]);
 
     const userById = new Map(activeUsers.map((u) => [u.id, u]));
@@ -178,6 +230,8 @@ export class SkillsService {
     for (const skill of skillRows) {
       const entries = new Map<string, SubscriberEntry>();
       const excluded = new Set<string>();
+      // 只在捆绑 skill 上有意义：非捆绑的 skill 不会有豁免记录（取消捆绑时整批清掉）
+      const exempt = new Set(exemptRows.filter((r) => r.skillId === skill.id).map((r) => r.userId));
       for (const r of subRows) {
         if (r.skillId !== skill.id) continue;
         if (r.excluded) {
@@ -185,16 +239,17 @@ export class SkillsService {
           continue;
         }
         const u = userById.get(r.userId);
-        if (u) entries.set(r.userId, { user: u, source: r.source, subscribedAt: r.createdAt });
+        if (u) entries.set(r.userId, { user: u, source: r.source, bundleExempt: exempt.has(u.id), subscribedAt: r.createdAt });
       }
       for (const r of tplRows) {
         if (r.skillId !== skill.id || excluded.has(r.userId) || entries.has(r.userId)) continue;
         const u = userById.get(r.userId);
-        if (u) entries.set(r.userId, { user: u, source: 'template', subscribedAt: null });
+        if (u) entries.set(r.userId, { user: u, source: 'template', bundleExempt: exempt.has(u.id), subscribedAt: null });
       }
       if (skill.bundled) {
         for (const u of members) {
-          if (!entries.has(u.id)) entries.set(u.id, { user: u, source: 'bundled', subscribedAt: null });
+          if (entries.has(u.id) || exempt.has(u.id)) continue;
+          entries.set(u.id, { user: u, source: 'bundled', bundleExempt: false, subscribedAt: null });
         }
       }
       out.set(skill.id, [...entries.values()]);
@@ -207,10 +262,11 @@ export class SkillsService {
     return new Map([...subs].map(([id, list]) => [id, list.length]));
   }
 
+  /** @param binding 对当前用户生效的捆绑 skill 集合（bindingSkillIds），决定 subscriptionLocked */
   private toInfo(
     row: SkillRow,
     ownerName: string,
-    user: AuthUser,
+    binding: Set<string>,
     subscribed: boolean,
     subscriberCount: number,
   ): SkillInfo {
@@ -227,7 +283,7 @@ export class SkillsService {
       currentVersion: row.currentVersion,
       bundled: row.bundled,
       subscribed,
-      subscriptionLocked: row.bundled && user.role !== 'admin',
+      subscriptionLocked: binding.has(row.id),
       subscriberCount,
       updatedAt: row.updatedAt.toISOString(),
     };
@@ -261,7 +317,7 @@ export class SkillsService {
       .from(skills)
       .innerJoin(users, eq(skills.ownerId, users.id))
       .orderBy(desc(skills.updatedAt));
-    const { subs, effective } = await this.effectiveSkillIds(user);
+    const { subs, effective, binding } = await this.effectiveSkillIds(user);
 
     const keyword = query.q?.toLowerCase() ?? '';
     // 先按可见性 / 关键词 / kind 收窄，在这个集合上数各 scope 的条数，最后才按 scope 过滤：
@@ -294,7 +350,7 @@ export class SkillsService {
     const subscriberCounts = await this.subscriberCounts(pageRows.map((r) => r.skill));
     return {
       items: pageRows.map((r) =>
-        this.toInfo(r.skill, r.ownerName, user, effective.has(r.skill.id), subscriberCounts.get(r.skill.id) ?? 0),
+        this.toInfo(r.skill, r.ownerName, binding, effective.has(r.skill.id), subscriberCounts.get(r.skill.id) ?? 0),
       ),
       total: filtered.length,
       page: query.page,
@@ -306,7 +362,7 @@ export class SkillsService {
   async detail(user: AuthUser, slug: string): Promise<SkillDetail> {
     const skill = await this.getBySlug(slug);
     // 订阅状态按**有效集合**判（含模板派生与捆绑），与清单页口径一致
-    const { subs, effective } = await this.effectiveSkillIds(user);
+    const { subs, effective, binding } = await this.effectiveSkillIds(user);
     if (!this.canSee(skill, user, subs)) {
       throw new NotFoundException({ error: 'NOT_FOUND', message: `Skill ${slug} 不存在` });
     }
@@ -320,7 +376,7 @@ export class SkillsService {
     )[0];
     const counts = await this.subscriberCounts([skill]);
     return {
-      ...this.toInfo(skill, owner?.name ?? '(已删除)', user, effective.has(skill.id), counts.get(skill.id) ?? 0),
+      ...this.toInfo(skill, owner?.name ?? '(已删除)', binding, effective.has(skill.id), counts.get(skill.id) ?? 0),
       content: version?.content ?? '',
       files: version?.files ?? [],
     };
@@ -550,6 +606,11 @@ export class SkillsService {
       })
       .where(eq(skills.id, skill.id))
       .returning();
+    if (skill.bundled && !bundled) {
+      // 取消捆绑后，为个别成员做的「解除捆绑」就没有意义了：整批清掉。将来再开捆绑是一次新的
+      // 「全员必装」决定，不该让旧豁免悄悄复活、让某些人莫名其妙地没被装上（决策 45）
+      await this.db.delete(skillBundleExemptions).where(eq(skillBundleExemptions.skillId, skill.id));
+    }
     await this.audit.record({
       actorId: user.id,
       action: bundled !== skill.bundled ? (bundled ? 'skill.bundled' : 'skill.unbundled') : 'skill.updated',
@@ -558,9 +619,9 @@ export class SkillsService {
       meta: { slug },
     });
     const [owner] = await this.db.select({ name: users.name }).from(users).where(eq(users.id, row.ownerId));
-    const { effective } = await this.effectiveSkillIds(user);
+    const { effective, binding } = await this.effectiveSkillIds(user);
     const counts = await this.subscriberCounts([row]);
-    return this.toInfo(row, owner?.name ?? '', user, effective.has(row.id), counts.get(row.id) ?? 0);
+    return this.toInfo(row, owner?.name ?? '', binding, effective.has(row.id), counts.get(row.id) ?? 0);
   }
 
   async remove(user: AuthUser, slug: string) {
@@ -615,10 +676,11 @@ export class SkillsService {
 
   async unsubscribe(user: AuthUser, slug: string) {
     const skill = await this.getBySlug(slug);
-    if (skill.bundled && user.role !== 'admin') {
+    // 以「对我生效的捆绑」判：管理员与被解除捆绑的成员都能照常退订（决策 37 / 45）
+    if ((await this.bindingSkillIds(user)).has(skill.id)) {
       throw new BadRequestException({
         error: 'SKILL_BUNDLED',
-        message: `${slug} 已被管理员设为捆绑，对所有成员始终同步，无法退订`,
+        message: `${slug} 已被管理员设为捆绑，对所有成员始终同步，无法退订；确实不需要的话可请管理员为你解除捆绑`,
       });
     }
     await this.removeSubscription(user.id, skill.id);
@@ -637,14 +699,17 @@ export class SkillsService {
         email: e.user.email,
         role: e.user.role,
         source: e.source,
-        // 捆绑强制的订阅移不掉（要先取消捆绑）；管理员不受捆绑影响，照常可移
-        removable: !(skill.bundled && e.user.role !== 'admin'),
+        // 捆绑强制的订阅移不掉（要先取消捆绑，或为该成员解除捆绑）；管理员不受捆绑影响，照常可移
+        removable: !(skill.bundled && e.user.role !== 'admin' && !e.bundleExempt),
+        bundleExempt: e.bundleExempt,
         subscribedAt: e.subscribedAt?.toISOString() ?? null,
       }))
       .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
   }
 
   private async getTargetUser(userId: string): Promise<UserRow> {
+    // 路径参数直接拿去和 uuid 列比较，乱写的 id 要挡成 404 而不是 PG 语法错的 500
+    if (!isFullId(userId)) throw new NotFoundException({ error: 'NOT_FOUND', message: '用户不存在' });
     const row = (await this.db.select().from(users).where(eq(users.id, userId)).limit(1))[0];
     if (!row) throw new NotFoundException({ error: 'NOT_FOUND', message: '用户不存在' });
     return row;
@@ -664,7 +729,8 @@ export class SkillsService {
         message: '该 Skill 为私有，成员看不到；请先改为团队可见（授予可见的经验 skill 可以直接订阅）',
       });
     }
-    if (skill.bundled && target.role !== 'admin') {
+    // 被解除捆绑的成员回到普通规则，可以代其订阅（决策 45）
+    if (skill.bundled && target.role !== 'admin' && !(await this.isBundleExempt(target.id, skill.id))) {
       throw new BadRequestException({
         error: 'SKILL_BUNDLED',
         message: `${slug} 已是捆绑 Skill，全体成员本就恒为订阅，无需单独添加`,
@@ -685,10 +751,10 @@ export class SkillsService {
   async removeSubscriber(admin: AuthUser, slug: string, targetUserId: string) {
     const skill = await this.getBySlug(slug);
     const target = await this.getTargetUser(targetUserId);
-    if (skill.bundled && target.role !== 'admin') {
+    if (skill.bundled && target.role !== 'admin' && !(await this.isBundleExempt(target.id, skill.id))) {
       throw new BadRequestException({
         error: 'SKILL_BUNDLED',
-        message: `${slug} 是捆绑 Skill，成员不能单独取消；要停止分发请先取消捆绑`,
+        message: `${slug} 是捆绑 Skill，成员不能单独取消；要停止分发请先取消捆绑，或为该成员解除捆绑`,
       });
     }
     await this.removeSubscription(target.id, skill.id);
@@ -702,7 +768,87 @@ export class SkillsService {
     return { ok: true };
   }
 
-  /** eat sync 的落地内容：（订阅 ∪ 模板−排除）且仍可见的 skill 当前版本 */
+  /**
+   * 已解除捆绑的成员名单（仅管理员，决策 45）。没自己订的不会出现在订阅者名单里，
+   * 管理员要靠这份清单才看得到「谁被解除过」并恢复捆绑；与订阅者名单同口径只列启用中的用户。
+   */
+  async bundleExemptions(slug: string): Promise<SkillBundleExemption[]> {
+    const skill = await this.getBySlug(slug);
+    const rows = await this.db.select().from(skillBundleExemptions).where(eq(skillBundleExemptions.skillId, skill.id));
+    if (rows.length === 0) return [];
+    const ids = [...new Set(rows.flatMap((r) => [r.userId, r.createdBy]))];
+    const people = await this.db
+      .select({ id: users.id, name: users.name, email: users.email, status: users.status })
+      .from(users)
+      .where(inArray(users.id, ids));
+    const byId = new Map(people.map((p) => [p.id, p]));
+    const subscribed = new Set(((await this.effectiveSubscribers([skill])).get(skill.id) ?? []).map((e) => e.user.id));
+    const out: SkillBundleExemption[] = [];
+    for (const r of rows) {
+      const u = byId.get(r.userId);
+      if (!u || u.status !== 'active') continue;
+      out.push({
+        userId: u.id,
+        name: u.name,
+        email: u.email,
+        subscribed: subscribed.has(u.id),
+        exemptedBy: byId.get(r.createdBy)?.name ?? '(已删除)',
+        exemptedAt: r.createdAt.toISOString(),
+      });
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
+  }
+
+  /**
+   * 管理员为成员解除捆绑（决策 45）：此后该成员对这个 skill 自行决定订不订。
+   * 解除即刻生效——没自己订过的，下次 eat sync 就会移除本地副本；自己订过的照旧保留。
+   */
+  async addBundleExemption(admin: AuthUser, slug: string, targetUserId: string) {
+    const skill = await this.getBySlug(slug);
+    if (!skill.bundled) {
+      throw new BadRequestException({ error: 'VALIDATION_FAILED', message: `${slug} 不是捆绑 Skill，成员本就可自行订阅 / 退订` });
+    }
+    const target = await this.getTargetUser(targetUserId);
+    if (target.role === 'admin') {
+      throw new BadRequestException({ error: 'VALIDATION_FAILED', message: '管理员本就不受捆绑约束，无需解除' });
+    }
+    if (target.status !== 'active') {
+      throw new BadRequestException({ error: 'VALIDATION_FAILED', message: '该用户已禁用' });
+    }
+    await this.db
+      .insert(skillBundleExemptions)
+      .values({ userId: target.id, skillId: skill.id, createdBy: admin.id })
+      .onConflictDoNothing();
+    await this.audit.record({
+      actorId: admin.id,
+      action: 'skill.bundle_exemption_added',
+      targetType: 'skill',
+      targetId: skill.id,
+      meta: { slug, targetUserId: target.id, targetUserEmail: target.email },
+    });
+    return { ok: true };
+  }
+
+  /** 管理员恢复成员的捆绑：删掉豁免记录，该成员重新被强制订阅；其自己的订阅记录不动 */
+  async removeBundleExemption(admin: AuthUser, slug: string, targetUserId: string) {
+    const skill = await this.getBySlug(slug);
+    const target = await this.getTargetUser(targetUserId);
+    const deleted = await this.db
+      .delete(skillBundleExemptions)
+      .where(and(eq(skillBundleExemptions.userId, target.id), eq(skillBundleExemptions.skillId, skill.id)))
+      .returning({ id: skillBundleExemptions.id });
+    if (deleted.length > 0) {
+      await this.audit.record({
+        actorId: admin.id,
+        action: 'skill.bundle_exemption_removed',
+        targetType: 'skill',
+        targetId: skill.id,
+        meta: { slug, targetUserId: target.id, targetUserEmail: target.email },
+      });
+    }
+    return { ok: true };
+  }
+
   /**
    * 该用户整套 Skill 的指纹（更新检测用，决策 26）：与 syncBundle 的可见性规则完全一致，
    * 但只查 skills 表的 slug + currentVersion——不 join skill_versions、不读内容，
@@ -725,18 +871,19 @@ export class SkillsService {
     return skillBundleVersion(items);
   }
 
-  /** 这条 skill 为什么会出现在该用户的 sync 里：own > bundled > subscribed > template */
-  private relationOf(skill: SkillRow, user: AuthUser, subs: Set<string>): SyncSkill['relation'] {
+  /** 这条 skill 为什么会出现在该用户的 sync 里：own > bundled（对其生效的） > subscribed > template */
+  private relationOf(skill: SkillRow, user: AuthUser, subs: Set<string>, binding: Set<string>): SyncSkill['relation'] {
     if (skill.ownerId === user.id) return 'own';
-    if (skill.bundled && user.role !== 'admin') return 'bundled';
+    if (binding.has(skill.id)) return 'bundled';
     if (subs.has(skill.id)) return 'subscribed';
     return 'template';
   }
 
+  /** eat sync 的落地内容：（订阅 ∪ 模板−排除 ∪ 对其生效的捆绑）且仍可见的 skill 当前版本 */
   async syncBundle(user: AuthUser): Promise<SyncSkill[]> {
     // 内置平台使用指南对所有用户始终下发（§10 决策 11）：不落库、不可退订，随平台版本更新
     const guide = platformGuideSyncSkill();
-    const { subs, effective } = await this.effectiveSkillIds(user);
+    const { subs, effective, binding } = await this.effectiveSkillIds(user);
     if (effective.size === 0) return [guide];
     const rows = await this.db
       .select()
@@ -765,7 +912,7 @@ export class SkillsService {
         name: s.name,
         description: s.description,
         source: s.source,
-        relation: this.relationOf(s, user, subs),
+        relation: this.relationOf(s, user, subs, binding),
         version: s.currentVersion,
         content: v?.content ?? '',
         files: v?.files ?? [],

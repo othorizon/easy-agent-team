@@ -102,7 +102,7 @@ export const skillInfoSchema = z.object({
    */
   bundled: z.boolean(),
   subscribed: z.boolean(),
-  /** 当前用户不能改这条订阅（捆绑且自己不是管理员）；控制台据此禁用按钮 */
+  /** 当前用户不能改这条订阅（捆绑、自己不是管理员、也没被解除捆绑）；控制台据此禁用按钮 */
   subscriptionLocked: z.boolean(),
   /** 有效同步人数：手动/经验订阅 ∪（模板 − 排除）∪ 捆绑覆盖的成员 */
   subscriberCount: z.number(),
@@ -130,7 +130,7 @@ export const syncSkillSchema = z.object({
   name: z.string(),
   description: z.string(),
   source: z.enum(['manual', 'experience', 'builtin']),
-  /** own=自己创建；bundled=管理员设为捆绑（不可退订）；subscribed=订阅他人；template=来自所选角色模板；builtin=平台内置（人人同步） */
+  /** own=自己创建；bundled=管理员设为捆绑且对自己生效（不可退订）；subscribed=订阅他人；template=来自所选角色模板；builtin=平台内置（人人同步） */
   relation: z.enum(['own', 'bundled', 'subscribed', 'template', 'builtin']),
   version: z.number(),
   content: z.string(),
@@ -191,8 +191,13 @@ export const skillSubscriberSchema = z.object({
   role: z.enum(['admin', 'member']),
   /** bundled=由捆绑模式强制，非订阅记录 */
   source: z.enum(['manual', 'template', 'experience', 'bundled']),
-  /** 捆绑强制的订阅移不掉（要先取消捆绑），模板派生的移除记为排除 */
+  /** 捆绑强制的订阅移不掉（要先取消捆绑或为该成员解除捆绑），模板派生的移除记为排除 */
   removable: z.boolean(),
+  /**
+   * 该成员已被管理员解除了这个捆绑 skill 的捆绑（决策 45）：这条订阅是其自己订的（或来自模板），
+   * 与普通 skill 一样可退可移。非捆绑 skill 上恒为 false。
+   */
+  bundleExempt: z.boolean(),
   /** 捆绑强制的没有订阅记录，为 null */
   subscribedAt: z.string().nullable(),
 });
@@ -201,3 +206,24 @@ export type SkillSubscriber = z.infer<typeof skillSubscriberSchema>;
 /** 管理员替他人订阅 */
 export const addSkillSubscriberSchema = z.object({ userId: z.string().uuid() });
 export type AddSkillSubscriberRequest = z.infer<typeof addSkillSubscriberSchema>;
+
+/**
+ * 捆绑 skill 上被解除捆绑的成员（决策 45，仅管理员可读）。
+ * 解除后该成员不再被强制订阅、自行决定订不订；没自己订的不会出现在订阅者名单里，
+ * 所以要单独列一份，管理员才看得到「谁被解除过」并能恢复捆绑。
+ */
+export const skillBundleExemptionSchema = z.object({
+  userId: z.string(),
+  name: z.string(),
+  email: z.string(),
+  /** 解除捆绑后是否又自行订阅了（或经模板 / 经验沉淀进了同步范围） */
+  subscribed: z.boolean(),
+  /** 解除捆绑的管理员姓名 */
+  exemptedBy: z.string(),
+  exemptedAt: z.string(),
+});
+export type SkillBundleExemption = z.infer<typeof skillBundleExemptionSchema>;
+
+/** 管理员为某个成员解除捆绑 */
+export const addSkillBundleExemptionSchema = z.object({ userId: z.string().uuid() });
+export type AddSkillBundleExemptionRequest = z.infer<typeof addSkillBundleExemptionSchema>;

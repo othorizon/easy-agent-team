@@ -1,10 +1,12 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query } from '@nestjs/common';
 import {
+  addSkillBundleExemptionSchema,
   addSkillSubscriberSchema,
   pushSkillSchema,
   skillListQuerySchema,
   updateSkillContentSchema,
   updateSkillSchema,
+  type AddSkillBundleExemptionRequest,
   type AddSkillSubscriberRequest,
   type PushSkillRequest,
   type SkillListQuery,
@@ -105,5 +107,32 @@ export class SkillsController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.skills.removeSubscriber(user, slug, userId);
+  }
+
+  /** 捆绑豁免（决策 45）：为个别成员解除 / 恢复捆绑，仅管理员 */
+  @Get(':slug/bundle-exemptions')
+  @Roles('admin')
+  bundleExemptions(@Param('slug') slug: string) {
+    return this.skills.bundleExemptions(slug);
+  }
+
+  @Post(':slug/bundle-exemptions')
+  @Roles('admin')
+  addBundleExemption(
+    @Param('slug') slug: string,
+    @Body(new ZodValidationPipe(addSkillBundleExemptionSchema)) body: AddSkillBundleExemptionRequest,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.skills.addBundleExemption(user, slug, body.userId);
+  }
+
+  @Delete(':slug/bundle-exemptions/:userId')
+  @Roles('admin')
+  removeBundleExemption(
+    @Param('slug') slug: string,
+    @Param('userId') userId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.skills.removeBundleExemption(user, slug, userId);
   }
 }

@@ -92,6 +92,13 @@
       "when": 1788862519621,
       "tag": "0012_skill_bundled",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1789093236937,
+      "tag": "0013_skill_bundle_exemption",
+      "breakpoints": true
     }
   ]
 }

@@ -219,6 +219,30 @@ export const skillSubscriptions = pgTable(
   (t) => [uniqueIndex('skill_subscription_user_skill_idx').on(t.userId, t.skillId)],
 );
 
+/**
+ * 捆绑豁免（决策 45）：管理员在捆绑 skill 的订阅者名单里为个别成员「解除捆绑」——
+ * 该成员不再被强制订阅，回到与普通 skill 一样的自主订阅 / 退订。
+ * 独立成表而不复用 skill_subscription.excluded：豁免是管理员的决定、要跨成员自己的订阅 / 退订
+ * 持久存在，而 excluded 会被 subscribe / unsubscribe 反复翻转。skill 取消捆绑时整批清掉。
+ */
+export const skillBundleExemptions = pgTable(
+  'skill_bundle_exemption',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    skillId: uuid('skill_id')
+      .notNull()
+      .references(() => skills.id, { onDelete: 'cascade' }),
+    createdBy: uuid('created_by')
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('skill_bundle_exemption_user_skill_idx').on(t.userId, t.skillId)],
+);
+
 /** 角色模板：管理员预定义的能力套餐 */
 export const roleTemplates = pgTable('role_template', {
   id: uuid('id').primaryKey().defaultRandom(),

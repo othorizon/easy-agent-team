@@ -169,10 +169,13 @@ describe('eat skill list 的筛选与条数（决策 37）', () => {
     expect(() => buildListQuery({ kind: 'nope' })).toThrow(/bundled/);
   });
 
-  it('行首标记：捆绑优先于订阅状态', () => {
-    const base = { bundled: false, subscribed: false } as SkillInfo;
+  it('行首标记：对我锁定的捆绑优先于订阅状态', () => {
+    const base = { bundled: false, subscribed: false, subscriptionLocked: false } as SkillInfo;
     expect(listMark(base)).toBe('○');
     expect(listMark({ ...base, subscribed: true })).toBe('●');
-    expect(listMark({ ...base, bundled: true, subscribed: true })).toBe('◆');
+    expect(listMark({ ...base, bundled: true, subscribed: true, subscriptionLocked: true })).toBe('◆');
+    // 捆绑但对我不锁定（管理员 / 已解除捆绑的成员）：按自己的订阅状态标
+    expect(listMark({ ...base, bundled: true, subscribed: true, subscriptionLocked: false })).toBe('●');
+    expect(listMark({ ...base, bundled: true, subscribed: false, subscriptionLocked: false })).toBe('○');
   });
 });
