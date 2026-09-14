@@ -10,7 +10,7 @@ import { PageLoading } from '../components/page-loading';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
-import { formatDateTime } from '../lib/utils';
+import { formatDateTime } from '../lib/format';
 import { AssignmentActions, DB_STATUS_BADGE, useAssignmentAction } from './db-shared';
 
 /**

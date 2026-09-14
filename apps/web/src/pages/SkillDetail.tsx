@@ -21,7 +21,7 @@ import { Input, Textarea } from '../components/ui/input';
 import { TableSkeleton } from '../components/ui/skeleton';
 import { Switch } from '../components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
-import { formatDateTime } from '../lib/utils';
+import { formatDateTime } from '../lib/format';
 
 export function SkillDetailPage() {
   const { slug = '' } = useParams();

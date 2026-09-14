@@ -8,6 +8,7 @@ import {
   LOG_TAIL_DEFAULT,
   STATIC_CONTAINER_PORT,
   appBuildTypeSchema,
+  formatDateTime,
 } from '@eat/shared';
 import type {
   AppBuildType,
@@ -39,7 +40,7 @@ const STATUS_LABEL: Record<string, string> = {
 const SETTLED = new Set(['done', 'error', 'cancelled']);
 /** Dokploy 构建记录自己的状态取值（build-logs 用） */
 const BUILD_LABEL: Record<string, string> = { running: '构建中', done: '成功', error: '失败', cancelled: '已取消' };
-const when = (iso: string): string => (iso ? iso.slice(0, 16).replace('T', ' ') : '');
+const when = (iso: string): string => (iso ? formatDateTime(iso) : '');
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function resolveApp(api: Api, slug?: string): Promise<AppInfo> {

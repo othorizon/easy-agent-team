@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import type { AccessRequestInfo, EnvironmentInfo, PullValuesResponse, VariableMeta } from '@eat/shared';
+import { formatDateTime } from '@eat/shared';
 import { Api } from '../client.js';
 
 type CatalogEntry = { environment: EnvironmentInfo; variables: VariableMeta[] };
@@ -106,7 +107,7 @@ export async function envRequests(): Promise<void> {
   const statusLabel: Record<string, string> = { pending: '待审批', approved: '已批准', rejected: '已驳回' };
   for (const r of rows) {
     console.log(
-      `${r.createdAt.slice(0, 16)}  ${statusLabel[r.status] ?? r.status}  ${r.environmentSlug}: ${r.keys.join(', ')}`,
+      `${formatDateTime(r.createdAt)}  ${statusLabel[r.status] ?? r.status}  ${r.environmentSlug}: ${r.keys.join(', ')}`,
     );
   }
 }

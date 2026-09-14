@@ -16,7 +16,7 @@ import { Card, CardContent } from '../components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { Switch } from '../components/ui/switch';
-import { formatDateTime } from '../lib/utils';
+import { formatDateTime } from '../lib/format';
 import { HELP_STATUS_BADGE } from './Help';
 
 export function HelpDetailPage() {
