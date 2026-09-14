@@ -61,6 +61,49 @@ export function appContainerPort(buildType: AppBuildType | null, port: number): 
   return buildType === 'static' ? STATIC_CONTAINER_PORT : port;
 }
 
+// ---------- Git 仓库地址 → 仓库网页地址（决策 46） ----------
+
+/** GitHub 的 owner：字母、数字、连字符 */
+const GITHUB_OWNER_REGEX = /^[A-Za-z0-9-]+$/;
+/** GitHub 的仓库名：字母、数字、连字符、下划线、点 */
+const GITHUB_REPO_REGEX = /^[A-Za-z0-9_.-]+$/;
+
+/**
+ * 从 Git 仓库地址解析出 GitHub 仓库的网页地址；不是 GitHub 的地址回 null。
+ *
+ * 应用的「Git 仓库」字段是给 Dokploy 拉代码用的，写法五花八门：`git@github.com:o/r.git`（scp 式 SSH）、
+ * `ssh://git@github.com/o/r.git`（可带端口）、`https://github.com/o/r.git`（可带 `user:token@`）、
+ * 直接贴的网页地址（`https://github.com/o/r/tree/main`）、甚至不带协议的 `github.com/o/r`，
+ * 这里一律只认 `owner/repo` 两段，回 `https://github.com/owner/repo`。
+ * 只对 `github.com`（含 `www.`）生效；其他 Git 服务的网页路由各不相同，不猜。
+ */
+export function githubRepoWebUrl(repoUrl: string): string | null {
+  const parts = splitGitUrl(repoUrl.trim());
+  if (!parts) return null;
+  if (parts.host.toLowerCase().replace(/^www\./, '') !== 'github.com') return null;
+
+  const segments = parts.path
+    .replace(/[?#].*$/, '')
+    .split('/')
+    .filter((s) => s !== '');
+  if (segments.length < 2) return null;
+  const owner = segments[0];
+  const repo = segments[1].replace(/\.git$/i, '');
+  if (!GITHUB_OWNER_REGEX.test(owner) || !GITHUB_REPO_REGEX.test(repo) || repo === '.' || repo === '..') return null;
+  return `https://github.com/${owner}/${repo}`;
+}
+
+/** 把三种写法的 Git 地址拆成主机 + 路径：带协议的 URL、scp 式 `[user@]host:path`、不带协议的 `host/path` */
+function splitGitUrl(raw: string): { host: string; path: string } | null {
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:?#\s]+)(?::\d*)?([/?#]\S*)?$/i.exec(raw);
+  if (withScheme) return { host: withScheme[1], path: withScheme[2] ?? '' };
+  const scpLike = /^(?:[^@/:\s]+@)?([^@/:\s]+):(\S*)$/.exec(raw);
+  if (scpLike) return { host: scpLike[1], path: scpLike[2] };
+  const bare = /^([^/:@\s]+)\/(\S*)$/.exec(raw);
+  if (bare) return { host: bare[1], path: bare[2] };
+  return null;
+}
+
 // ---------- Dokploy 接入配置（管理员） ----------
 
 export const updateDokploySettingsSchema = z.object({
