@@ -214,6 +214,93 @@ describe('权限申请审批闭环', () => {
     expect(again.status).toBe(409);
   });
 
+  it('历史审批：已处理的申请离开 inbox 进入历史、带审批人姓名；非审批人的历史为空（决策 45）', async () => {
+    const inbox = await api('GET', '/api/access-requests/inbox', { token: adminToken });
+    expect(inbox.body.map((x: { id: string }) => x.id)).not.toContain(requestId);
+
+    const history = await api('GET', '/api/access-requests/history', { token: adminToken });
+    expect(history.status).toBe(200);
+    expect(history.body).toMatchObject({ total: 1, page: 1, pageSize: 20, counts: { approved: 1, rejected: 0 } });
+    expect(history.body.items).toHaveLength(1);
+    expect(history.body.items[0]).toMatchObject({
+      id: requestId,
+      status: 'approved',
+      requesterName: '成员小王',
+      decidedByName: '管理员',
+    });
+    expect(history.body.items[0].decidedAt).toBeTruthy();
+    expect(history.body.items[0].grantExpiresAt).toBeTruthy();
+
+    // 申请人自己不是审批人：历史里什么都没有
+    const memberHistory = await api('GET', '/api/access-requests/history', { token: memberToken });
+    expect(memberHistory.body).toMatchObject({ total: 0, items: [], counts: { approved: 0, rejected: 0 } });
+    // 「我发起的申请」里同样能看到是谁批的
+    const mine = await api('GET', '/api/access-requests/mine', { token: memberToken });
+    expect(mine.body.find((x: { id: string }) => x.id === requestId)).toMatchObject({ decidedByName: '管理员' });
+  });
+
+  it('历史审批：按结果筛选、分页、按审批时间倒序；counts 不随筛选变', async () => {
+    const r = await api('POST', '/api/access-requests', {
+      token: memberToken,
+      payload: { environmentSlug: 'internal-services', keys: ['API_TOKEN'], reason: '再申请一次，看驳回' },
+    });
+    expect(r.status).toBe(201);
+    expect(r.body.decidedByName).toBeNull();
+    const rejected = await api('POST', `/api/access-requests/${r.body.id}/decision`, {
+      token: adminToken,
+      payload: { decision: 'rejected' },
+    });
+    expect(rejected.body).toMatchObject({ status: 'rejected', decidedByName: '管理员' });
+
+    const page1 = await api('GET', '/api/access-requests/history?pageSize=1', { token: adminToken });
+    expect(page1.body).toMatchObject({ total: 2, page: 1, pageSize: 1, counts: { approved: 1, rejected: 1 } });
+    expect(page1.body.items.map((x: { id: string }) => x.id)).toEqual([r.body.id]);
+    const page2 = await api('GET', '/api/access-requests/history?pageSize=1&page=2', { token: adminToken });
+    expect(page2.body.items.map((x: { id: string }) => x.id)).toEqual([requestId]);
+
+    const onlyRejected = await api('GET', '/api/access-requests/history?status=rejected', { token: adminToken });
+    expect(onlyRejected.body.total).toBe(1);
+    expect(onlyRejected.body.items.map((x: { id: string }) => x.id)).toEqual([r.body.id]);
+    expect(onlyRejected.body.counts).toEqual({ approved: 1, rejected: 1 });
+
+    expect((await api('GET', '/api/access-requests/history?page=0', { token: adminToken })).status).toBe(400);
+    expect((await api('GET', '/api/access-requests/history?status=pending', { token: adminToken })).status).toBe(400);
+  });
+
+  it('历史审批：环境 Owner 只见自己环境上的申请，管理员代批的也算', async () => {
+    const env = await api('POST', '/api/envs', {
+      token: memberToken,
+      payload: { slug: 'member-owned', name: '成员自己的环境', description: '' },
+    });
+    expect(env.status).toBe(201);
+    const v = await api('POST', '/api/envs/member-owned/variables', {
+      token: memberToken,
+      payload: { key: 'OWN_KEY', value: 'own-secret', description: '' },
+    });
+    expect(v.status).toBe(201);
+    const req = await api('POST', '/api/access-requests', {
+      token: adminToken,
+      payload: { environmentSlug: 'member-owned', keys: ['OWN_KEY'], reason: '管理员来申请' },
+    });
+    expect(req.status).toBe(201);
+    const memberInbox = await api('GET', '/api/access-requests/inbox', { token: memberToken });
+    expect(memberInbox.body.map((x: { id: string }) => x.id)).toEqual([req.body.id]);
+
+    // 管理员自己批掉：Owner 没点过批准，但这是他环境上的申请，历史里必须看得到
+    const d = await api('POST', `/api/access-requests/${req.body.id}/decision`, {
+      token: adminToken,
+      payload: { decision: 'approved' },
+    });
+    expect(d.status).toBe(201);
+    const memberHistory = await api('GET', '/api/access-requests/history', { token: memberToken });
+    expect(memberHistory.body.total).toBe(1);
+    expect(memberHistory.body.items[0]).toMatchObject({ id: req.body.id, requesterName: '管理员', decidedByName: '管理员' });
+    expect(memberHistory.body.items[0].grantExpiresAt).toBeNull();
+    // 管理员见全部环境：三条
+    const adminHistory = await api('GET', '/api/access-requests/history', { token: adminToken });
+    expect(adminHistory.body).toMatchObject({ total: 3, counts: { approved: 2, rejected: 1 } });
+  });
+
   it('敏感读取已落审计', async () => {
     const r = await api('GET', '/api/audit?action=secret.read', { token: adminToken });
     const mine = r.body.filter((x: { meta: { keys: string[] } }) => x.meta?.keys?.includes('API_TOKEN'));

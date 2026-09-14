@@ -191,11 +191,48 @@ export const accessRequestSchema = z.object({
   reason: z.string(),
   status: accessRequestStatusSchema,
   decidedBy: z.string().nullable(),
+  /** 审批人姓名；未处理时为 null（历史审批清单要显示是谁批的，只给 id 没法看） */
+  decidedByName: z.string().nullable(),
   decidedAt: z.string().nullable(),
   grantExpiresAt: z.string().nullable(),
   createdAt: z.string(),
 });
 export type AccessRequestInfo = z.infer<typeof accessRequestSchema>;
+
+export const ACCESS_REQUEST_HISTORY_MAX_PAGE_SIZE = 1000;
+export const ACCESS_REQUEST_HISTORY_DEFAULT_PAGE_SIZE = 20;
+
+/** 历史审批按结果筛选：控制台「全部 / 已批准 / 已驳回」分段就是它 */
+export const accessRequestHistoryStatusSchema = z.enum(['all', 'approved', 'rejected']);
+export type AccessRequestHistoryStatus = z.infer<typeof accessRequestHistoryStatusSchema>;
+
+/** GET /api/access-requests/history 的查询串（数值从 query 来，用 coerce）——决策 45 */
+export const accessRequestHistoryQuerySchema = z.object({
+  status: accessRequestHistoryStatusSchema.default('all'),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(ACCESS_REQUEST_HISTORY_MAX_PAGE_SIZE)
+    .default(ACCESS_REQUEST_HISTORY_DEFAULT_PAGE_SIZE),
+});
+export type AccessRequestHistoryQuery = z.infer<typeof accessRequestHistoryQuerySchema>;
+
+export const accessRequestHistoryResultSchema = z.object({
+  /** 按审批时间倒序 */
+  items: z.array(accessRequestSchema),
+  /** 筛选后的总条数（不是本页条数） */
+  total: z.number(),
+  page: z.number(),
+  pageSize: z.number(),
+  /** 两种结果各有几条：status 筛选不参与——回答「切到那个分段会有几条」 */
+  counts: z.object({
+    approved: z.number(),
+    rejected: z.number(),
+  }),
+});
+export type AccessRequestHistoryResult = z.infer<typeof accessRequestHistoryResultSchema>;
 
 export const decideAccessRequestSchema = z.object({
   decision: z.enum(['approved', 'rejected']),
