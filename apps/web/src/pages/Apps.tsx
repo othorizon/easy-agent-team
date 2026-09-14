@@ -20,9 +20,10 @@ import {
   DEFAULT_DOCKERFILE,
   DEFAULT_PUBLISH_DIRECTORY,
   STATIC_CONTAINER_PORT,
+  githubRepoWebUrl,
 } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link2, Pencil, Plus, RefreshCw, Rocket, ShieldCheck, ShieldOff, Trash2, X } from 'lucide-react';
+import { ExternalLink, Link2, Pencil, Plus, RefreshCw, Rocket, ShieldCheck, ShieldOff, Trash2, X } from 'lucide-react';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { toast } from 'sonner';
@@ -370,8 +371,30 @@ function Overview({
   });
 
   const deployHint = !app.isMember ? '仅应用成员可部署' : !app.deployApproved ? '待管理员授权后才能部署' : undefined;
+  const githubUrl = githubRepoWebUrl(app.repoUrl);
   const rows: Array<[string, React.ReactNode]> = [
-    ['Git 仓库', app.repoUrl ? <span className="break-all">{app.repoUrl}</span> : '—'],
+    [
+      'Git 仓库',
+      app.repoUrl ? (
+        <span className="break-all">
+          {app.repoUrl}
+          {githubUrl && (
+            <a
+              href={githubUrl}
+              target="_blank"
+              rel="noreferrer"
+              title={`在 GitHub 打开 ${githubUrl}`}
+              className="ml-2 inline-flex items-center gap-0.5 whitespace-nowrap align-baseline text-xs text-primary hover:underline"
+            >
+              <ExternalLink className="size-3" aria-hidden="true" />
+              GitHub
+            </a>
+          )}
+        </span>
+      ) : (
+        '—'
+      ),
+    ],
     ...(app.managed ? ([['分支', app.branch]] as Array<[string, React.ReactNode]>) : []),
     [
       '构建方式',
