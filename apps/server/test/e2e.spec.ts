@@ -351,6 +351,9 @@ describe('设备码授权（CLI 登录）', () => {
   it('完整流程：start → approve → poll 取 Token → whoami', async () => {
     const start = await api('POST', '/api/auth/device/start');
     expect(start.body.userCode).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    // 授权链接自带短码，控制台打开即回填
+    expect(start.body.verificationUri).toMatch(/\/device\?code=[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    expect(new URL(start.body.verificationUri).searchParams.get('code')).toBe(start.body.userCode);
 
     const pending = await api('POST', '/api/auth/device/poll', {
       payload: { deviceCode: start.body.deviceCode },

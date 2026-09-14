@@ -255,7 +255,8 @@ function Shell({ children }: { children: React.ReactNode }) {
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   if (!getToken()) {
-    return <Navigate to={`/login?next=${encodeURIComponent(location.pathname)}`} replace />;
+    // 连 query string 一起带回来：/device?code=… 这类链接登录后才不会把参数丢掉
+    return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`} replace />;
   }
   return <Shell>{children}</Shell>;
 }

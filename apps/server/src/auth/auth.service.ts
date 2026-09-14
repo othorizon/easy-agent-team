@@ -107,7 +107,8 @@ export class AuthService {
     return {
       deviceCode,
       userCode,
-      verificationUri: `${loadConfig().publicUrl}/device`,
+      // 链接直接带上短码：控制台 /device 页按 ?code= 回填输入框，用户点开只需确认（决策 47）
+      verificationUri: `${loadConfig().publicUrl}/device?code=${encodeURIComponent(userCode)}`,
       interval: 3,
       expiresIn: DEVICE_FLOW_TTL_MS / 1000,
     };
