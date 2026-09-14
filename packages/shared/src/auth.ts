@@ -99,6 +99,8 @@ export type RegisterRequest = z.infer<typeof registerRequestSchema>;
 export const apiTokenSchema = z.object({
   id: z.string(),
   name: z.string(),
+  /** web = 网页登录会话；cli = 设备码授权签发、CLI 与 MCP 共用 */
+  kind: z.enum(['web', 'cli']),
   createdAt: z.string(),
   lastUsedAt: z.string().nullable(),
   expiresAt: z.string().nullable(),

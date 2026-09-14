@@ -29,6 +29,7 @@ import {
 } from './components/ui/dropdown-menu';
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from './components/ui/sheet';
 import { cn } from './lib/utils';
+import { AuthorizedDevicesPage } from './pages/AuthorizedDevices';
 import { DbAssignmentDetailPage } from './pages/DbAssignmentDetail';
 import { DbsPage } from './pages/Dbs';
 import { DevicePage } from './pages/Device';
@@ -255,7 +256,8 @@ function Shell({ children }: { children: React.ReactNode }) {
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   if (!getToken()) {
-    return <Navigate to={`/login?next=${encodeURIComponent(location.pathname)}`} replace />;
+    // 连 query string 一起带回来：/device?code=… 这类链接登录后才不会把参数丢掉
+    return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`} replace />;
   }
   return <Shell>{children}</Shell>;
 }
@@ -280,6 +282,7 @@ export function App() {
       <Route path="/users" element={<RequireAuth><UsersPage /></RequireAuth>} />
       <Route path="/install" element={<RequireAuth><InstallPage /></RequireAuth>} />
       <Route path="/device" element={<RequireAuth><DevicePage /></RequireAuth>} />
+      <Route path="/device/authorized" element={<RequireAuth><AuthorizedDevicesPage /></RequireAuth>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

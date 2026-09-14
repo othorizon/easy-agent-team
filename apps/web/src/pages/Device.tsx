@@ -1,7 +1,7 @@
-import { CheckCircle2 } from 'lucide-react';
+import { ArrowRight, CheckCircle2 } from 'lucide-react';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api, ApiError } from '../api';
 import { InlineCode } from '../components/code';
@@ -59,6 +59,7 @@ export function DevicePage() {
         >
           继续授权其他设备
         </Button>
+        <AuthorizedDevicesLink />
       </div>
     );
   }
@@ -96,6 +97,21 @@ export function DevicePage() {
           </form>
         </CardContent>
       </Card>
+      <div className="mt-4 text-center">
+        <AuthorizedDevicesLink />
+      </div>
     </div>
+  );
+}
+
+/** 已授权设备清单的入口：清单独立成页，不和授权表单铺在一起 */
+function AuthorizedDevicesLink() {
+  return (
+    <Button asChild variant="link" size="sm" className="text-muted-foreground hover:text-primary">
+      <Link to="/device/authorized">
+        查看已授权的设备
+        <ArrowRight />
+      </Link>
+    </Button>
   );
 }
