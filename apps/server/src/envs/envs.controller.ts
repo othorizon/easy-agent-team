@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import {
+  accessRequestHistoryQuerySchema,
   createAccessRequestSchema,
   createEnvironmentSchema,
   createGrantSchema,
@@ -9,6 +10,7 @@ import {
   pullValuesRequestSchema,
   updateEnvironmentSchema,
   upsertVariableSchema,
+  type AccessRequestHistoryQuery,
   type CreateAccessRequest,
   type CreateEnvironmentRequest,
   type CreateGrantRequest,
@@ -142,6 +144,15 @@ export class EnvsController {
   @Get('access-requests/inbox')
   inbox(@CurrentUser() user: AuthUser) {
     return this.accessRequests.listInbox(user);
+  }
+
+  /** 历史审批：我审批范围内已处理的申请，分页 + 按结果筛选（决策 45） */
+  @Get('access-requests/history')
+  history(
+    @Query(new ZodValidationPipe(accessRequestHistoryQuerySchema)) query: AccessRequestHistoryQuery,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.accessRequests.listHistory(user, query);
   }
 
   @Get('access-requests/:id')

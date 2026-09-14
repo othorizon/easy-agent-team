@@ -65,6 +65,8 @@ README 里挑了一部分，这里是全部。所有画面来自同一份可复�
 
 ![权限申请](assets/screenshots/requests.png)
 
+「待我审批」只放还没处理的；处理过的申请进「历史审批」页签——Owner 见自己环境上的、管理员见全部，可按已批准 / 已驳回筛选、分页，每行带审批人、审批时间与授权有效期。
+
 ### Skill 与经验
 
 ![Skill 清单](assets/screenshots/skills.png)
