@@ -384,9 +384,15 @@ describe('设备码授权（CLI 登录）', () => {
   it('吊销 Token 后立即失效', async () => {
     const tokens = await api('GET', '/api/auth/tokens', { token: memberToken });
     const cli = tokens.body.find((t: { name: string }) => t.name === '测试机 CLI');
+    // 清单区分网页会话与设备：设备码签发的是 cli，控制台「已授权的设备」只列这一类
+    expect(cli.kind).toBe('cli');
+    expect(cli.revokedAt).toBeNull();
+    expect(tokens.body.some((t: { kind: string }) => t.kind === 'web')).toBe(true);
     await api('DELETE', `/api/auth/tokens/${cli.id}`, { token: memberToken });
     const who = await api('GET', '/api/auth/whoami', { token: cliToken });
     expect(who.status).toBe(401);
+    const after = await api('GET', '/api/auth/tokens', { token: memberToken });
+    expect(after.body.find((t: { id: string }) => t.id === cli.id).revokedAt).not.toBeNull();
   });
 });
 

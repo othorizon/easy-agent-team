@@ -29,6 +29,7 @@ import {
 } from './components/ui/dropdown-menu';
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from './components/ui/sheet';
 import { cn } from './lib/utils';
+import { AuthorizedDevicesPage } from './pages/AuthorizedDevices';
 import { DbAssignmentDetailPage } from './pages/DbAssignmentDetail';
 import { DbsPage } from './pages/Dbs';
 import { DevicePage } from './pages/Device';
@@ -281,6 +282,7 @@ export function App() {
       <Route path="/users" element={<RequireAuth><UsersPage /></RequireAuth>} />
       <Route path="/install" element={<RequireAuth><InstallPage /></RequireAuth>} />
       <Route path="/device" element={<RequireAuth><DevicePage /></RequireAuth>} />
+      <Route path="/device/authorized" element={<RequireAuth><AuthorizedDevicesPage /></RequireAuth>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
