@@ -45,7 +45,7 @@ import { TableSkeleton } from '../components/ui/skeleton';
 import { Switch } from '../components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { formatDateTime } from '../lib/utils';
+import { formatDateTime } from '../lib/format';
 
 /** 部署状态（决策 30：queued/archived 是平台补的，其余直接是 Dokploy 构建记录的取值） */
 const STATUS_BADGE: Record<string, JSX.Element> = {

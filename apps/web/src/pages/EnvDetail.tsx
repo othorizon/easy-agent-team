@@ -29,7 +29,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { TableSkeleton } from '../components/ui/skeleton';
 import { Switch } from '../components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
-import { cn, formatDateTime } from '../lib/utils';
+import { formatDateTime } from '../lib/format';
+import { cn } from '../lib/utils';
 import { DB_STATUS_BADGE } from './db-shared';
 
 interface UserRow {

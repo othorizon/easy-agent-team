@@ -14,3 +14,4 @@ export * from './dotenv.js';
 export * from './install.js';
 export * from './platform-guide.js';
 export * from './version.js';
+export * from './time.js';

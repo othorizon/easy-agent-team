@@ -1,4 +1,5 @@
 import type { HelpRequestDetail, HelpRequestInfo, HelpTargets } from '@eat/shared';
+import { formatDateTime } from '@eat/shared';
 import { Api } from '../client.js';
 import { oneLine } from './skill.js';
 
@@ -73,7 +74,7 @@ export async function askShow(id: string): Promise<void> {
   console.log(`\n问题：${r.description}`);
   console.log(`已尝试：${r.tried}`);
   for (const m of r.messages) {
-    console.log(`\n[${m.createdAt.slice(5, 16).replace('T', ' ')}] ${m.senderName}:`);
+    console.log(`\n[${formatDateTime(m.createdAt)}] ${m.senderName}:`);
     console.log(`  ${m.content.split('\n').join('\n  ')}`);
   }
   if (r.experienceSkillSlug) console.log(`\n已沉淀为经验: ${r.experienceSkillSlug}（eat sync 可获取）`);

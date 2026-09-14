@@ -8,6 +8,7 @@ import {
 import * as bcrypt from 'bcryptjs';
 import { and, desc, eq, gt, isNull } from 'drizzle-orm';
 import type { DevicePollResponse, DeviceStartResponse, LoginResponse, UserPublic } from '@eat/shared';
+import { formatDate } from '@eat/shared';
 import { randomBytes } from 'node:crypto';
 import { AuditService } from '../audit/audit.service';
 import { decryptSecret, encryptSecret, randomToken, sha256Hex } from '../common/crypto';
@@ -125,7 +126,8 @@ export class AuthService {
     if (!row || row.expiresAt < new Date()) {
       throw new BadRequestException({ error: 'NOT_FOUND', message: '设备码不存在或已过期，请在 CLI 重新发起登录' });
     }
-    const name = tokenName?.trim() || `CLI（${new Date().toISOString().slice(0, 10)} 授权）`;
+    // 日期按进程时区（容器 TZ）取，toISOString() 是 UTC 日期、北京时间凌晨授权会记成前一天
+    const name = tokenName?.trim() || `CLI（${formatDate(new Date())} 授权）`;
     const { token } = await this.issueToken(user.id, name, 'cli');
     await this.db
       .update(deviceAuths)

@@ -1,4 +1,10 @@
 /**
+ * 控制台唯一的时间格式化入口（决策 49）：绝对时间统一走 shared 的 formatDateTime（按浏览器本地时区
+ * 出 YYYY-MM-DD HH:mm），相对时间用下面的 formatRelativeTime。别再在页面里 slice ISO 字符串。
+ */
+export { formatDateTime } from '@eat/shared';
+
+/**
  * 相对时间：清单里「3 天前」比完整时间戳好扫，鼠标悬停再给完整时间。
  * 阈值故意粗：不到两天叫「昨天」、不到一年按月算，清单不是审计日志。
  */
@@ -17,8 +23,3 @@ export function formatRelativeTime(iso: string, now = Date.now()): string {
   return `${Math.floor(days / 365)} 年前`;
 }
 
-/** 完整时间：给相对时间做 title 提示用 */
-export function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('zh-CN', { hour12: false });
-}

@@ -18,7 +18,7 @@ import { Input } from '../components/ui/input';
 import { TableSkeleton } from '../components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { formatDateTime } from '../lib/utils';
+import { formatDateTime } from '../lib/format';
 import { useQueryParams } from '../lib/use-query-params';
 
 const STATUS_BADGE: Record<string, JSX.Element> = {
