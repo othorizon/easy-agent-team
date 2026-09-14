@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 13;
+export const PLATFORM_GUIDE_VERSION = 14;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -70,7 +70,7 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 | \`eat skill push <dir>\` | 把本地写好的 skill 上传到平台纳管分享（改别人的 skill 要么你是作者，要么 \`--slug\` 换个名字推成自己的）。**推送不会自动订阅**：想让它随 \`eat sync\` 落到本地，还要 \`eat skill subscribe <slug>\` 一次 |
 | \`eat skill subscribe / unsubscribe <slug>\` | 订阅 / 退订（决定它进不进 \`eat sync\` 的范围）。清单里标 \`◆\` 的是**捆绑** skill：管理员设定、全员始终同步，退订会被拒绝，这是正常的，别反复重试 |
 | \`eat ask create / show / reply\` | 求助的 CLI 入口 |
-| \`eat app create / update / delete <slug>\` | 自助创建应用（\`--repo\` + \`--build dockerfile|static\`，dockerfile 加 \`--port\` 声明容器端口；管理员配了后缀则自动得到域名）/ 改配置 / 删除 |
+| \`eat app create / update / delete <slug>\` | 自助创建应用（\`--repo\` + \`--build dockerfile|static\`，dockerfile 加 \`--port\` 声明容器端口，\`--description\` 写一句应用说明；管理员配了后缀则自动得到域名）/ 改配置 / 删除 |
 | \`eat app env pull / push <slug> [--build]\` | 读写应用的 env（运行时；\`--build\` 为构建时），push 是整体覆盖 |
 | \`eat deploy [slug]\` | 触发部署（自动前置检查；应用需先经管理员授权一次） |
 | \`eat app list / show / status / deployments\` | 应用清单 / 配置详情 / 最近一次部署状态 / 部署历史（\`--all\` 看完整历史） |
