@@ -23,6 +23,7 @@
 | `EAT_SKIP_SEED` | | 设为 `1` 跳过启动种子 |
 | `EAT_HELP_RATE_LIMIT` | | 每用户每小时求助上限，默认 10 |
 | `NODE_ENV` | | 镜像内已设为 `production`（生产模式下缺少 `EAT_KEK` 会拒绝启动） |
+| `TZ` | | 服务进程时区。`Dockerfile_cn` 镜像内已设为 `Asia/Shanghai`（北京时间），根目录 `Dockerfile` 未设即 UTC；只影响日志时间戳等本地时间输出，数据库时间列均带时区、不受影响。运行时传 `TZ` 可覆盖镜像默认值 |
 
 ## 3. 在 Dokploy 上部署
 
