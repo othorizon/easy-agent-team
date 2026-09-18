@@ -449,6 +449,96 @@ describe('MCP 网关：地址的失效与重建', () => {
   });
 });
 
+describe('凭证归属按传输方式收敛（决策 52）', () => {
+  it('http 配置传进来的 env 被丢弃，不入库也不进 sync 输出', async () => {
+    await api('POST', '/api/mcp-configs', {
+      token: adminToken,
+      payload: {
+        slug: 'svc-http-env',
+        name: '把凭证填错地方的 http 配置',
+        transport: 'http',
+        url: upstreamUrl,
+        headers: { Authorization: 'Bearer ${env:mcp-upstream/UPSTREAM_TOKEN}' },
+        // HTTP MCP 客户端不看配置里的 env，填在这里等于静默失效——服务端直接丢掉
+        env: { UPSTREAM_TOKEN: '${env:mcp-upstream/UPSTREAM_TOKEN}' },
+        visibility: 'team',
+        gatewayEnabled: false,
+      },
+    });
+    const info = (await api('GET', '/api/mcp-configs', { token: adminToken })).body.find(
+      (c: { slug: string }) => c.slug === 'svc-http-env',
+    );
+    expect(info.env).toEqual({});
+    expect(info.headers.Authorization).toContain('${env:');
+
+    const entry = (await api('GET', '/api/mcp-configs/sync-bundle', { token: adminToken })).body.find(
+      (e: { slug: string }) => e.slug === 'svc-http-env',
+    );
+    expect(entry.server).not.toHaveProperty('env');
+    expect(entry.server.headers.Authorization).toBe('Bearer super-secret-upstream-token');
+  });
+
+  it('stdio 配置传进来的 headers 被丢弃；env 照常渲染', async () => {
+    await api('POST', '/api/mcp-configs', {
+      token: adminToken,
+      payload: {
+        slug: 'svc-stdio-headers',
+        name: '本地进程',
+        transport: 'stdio',
+        command: 'npx',
+        args: ['-y', 'some-server'],
+        // stdio 根本不发 HTTP 请求，请求头无处可用
+        headers: { Authorization: 'Bearer nonsense' },
+        env: { API_TOKEN: '${env:mcp-upstream/UPSTREAM_TOKEN}' },
+        visibility: 'team',
+      },
+    });
+    const info = (await api('GET', '/api/mcp-configs', { token: adminToken })).body.find(
+      (c: { slug: string }) => c.slug === 'svc-stdio-headers',
+    );
+    expect(info.headers).toEqual({});
+    expect(info.env.API_TOKEN).toContain('${env:');
+
+    const entry = (await api('GET', '/api/mcp-configs/sync-bundle', { token: adminToken })).body.find(
+      (e: { slug: string }) => e.slug === 'svc-stdio-headers',
+    );
+    expect(entry.viaGateway).toBe(false);
+    expect(entry.server).not.toHaveProperty('headers');
+    expect(entry.server.env.API_TOKEN).toBe('super-secret-upstream-token');
+  });
+
+  it('把配置从 stdio 改成 http 时，原来的 env 一并清掉', async () => {
+    await api('POST', '/api/mcp-configs', {
+      token: adminToken,
+      payload: {
+        slug: 'svc-switch',
+        name: '换传输方式',
+        transport: 'stdio',
+        command: 'npx',
+        args: [],
+        env: { API_TOKEN: '${env:mcp-upstream/UPSTREAM_TOKEN}' },
+        visibility: 'team',
+      },
+    });
+    await api('POST', '/api/mcp-configs', {
+      token: adminToken,
+      payload: {
+        slug: 'svc-switch',
+        name: '换传输方式',
+        transport: 'http',
+        url: upstreamUrl,
+        headers: { Authorization: 'Bearer ${env:mcp-upstream/UPSTREAM_TOKEN}' },
+        visibility: 'team',
+        gatewayEnabled: false,
+      },
+    });
+    const info = (await api('GET', '/api/mcp-configs', { token: adminToken })).body.find(
+      (c: { slug: string }) => c.slug === 'svc-switch',
+    );
+    expect(info.env).toEqual({});
+  });
+});
+
 describe('MCP 网关：调用记录', () => {
   it('记下 method 与工具名，但不记 arguments', async () => {
     const url = await setupSubscribedConfig('svc-audit');

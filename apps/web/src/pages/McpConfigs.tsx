@@ -799,7 +799,10 @@ function McpConfigDialog({
         v.transport === 'http'
           ? Object.fromEntries(v.headerPairs.filter((p) => p.key).map((p) => [p.key, p.value ?? '']))
           : {},
-      env: Object.fromEntries(v.envPairs.filter((p) => p.key).map((p) => [p.key, p.value ?? ''])),
+      env:
+        v.transport === 'stdio'
+          ? Object.fromEntries(v.envPairs.filter((p) => p.key).map((p) => [p.key, p.value ?? '']))
+          : {},
       visibility: v.visibility,
       // stdio 没有可代理的端点，服务端也会强制关掉，这里保持一致别让界面自相矛盾
       gatewayEnabled: v.transport === 'http' ? v.gatewayEnabled : false,
@@ -848,22 +851,69 @@ function McpConfigDialog({
             />
           </Field>
           {transport === 'stdio' ? (
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="命令" htmlFor="mcp-command" required error={errors.command?.message}>
-                <Input
-                  id="mcp-command"
-                  placeholder="npx"
-                  className="font-mono"
-                  aria-invalid={!!errors.command}
-                  {...register('command', {
-                    validate: (v) => transport !== 'stdio' || !!v.trim() || '请输入命令',
-                  })}
-                />
+            <>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="命令" htmlFor="mcp-command" required error={errors.command?.message}>
+                  <Input
+                    id="mcp-command"
+                    placeholder="npx"
+                    className="font-mono"
+                    aria-invalid={!!errors.command}
+                    {...register('command', {
+                      validate: (v) => transport !== 'stdio' || !!v.trim() || '请输入命令',
+                    })}
+                  />
+                </Field>
+                <Field label="参数" htmlFor="mcp-args" hint="空格分隔">
+                  <Input id="mcp-args" placeholder="-y some-mcp-server" className="font-mono" {...register('argsText')} />
+                </Field>
+              </div>
+              <Field
+                label="环境变量"
+                hint={
+                  <>
+                    本地进程的环境变量，这个服务需要的凭证写在这里；值可用{' '}
+                    <InlineCode>{'${env:slug/KEY}'}</InlineCode> 引用平台环境变量
+                  </>
+                }
+              >
+                <div className="flex flex-col gap-2">
+                  {fields.map((field, index) => (
+                    <div key={field.id} className="flex items-center gap-2">
+                      <Input
+                        placeholder="API_TOKEN"
+                        className="w-2/5 font-mono"
+                        {...register(`envPairs.${index}.key`)}
+                      />
+                      <Input
+                        placeholder={'${env:internal/API_TOKEN}'}
+                        className="flex-1 font-mono"
+                        {...register(`envPairs.${index}.value`)}
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="删除该变量"
+                        onClick={() => remove(index)}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-fit"
+                    onClick={() => append({ key: '', value: '' })}
+                  >
+                    <Plus />
+                    添加变量
+                  </Button>
+                </div>
               </Field>
-              <Field label="参数" htmlFor="mcp-args" hint="空格分隔">
-                <Input id="mcp-args" placeholder="-y some-mcp-server" className="font-mono" {...register('argsText')} />
-              </Field>
-            </div>
+            </>
           ) : (
             <>
               <Field label="URL" htmlFor="mcp-url" required error={errors.url?.message}>
@@ -946,44 +996,6 @@ function McpConfigDialog({
               </Field>
             </>
           )}
-          <Field
-            label="环境变量"
-            hint={
-              <>
-                值可写 <InlineCode>{'${env:slug/KEY}'}</InlineCode> 引用平台环境变量
-              </>
-            }
-          >
-            <div className="flex flex-col gap-2">
-              {fields.map((field, index) => (
-                <div key={field.id} className="flex items-center gap-2">
-                  <Input
-                    placeholder="API_TOKEN"
-                    className="w-2/5 font-mono"
-                    {...register(`envPairs.${index}.key`)}
-                  />
-                  <Input
-                    placeholder={'${env:internal/API_TOKEN}'}
-                    className="flex-1 font-mono"
-                    {...register(`envPairs.${index}.value`)}
-                  />
-                  <Button type="button" variant="ghost" size="icon-sm" aria-label="删除该变量" onClick={() => remove(index)}>
-                    <Trash2 className="size-3.5" />
-                  </Button>
-                </div>
-              ))}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="w-fit"
-                onClick={() => append({ key: '', value: '' })}
-              >
-                <Plus />
-                添加变量
-              </Button>
-            </div>
-          </Field>
           <Field
             label="可见性"
             hint={

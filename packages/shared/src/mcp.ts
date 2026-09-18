@@ -35,8 +35,13 @@ export const upsertMcpConfigSchema = z
     args: z.array(z.string().max(500)).max(50).default([]),
     /** http */
     url: z.string().max(1000).optional(),
+    /** 仅 http：请求头，凭证放这里；值可为字面量或 ${env:slug/KEY} 引用 */
     headers: kvSchema.default({}),
-    /** 两种传输都可用；值可为字面量或 ${env:slug/KEY} 引用 */
+    /**
+     * 仅 stdio：本地进程的环境变量，凭证放这里；值可为字面量或 ${env:slug/KEY} 引用。
+     * **http 传给它的内容会被服务端丢弃**——HTTP MCP 客户端靠请求头鉴权，
+     * 配置里的 env 客户端会忽略，填在这里等于静默失效。
+     */
     env: kvSchema.default({}),
     /** team = 全员可见可申请；private = 不公开，只能由 Owner / 管理员分配 */
     visibility: z.enum(['team', 'private']).default('team'),
@@ -66,6 +71,8 @@ export const mcpConfigInfoSchema = z.object({
   /**
    * 上游地址与 header/env：**经网关分发的配置只对 Owner / 管理员下发**（决策 51）。
    * 普通订阅者拿到的是 null / 空对象——他们该看到的是自己的 gatewayUrl。
+   *
+   * 另外这两个字段按传输方式互斥：`headers` 只在 http 上有值、`env` 只在 stdio 上有值。
    */
   url: z.string().nullable(),
   headers: z.record(z.string(), z.string()),

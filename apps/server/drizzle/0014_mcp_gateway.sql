@@ -33,4 +33,10 @@ CREATE UNIQUE INDEX "mcp_gateway_token_hash_idx" ON "mcp_gateway_token" USING bt
 CREATE INDEX "mcp_gateway_token_user_config_idx" ON "mcp_gateway_token" USING btree ("user_id","config_id");--> statement-breakpoint
 -- 存量数据（决策 51）：http 配置随 DEFAULT true 一次性迁到网关分发；
 -- stdio 没有可代理的端点，就地关掉，避免建/改配置时才发现开关是个空档。
-UPDATE "mcp_config" SET "gateway_enabled" = false WHERE "transport" = 'stdio';
+UPDATE "mcp_config" SET "gateway_enabled" = false WHERE "transport" = 'stdio';--> statement-breakpoint
+
+-- 凭证归属按传输方式收敛（决策 52）：http 走请求头、stdio 走进程环境变量。
+-- 放错位置的那一份从来没真正生效过（HTTP 客户端忽略配置里的 env；
+-- stdio 根本没有 HTTP 请求），就地清掉，免得它继续误导 Owner 往错地方填凭证。
+UPDATE "mcp_config" SET "env" = '{}'::jsonb WHERE "transport" = 'http' AND "env" <> '{}'::jsonb;--> statement-breakpoint
+UPDATE "mcp_config" SET "headers" = '{}'::jsonb WHERE "transport" = 'stdio' AND "headers" <> '{}'::jsonb;

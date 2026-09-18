@@ -173,8 +173,10 @@ export class McpConfigsService {
       command: dto.command ?? null,
       args: dto.args,
       url: dto.url ?? null,
-      headers: dto.headers,
-      env: dto.env,
+      // 凭证的归属按传输方式收敛：http 走请求头、stdio 走进程环境变量，
+      // 另一个字段对该传输毫无意义，留着只会让人把凭证填错地方（填错还是静默失效）
+      headers: dto.transport === 'http' ? dto.headers : {},
+      env: dto.transport === 'stdio' ? dto.env : {},
       visibility: dto.visibility,
       // stdio 没有可代理的端点，无论前端传什么都按不走网关处理
       gatewayEnabled: dto.transport === 'http' ? dto.gatewayEnabled : false,
@@ -569,6 +571,8 @@ export class McpConfigsService {
       const renderKv = (kv: Record<string, string>) =>
         Object.fromEntries(Object.entries(kv).map(([k, v]) => [k, render(v)]));
 
+      // 各传输只渲染自己用得上的那个字段：http 的 env 客户端会直接忽略，
+      // 渲染出来只是噪音，还会让「凭证明明配了却不生效」更难查
       const server: Record<string, unknown> =
         c.transport === 'stdio'
           ? { command: c.command, args: c.args, ...(Object.keys(c.env).length ? { env: renderKv(c.env) } : {}) }
@@ -576,7 +580,6 @@ export class McpConfigsService {
               type: 'http',
               url: c.url,
               ...(Object.keys(c.headers).length ? { headers: renderKv(c.headers) } : {}),
-              ...(Object.keys(c.env).length ? { env: renderKv(c.env) } : {}),
             };
       return { slug: c.slug, name: c.name, viaGateway: false, server, unresolved };
     });

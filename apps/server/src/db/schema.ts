@@ -264,7 +264,13 @@ export const mcpConfigs = pgTable('mcp_config', {
   command: text('command'),
   args: jsonb('args').$type<string[]>().notNull().default([]),
   url: text('url'),
+  /** 仅 http：请求头，凭证放这里。stdio 恒为空（没有 HTTP 请求，这个字段无处可用） */
   headers: jsonb('headers').$type<Record<string, string>>().notNull().default({}),
+  /**
+   * 仅 stdio：本地进程的环境变量，凭证放这里。http 恒为空——
+   * HTTP MCP 客户端靠请求头鉴权，配置里的 env 会被直接忽略，
+   * 留着只会让人把凭证填错地方，而且填错是静默失效（尤其经网关分发时）。
+   */
   env: jsonb('env').$type<Record<string, string>>().notNull().default({}),
   visibility: text('visibility', { enum: ['team', 'private'] })
     .notNull()
