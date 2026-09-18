@@ -28,7 +28,7 @@ import type { AuthUser } from '../auth/auth.decorators';
 import { decryptSecret, sha256Hex } from '../common/crypto';
 import { SHORT_ID_MIN_LENGTH } from '../common/short-id';
 import { DB, type Db } from '../db/db.module';
-import { deployments, environments, envVariables, users } from '../db/schema';
+import { deployments, environments, envVariables, mcpGatewayTokens, users } from '../db/schema';
 import { AppsService, type AppRow } from './apps.service';
 import type { DokployClient, DokployQueueJob } from './dokploy.client';
 import { DokploySettingsService } from './dokploy-settings.service';
@@ -529,6 +529,24 @@ export class DeployService {
         key: visible ? r.variable.key : '(受限变量)',
       });
     }
+
+    // MCP 网关接入地址也是平台签发的密钥（决策 51）：它最可能的泄漏方式就是被写进
+    // 仓库里的 .mcp.json 然后提交上来，所以要让 CLI 的部署前扫描能认出它。
+    // token_hash 本来就是 sha256(明文)，与指纹口径一致，直接取列即可，不必解密。
+    const gatewayRows = await this.db
+      .select({ tokenHash: mcpGatewayTokens.tokenHash, prefix: mcpGatewayTokens.prefix })
+      .from(mcpGatewayTokens)
+      .where(isNull(mcpGatewayTokens.revokedAt));
+    for (const g of gatewayRows) {
+      out.push({
+        fingerprint: g.tokenHash,
+        // randomToken('eatg') = 'eatg_' + 48 位十六进制
+        length: 'eatg_'.length + 48,
+        environment: '(MCP 接入地址)',
+        key: g.prefix,
+      });
+    }
+
     await this.audit.record({
       actorId: user.id,
       actorTokenId: user.tokenId,

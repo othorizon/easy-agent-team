@@ -1,17 +1,19 @@
 import type {
   McpConfigInfo,
+  McpGatewayCallList,
+  McpGatewayUrl,
   McpSubscriber,
   McpSubscriptionRequest,
   SubscribeMcpConfigResult,
   UpsertMcpConfigRequest,
 } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ClipboardCheck, Plus, Trash2, UserCog, X } from 'lucide-react';
+import { Activity, ClipboardCheck, Link2, Plus, RefreshCw, Trash2, UserCog, X } from 'lucide-react';
 import { useState } from 'react';
 import { Controller, useFieldArray, useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
-import { InlineCode } from '../components/code';
+import { CodeBlock, CopyButton, InlineCode } from '../components/code';
 import { Combobox } from '../components/combobox';
 import { Confirm } from '../components/confirm';
 import { Empty } from '../components/empty';
@@ -36,6 +38,8 @@ export function McpConfigsPage() {
   const [requesting, setRequesting] = useState<McpConfigInfo | null>(null);
   const [managing, setManaging] = useState<McpConfigInfo | null>(null);
   const [reviewing, setReviewing] = useState(false);
+  const [accessing, setAccessing] = useState<McpConfigInfo | null>(null);
+  const [viewingCalls, setViewingCalls] = useState(false);
 
   const configs = useQuery({ queryKey: ['mcp-configs'], queryFn: () => api<McpConfigInfo[]>('GET', '/api/mcp-configs') });
   const list = configs.data ?? [];
@@ -97,20 +101,27 @@ export function McpConfigsPage() {
         title="MCP 配置"
         description={
           <>
-            团队共享的 MCP Server 配置。敏感值写成引用 <InlineCode>{'${env:环境slug/KEY}'}</InlineCode>——订阅经审批通过后{' '}
-            <InlineCode>eat sync</InlineCode> 会按你的权限渲染出可用配置（无权限的引用保留占位并提示申请）。
+            团队共享的 MCP Server 配置，凭证写成引用 <InlineCode>{'${env:环境slug/KEY}'}</InlineCode>。订阅经审批通过后{' '}
+            <InlineCode>eat sync</InlineCode> 落到本地：<b>经平台分发</b>的配置给你一条专属接入地址（看不到上游地址与凭证）；
+            <b>直连</b>的配置按你的环境变量权限渲染（无权限的引用保留占位并提示申请）。
           </>
         }
         actions={
           <>
             {canApproveAny && (
-              <Button variant="outline" onClick={() => setReviewing(true)}>
-                <ClipboardCheck />
-                订阅申请
-                {pendingCount > 0 && (
-                  <span className="size-1.5 rounded-full bg-warning" title={`${pendingCount} 条待审批`} />
-                )}
-              </Button>
+              <>
+                <Button variant="outline" onClick={() => setViewingCalls(true)}>
+                  <Activity />
+                  调用记录
+                </Button>
+                <Button variant="outline" onClick={() => setReviewing(true)}>
+                  <ClipboardCheck />
+                  订阅申请
+                  {pendingCount > 0 && (
+                    <span className="size-1.5 rounded-full bg-warning" title={`${pendingCount} 条待审批`} />
+                  )}
+                </Button>
+              </>
             )}
             <Button onClick={() => setEditing('new')}>
               <Plus />
@@ -134,7 +145,8 @@ export function McpConfigsPage() {
                   <TableHead className="hidden w-18 sm:table-cell">传输</TableHead>
                   <TableHead className="hidden w-24 lg:table-cell">作者</TableHead>
                   <TableHead className="hidden w-24 sm:table-cell">可见性</TableHead>
-                  <TableHead className="w-80">操作</TableHead>
+                  {/* 窄屏不锁死宽度：操作按钮本来就会换行，锁了只会把配置名挤成一列一个字 */}
+                  <TableHead className="w-auto lg:w-80">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -153,7 +165,14 @@ export function McpConfigsPage() {
                         {c.description}
                       </TableCell>
                       <TableCell className="hidden sm:table-cell">
-                        <Badge variant="secondary">{c.transport}</Badge>
+                        <div className="flex flex-col items-start gap-1">
+                          <Badge variant="secondary">{c.transport}</Badge>
+                          {c.gatewayEnabled && (
+                            <Badge variant="outline" title="平台代理到上游，成员拿到的是专属接入地址">
+                              经平台分发
+                            </Badge>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="hidden whitespace-nowrap text-muted-foreground lg:table-cell">{c.ownerName}</TableCell>
                       <TableCell className="hidden sm:table-cell">
@@ -175,6 +194,12 @@ export function McpConfigsPage() {
                             onRequest={() => setRequesting(c)}
                             onUnsubscribe={() => unsubscribe.mutate(c)}
                           />
+                          {c.gatewayUrl && (
+                            <Button size="sm" variant="outline" onClick={() => setAccessing(c)}>
+                              <Link2 />
+                              接入地址
+                            </Button>
+                          )}
                           {canManage && (
                             <>
                               <Button size="sm" variant="outline" onClick={() => setManaging(c)}>
@@ -224,6 +249,8 @@ export function McpConfigsPage() {
       )}
       {managing && <SubscribersDialog config={managing} onClose={() => setManaging(null)} />}
       {reviewing && <RequestsDialog onClose={() => setReviewing(false)} />}
+      {accessing && <AccessUrlDialog config={accessing} onClose={() => setAccessing(null)} />}
+      {viewingCalls && <GatewayCallsDialog onClose={() => setViewingCalls(false)} />}
     </div>
   );
 }
@@ -413,6 +440,149 @@ function RequestsDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** 我的专属接入地址：看一眼、复制走、疑似泄漏就换一条 */
+function AccessUrlDialog({ config, onClose }: { config: McpConfigInfo; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [url, setUrl] = useState(config.gatewayUrl ?? '');
+
+  const regenerate = useMutation({
+    mutationFn: () => api<McpGatewayUrl>('POST', `/api/mcp-configs/${config.slug}/gateway-url/regenerate`),
+    onSuccess: (res) => {
+      setUrl(res.url);
+      toast.success('已生成新地址，旧地址立即失效');
+      void queryClient.invalidateQueries({ queryKey: ['mcp-configs'] });
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '生成失败'),
+  });
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>{config.name} 的接入地址</DialogTitle>
+          <DialogDescription>
+            只属于你的一条地址，直接填进 MCP 客户端即可——平台会代理到真正的服务并补上凭证。
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-4">
+          <div className="flex items-start gap-2">
+            <CodeBlock className="min-w-0 flex-1 break-all">{url}</CodeBlock>
+            <CopyButton text={url} />
+          </div>
+          <div className="rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm text-muted-foreground">
+            <b className="text-foreground">这条地址等同于密钥。</b>
+            别提交进仓库（尤其是项目里的 <InlineCode>.mcp.json</InlineCode>）、别贴进聊天或工单。
+            退订后它立即失效；重新拿到权限会换成新的一条。
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs text-muted-foreground">怀疑泄漏过？换一条，旧的立刻作废。</span>
+            <Confirm
+              title="重新生成接入地址？"
+              description="旧地址会立即失效，所有已经配好这条地址的客户端都要改成新的。"
+              confirmText="重新生成"
+              onConfirm={() => regenerate.mutate()}
+            >
+              <Button variant="outline" size="sm" loading={regenerate.isPending}>
+                <RefreshCw />
+                重新生成
+              </Button>
+            </Confirm>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** 网关调用记录：谁、什么时候、调了哪个工具。只记 method 与工具名，不记参数 */
+function GatewayCallsDialog({ onClose }: { onClose: () => void }) {
+  const [page, setPage] = useState(1);
+  const calls = useQuery({
+    queryKey: ['mcp-gateway-calls', page],
+    queryFn: () => api<McpGatewayCallList>('GET', `/api/mcp-gateway/calls?page=${page}&pageSize=20`),
+  });
+  const data = calls.data;
+  const rows = data?.items ?? [];
+  const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>调用记录</DialogTitle>
+          <DialogDescription>
+            经平台分发的 MCP 上的调用；你 Own 的配置可见，管理员可见全部。只记方法与工具名，不记调用参数。
+          </DialogDescription>
+        </DialogHeader>
+        {calls.isPending ? (
+          <TableSkeleton rows={3} />
+        ) : rows.length === 0 ? (
+          <Empty text="还没有调用记录" className="py-6" />
+        ) : (
+          <>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>时间</TableHead>
+                  <TableHead>成员</TableHead>
+                  <TableHead className="hidden sm:table-cell">配置</TableHead>
+                  <TableHead>调用</TableHead>
+                  <TableHead className="hidden w-20 md:table-cell">耗时</TableHead>
+                  <TableHead className="w-16">结果</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((r) => (
+                  <TableRow key={r.id}>
+                    <TableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(r.createdAt)}</TableCell>
+                    <TableCell className="whitespace-nowrap">{r.userName}</TableCell>
+                    <TableCell className="hidden sm:table-cell">
+                      <InlineCode>{r.configSlug}</InlineCode>
+                    </TableCell>
+                    <TableCell>
+                      <span className="font-mono text-xs">{r.toolName ?? r.method ?? '—'}</span>
+                      {r.toolName && <div className="text-xs text-muted-foreground">{r.method}</div>}
+                    </TableCell>
+                    <TableCell className="hidden whitespace-nowrap text-muted-foreground md:table-cell">
+                      {r.durationMs} ms
+                    </TableCell>
+                    <TableCell>
+                      {r.status === 0 ? (
+                        <Badge variant="destructive" title={r.error ?? undefined}>
+                          失败
+                        </Badge>
+                      ) : r.status < 400 ? (
+                        <Badge variant="success">{r.status}</Badge>
+                      ) : (
+                        <Badge variant="warning">{r.status}</Badge>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between gap-2 text-sm text-muted-foreground">
+                <span>
+                  共 {data?.total} 条 · 第 {page} / {totalPages} 页
+                </span>
+                <div className="flex gap-1.5">
+                  <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((v) => v - 1)}>
+                    上一页
+                  </Button>
+                  <Button size="sm" variant="outline" disabled={page >= totalPages} onClick={() => setPage((v) => v + 1)}>
+                    下一页
+                  </Button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 const SUBSCRIBER_SOURCE_LABEL: Record<McpSubscriber['source'], string> = {
   manual: '自助订阅',
   admin: '主动分配',
@@ -563,8 +733,10 @@ interface FormValues {
   command: string;
   argsText: string;
   url: string;
+  headerPairs: Array<{ key: string; value: string }>;
   envPairs: Array<{ key: string; value: string }>;
   visibility: 'team' | 'private';
+  gatewayEnabled: boolean;
 }
 
 function McpConfigDialog({
@@ -581,7 +753,19 @@ function McpConfigDialog({
   const isNew = editing === 'new';
   const { register, handleSubmit, control, watch, formState: { errors } } = useForm<FormValues>({
     defaultValues: isNew
-      ? { slug: '', name: '', description: '', transport: 'stdio', command: '', argsText: '', url: '', envPairs: [], visibility: 'team' }
+      ? {
+          slug: '',
+          name: '',
+          description: '',
+          transport: 'stdio',
+          command: '',
+          argsText: '',
+          url: '',
+          headerPairs: [],
+          envPairs: [],
+          visibility: 'team',
+          gatewayEnabled: true,
+        }
       : {
           slug: editing.slug,
           name: editing.name,
@@ -590,13 +774,17 @@ function McpConfigDialog({
           command: editing.command ?? '',
           argsText: editing.args.join(' '),
           url: editing.url ?? '',
+          headerPairs: Object.entries(editing.headers).map(([key, value]) => ({ key, value })),
           envPairs: Object.entries(editing.env).map(([key, value]) => ({ key, value })),
           visibility: editing.visibility,
+          gatewayEnabled: editing.gatewayEnabled,
         },
   });
   const { fields, append, remove } = useFieldArray({ control, name: 'envPairs' });
+  const headerFields = useFieldArray({ control, name: 'headerPairs' });
   const transport = watch('transport');
   const visibility = watch('visibility');
+  const gatewayEnabled = watch('gatewayEnabled');
 
   function toPayload(v: FormValues): UpsertMcpConfigRequest {
     return {
@@ -607,9 +795,14 @@ function McpConfigDialog({
       command: v.transport === 'stdio' ? v.command : undefined,
       args: v.transport === 'stdio' && v.argsText ? v.argsText.split(/\s+/).filter(Boolean) : [],
       url: v.transport === 'http' ? v.url : undefined,
-      headers: {},
+      headers:
+        v.transport === 'http'
+          ? Object.fromEntries(v.headerPairs.filter((p) => p.key).map((p) => [p.key, p.value ?? '']))
+          : {},
       env: Object.fromEntries(v.envPairs.filter((p) => p.key).map((p) => [p.key, p.value ?? ''])),
       visibility: v.visibility,
+      // stdio 没有可代理的端点，服务端也会强制关掉，这里保持一致别让界面自相矛盾
+      gatewayEnabled: v.transport === 'http' ? v.gatewayEnabled : false,
     };
   }
 
@@ -672,17 +865,86 @@ function McpConfigDialog({
               </Field>
             </div>
           ) : (
-            <Field label="URL" htmlFor="mcp-url" required error={errors.url?.message}>
-              <Input
-                id="mcp-url"
-                placeholder="https://mcp.internal.example.com/sse"
-                className="font-mono"
-                aria-invalid={!!errors.url}
-                {...register('url', {
-                  validate: (v) => transport !== 'http' || !!v.trim() || '请输入 URL',
-                })}
-              />
-            </Field>
+            <>
+              <Field label="URL" htmlFor="mcp-url" required error={errors.url?.message}>
+                <Input
+                  id="mcp-url"
+                  placeholder="https://mcp.internal.example.com/mcp"
+                  className="font-mono"
+                  aria-invalid={!!errors.url}
+                  {...register('url', {
+                    validate: (v) => transport !== 'http' || !!v.trim() || '请输入 URL',
+                  })}
+                />
+              </Field>
+              <Field
+                label="请求头"
+                hint={
+                  <>
+                    上游需要的凭证写在这里，值可用 <InlineCode>{'${env:slug/KEY}'}</InlineCode> 引用平台环境变量
+                  </>
+                }
+              >
+                <div className="flex flex-col gap-2">
+                  {headerFields.fields.map((field, index) => (
+                    <div key={field.id} className="flex items-center gap-2">
+                      <Input
+                        placeholder="Authorization"
+                        className="w-2/5 font-mono"
+                        {...register(`headerPairs.${index}.key`)}
+                      />
+                      <Input
+                        placeholder={'Bearer ${env:internal/API_TOKEN}'}
+                        className="flex-1 font-mono"
+                        {...register(`headerPairs.${index}.value`)}
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label="删除该请求头"
+                        onClick={() => headerFields.remove(index)}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="w-fit"
+                    onClick={() => headerFields.append({ key: '', value: '' })}
+                  >
+                    <Plus />
+                    添加请求头
+                  </Button>
+                </div>
+              </Field>
+              <Field
+                label="分发方式"
+                hint={
+                  gatewayEnabled
+                    ? '平台代理到这个服务：成员拿到的是只属于自己的接入地址，看不到上面的 URL 与请求头，凭证不落他们的磁盘。需要平台能访问到这个地址。'
+                    : '成员直接连这个服务：上面的 URL 与请求头会随 eat sync 下发到他们本地，凭证引用按各自的环境变量权限解析。'
+                }
+              >
+                <Controller
+                  control={control}
+                  name="gatewayEnabled"
+                  render={({ field }) => (
+                    <Segmented
+                      value={field.value ? 'gateway' : 'direct'}
+                      onChange={(v) => field.onChange(v === 'gateway')}
+                      options={[
+                        { label: '经平台分发', value: 'gateway' },
+                        { label: '直连', value: 'direct' },
+                      ]}
+                    />
+                  )}
+                />
+              </Field>
+            </>
           )}
           <Field
             label="环境变量"

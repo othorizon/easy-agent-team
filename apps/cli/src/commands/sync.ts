@@ -288,6 +288,11 @@ async function syncMcpConfigs(api: Api): Promise<void> {
   fs.writeFileSync(outPath, JSON.stringify({ mcpServers }, null, 2), { mode: 0o600 });
   console.log(`\nMCP 配置已渲染 → ${outPath}（${rendered.length} 个）`);
   console.log('  合并到 Claude Code: 对每个条目执行 claude mcp add-json <名称> \'<配置 JSON>\'，或复制进项目 .mcp.json');
+  const viaGateway = rendered.filter((r) => r.viaGateway);
+  if (viaGateway.length > 0) {
+    console.log(`  其中 ${viaGateway.length} 个经平台分发，配置里是只属于你的接入地址（${viaGateway.map((r) => r.slug).join('、')}）`);
+    console.log('  这个地址等同于密钥：别提交进仓库、别贴进公开渠道；疑似泄漏就在控制台重新生成，旧地址立即作废');
+  }
   const unresolved = rendered.filter((r) => r.unresolved.length > 0);
   for (const r of unresolved) {
     console.log(`  注意: ${r.slug} 有 ${r.unresolved.length} 个引用因无权限未解析：`);

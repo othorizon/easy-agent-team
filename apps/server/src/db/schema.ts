@@ -269,6 +269,12 @@ export const mcpConfigs = pgTable('mcp_config', {
   visibility: text('visibility', { enum: ['team', 'private'] })
     .notNull()
     .default('team'),
+  /**
+   * 经网关分发（决策 51）：平台代理这个 MCP 服务，成员拿到的是专属 URL，
+   * 上游地址与 header 不下发。只对 transport=http 有意义——stdio 是用户机器上的本地进程，
+   * 没有可代理的端点，建/改配置时会被强制为 false。
+   */
+  gatewayEnabled: boolean('gateway_enabled').notNull().default(true),
   ownerId: uuid('owner_id')
     .notNull()
     .references(() => users.id),
@@ -306,6 +312,75 @@ export const mcpSubscriptions = pgTable(
   (t) => [
     uniqueIndex('mcp_subscription_user_config_idx').on(t.userId, t.configId),
     index('mcp_subscription_status_idx').on(t.status),
+  ],
+);
+
+/**
+ * 网关接入 token（决策 51）：一行 = 某个用户对某个 MCP 配置的专属 URL。
+ * 只存 SHA-256，明文仅在签发那一刻返回一次。
+ *
+ * **(user, config) 上不设唯一约束**：吊销过的行要留着（旧 URL 必须永久作废，
+ * 不能因为重新授权就复活），所以同一对上会有多行，靠 `revoked_at is null` 取当前那条。
+ */
+export const mcpGatewayTokens = pgTable(
+  'mcp_gateway_token',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    configId: uuid('config_id')
+      .notNull()
+      .references(() => mcpConfigs.id, { onDelete: 'cascade' }),
+    /** 查询用的不可逆指纹，唯一索引，请求进来按它一次命中 */
+    tokenHash: text('token_hash').notNull(),
+    /**
+     * 可逆存储的 token（信封加密，同 KEK）。
+     * **这里必须可逆**：用户每次 `eat sync`、每次打开控制台都要能重新拿到同一条 URL，
+     * 只存哈希会导致「每次同步都换一个地址」——已配好的客户端全废、多台机器也用不了。
+     * 上游凭证本来就以同样方式存在这套 KEK 下，这条 token 不比它更敏感。
+     */
+    tokenEncrypted: text('token_encrypted').notNull(),
+    /** 明文前几位，仅用于界面上认出「这是哪条」与排障，不足以还原 token */
+    prefix: text('prefix').notNull(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('mcp_gateway_token_hash_idx').on(t.tokenHash),
+    index('mcp_gateway_token_user_config_idx').on(t.userId, t.configId),
+  ],
+);
+
+/**
+ * 网关调用记录（决策 51）。刻意**不写 audit_log**：那张表是安全事件，
+ * 这里是每次工具调用一行的流量数据，量级差几个数量级，混在一起两边都不好查。
+ * 照 audit_log 的惯例用裸 uuid 不加外键——配置或用户被删后记录仍要留住，且有保留期自动清理。
+ * **只记 method 与工具名，不记 arguments**（里面是业务数据，也可能带密钥）。
+ */
+export const mcpGatewayCalls = pgTable(
+  'mcp_gateway_call',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tokenId: uuid('token_id'),
+    userId: uuid('user_id'),
+    configId: uuid('config_id'),
+    /** JSON-RPC method，如 initialize / tools/list / tools/call；非 JSON-RPC 请求（GET/DELETE）记 http 动作 */
+    method: text('method'),
+    /** tools/call 时的 params.name */
+    toolName: text('tool_name'),
+    /** 上游 HTTP 状态码；网关自己拒掉或上游不可达时为 0 */
+    status: integer('status').notNull().default(0),
+    durationMs: integer('duration_ms').notNull().default(0),
+    /** 网关侧拒绝或上游失败的简短原因（脱敏后），成功为空 */
+    error: text('error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('mcp_gateway_call_config_idx').on(t.configId, t.createdAt),
+    index('mcp_gateway_call_user_idx').on(t.userId, t.createdAt),
+    index('mcp_gateway_call_created_idx').on(t.createdAt),
   ],
 );
 
