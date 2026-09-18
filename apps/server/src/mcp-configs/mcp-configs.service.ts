@@ -27,6 +27,8 @@ import type { AuthUser } from '../auth/auth.decorators';
 import { DB, type Db } from '../db/db.module';
 import { mcpConfigs, mcpSubscriptions, templateItems, users, userTemplateSelections } from '../db/schema';
 import { EnvsService } from '../envs/envs.service';
+import { McpGatewayService } from '../mcp-gateway/mcp-gateway.service';
+import { McpSubscriptionsService, type SubscriptionSets } from './mcp-subscriptions.service';
 
 type ConfigRow = typeof mcpConfigs.$inferSelect;
 type UserRow = typeof users.$inferSelect;
@@ -35,23 +37,14 @@ type UserRow = typeof users.$inferSelect;
 const requester = alias(users, 'mcp_requester');
 const decider = alias(users, 'mcp_decider');
 
-/** 当前用户在各个配置上的订阅关系（一次查完，避免逐行查） */
-interface SubscriptionSets {
-  approved: Set<string>;
-  pending: Set<string>;
-  rejected: Set<string>;
-  /** 角色模板派生（没有订阅行，选了模板即生效） */
-  template: Set<string>;
-  /** 真正进入 sync 范围的集合 */
-  effective: Set<string>;
-}
-
 @Injectable()
 export class McpConfigsService {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly envs: EnvsService,
     private readonly audit: AuditService,
+    private readonly subs: McpSubscriptionsService,
+    private readonly gateway: McpGatewayService,
   ) {}
 
   /**
@@ -76,33 +69,8 @@ export class McpConfigsService {
     return row;
   }
 
-  private async subscriptionSets(userId: string): Promise<SubscriptionSets> {
-    const rows = await this.db
-      .select({
-        configId: mcpSubscriptions.configId,
-        status: mcpSubscriptions.status,
-        excluded: mcpSubscriptions.excluded,
-      })
-      .from(mcpSubscriptions)
-      .where(eq(mcpSubscriptions.userId, userId));
-    const pick = (status: (typeof rows)[number]['status']) =>
-      new Set(rows.filter((r) => !r.excluded && r.status === status).map((r) => r.configId));
-    const approved = pick('approved');
-    const pending = pick('pending');
-    const rejected = pick('rejected');
-    const excluded = new Set(rows.filter((r) => r.excluded).map((r) => r.configId));
-    const template = new Set(
-      (
-        await this.db
-          .select({ itemId: templateItems.itemId })
-          .from(userTemplateSelections)
-          .innerJoin(templateItems, eq(userTemplateSelections.templateId, templateItems.templateId))
-          .where(and(eq(userTemplateSelections.userId, userId), eq(templateItems.itemType, 'mcp_config')))
-      ).map((r) => r.itemId),
-    );
-    const effective = new Set(approved);
-    for (const id of template) if (!excluded.has(id)) effective.add(id);
-    return { approved, pending, rejected, template, effective };
+  private subscriptionSets(userId: string): Promise<SubscriptionSets> {
+    return this.subs.sets(userId);
   }
 
   private statusOf(configId: string, sets: SubscriptionSets): McpSubscriptionStatus {
@@ -112,7 +80,23 @@ export class McpConfigsService {
     return 'none';
   }
 
-  private toInfo(row: ConfigRow, ownerName: string, sets: SubscriptionSets): McpConfigInfo {
+  /**
+   * 上游地址与 header 只对 Owner / 管理员下发（决策 51）。
+   * 经网关分发的配置里，普通订阅者看到的必须是自己的 gatewayUrl 而不是上游——
+   * 否则接口把要藏的东西又交回去了，网关只是个摆设。
+   */
+  private canSeeUpstream(row: ConfigRow, user: AuthUser): boolean {
+    return !row.gatewayEnabled || row.ownerId === user.id || user.role === 'admin';
+  }
+
+  private toInfo(
+    row: ConfigRow,
+    ownerName: string,
+    sets: SubscriptionSets,
+    user: AuthUser,
+    gatewayUrl: string | null,
+  ): McpConfigInfo {
+    const upstream = this.canSeeUpstream(row, user);
     return {
       id: row.id,
       slug: row.slug,
@@ -121,16 +105,46 @@ export class McpConfigsService {
       transport: row.transport,
       command: row.command,
       args: row.args,
-      url: row.url,
-      headers: row.headers,
-      env: row.env,
+      url: upstream ? row.url : null,
+      headers: upstream ? row.headers : {},
+      env: upstream ? row.env : {},
       visibility: row.visibility,
+      gatewayEnabled: row.gatewayEnabled,
+      gatewayAvailable: row.transport === 'http' && this.canApprove(row, user),
+      gatewayUrl,
       ownerId: row.ownerId,
       ownerName,
       subscribed: sets.effective.has(row.id),
       subscriptionStatus: this.statusOf(row.id, sets),
       updatedAt: row.updatedAt.toISOString(),
     };
+  }
+
+  /**
+   * 授权发生变化后同步专属接入地址（决策 51）。
+   *
+   * 判的是**是否跨过了「有效」这条线**，不是「有没有点过订阅」：
+   * - 刚拿到授权 → 签发新地址（mint 内部会把这一对上的旧地址一并作废，
+   *   所以「取消后重新获取就是新 URL」自动成立）；
+   * - 刚失去授权 → 吊销。
+   *
+   * 用 wasEffective 做前后对比而不是无脑 mint，是因为已经有效的人重复点一次订阅
+   * 不该把他正在用的地址换掉（模板派生的订阅尤其容易触发这条）。
+   */
+  private async syncGatewayAccess(userId: string, config: ConfigRow, wasEffective: boolean): Promise<void> {
+    const nowEffective = await this.subs.isEffective(userId, config.id);
+    if (nowEffective === wasEffective) return;
+    if (nowEffective) {
+      if (config.gatewayEnabled) await this.gateway.mint(userId, config.id);
+    } else {
+      await this.gateway.revoke(userId, config.id);
+    }
+  }
+
+  /** 已生效订阅 + 走网关的配置才有专属地址；没有就懒签发一条 */
+  private async gatewayUrlFor(row: ConfigRow, user: AuthUser, sets: SubscriptionSets): Promise<string | null> {
+    if (!row.gatewayEnabled || !sets.effective.has(row.id)) return null;
+    return this.gateway.ensureUrl(user.id, row);
   }
 
   async list(user: AuthUser): Promise<McpConfigInfo[]> {
@@ -140,7 +154,12 @@ export class McpConfigsService {
       .innerJoin(users, eq(mcpConfigs.ownerId, users.id))
       .orderBy(asc(mcpConfigs.slug));
     const sets = await this.subscriptionSets(user.id);
-    return rows.filter((r) => this.canSee(r.config, user, sets)).map((r) => this.toInfo(r.config, r.ownerName, sets));
+    const visible = rows.filter((r) => this.canSee(r.config, user, sets));
+    return Promise.all(
+      visible.map(async (r) =>
+        this.toInfo(r.config, r.ownerName, sets, user, await this.gatewayUrlFor(r.config, user, sets)),
+      ),
+    );
   }
 
   /** 创建或更新（同 slug 存在时仅 Owner/管理员可改） */
@@ -154,15 +173,23 @@ export class McpConfigsService {
       command: dto.command ?? null,
       args: dto.args,
       url: dto.url ?? null,
-      headers: dto.headers,
-      env: dto.env,
+      // 凭证的归属按传输方式收敛：http 走请求头、stdio 走进程环境变量，
+      // 另一个字段对该传输毫无意义，留着只会让人把凭证填错地方（填错还是静默失效）
+      headers: dto.transport === 'http' ? dto.headers : {},
+      env: dto.transport === 'stdio' ? dto.env : {},
       visibility: dto.visibility,
+      // stdio 没有可代理的端点，无论前端传什么都按不走网关处理
+      gatewayEnabled: dto.transport === 'http' ? dto.gatewayEnabled : false,
     };
     if (existing) {
       if (existing.ownerId !== user.id && user.role !== 'admin') {
         throw new ForbiddenException({ error: 'FORBIDDEN', message: `MCP 配置 ${dto.slug} 已存在且属于他人` });
       }
       [row] = await this.db.update(mcpConfigs).set({ ...values, updatedAt: new Date() }).where(eq(mcpConfigs.id, existing.id)).returning();
+      // 改了上游地址/凭证就别再让请求走旧缓存
+      this.gateway.invalidateUpstream(row.id);
+      // 关掉网关后原来的专属地址必须立刻作废，否则它会继续替所有人代理
+      if (existing.gatewayEnabled && !row.gatewayEnabled) await this.gateway.revokeAll(row.id);
     } else {
       [row] = await this.db.insert(mcpConfigs).values({ ...values, slug: dto.slug, ownerId: user.id }).returning();
       // 作者自己的配置直接生效，不用等自己批自己
@@ -179,7 +206,8 @@ export class McpConfigsService {
       meta: { slug: dto.slug },
     });
     const [owner] = await this.db.select({ name: users.name }).from(users).where(eq(users.id, row.ownerId));
-    return this.toInfo(row, owner?.name ?? '', await this.subscriptionSets(user.id));
+    const sets = await this.subscriptionSets(user.id);
+    return this.toInfo(row, owner?.name ?? '', sets, user, await this.gatewayUrlFor(row, user, sets));
   }
 
   async remove(user: AuthUser, slug: string) {
@@ -217,6 +245,7 @@ export class McpConfigsService {
       .insert(mcpSubscriptions)
       .values({ userId: user.id, configId: row.id, ...values })
       .onConflictDoUpdate({ target: [mcpSubscriptions.userId, mcpSubscriptions.configId], set: values });
+    await this.syncGatewayAccess(user.id, row, sets.effective.has(row.id));
     await this.audit.record({
       actorId: user.id,
       action: autoApprove ? 'mcp_config.subscribed' : 'mcp_config.subscribe_requested',
@@ -230,7 +259,8 @@ export class McpConfigsService {
   /** 退订；申请还在 pending 时等于撤回申请 */
   async unsubscribe(user: AuthUser, slug: string) {
     const row = await this.getBySlug(slug);
-    const { template } = await this.subscriptionSets(user.id);
+    const sets = await this.subscriptionSets(user.id);
+    const { template } = sets;
     if (template.has(row.id)) {
       const values = { source: 'template' as const, excluded: true, status: 'approved' as const };
       await this.db
@@ -242,6 +272,7 @@ export class McpConfigsService {
         .delete(mcpSubscriptions)
         .where(and(eq(mcpSubscriptions.userId, user.id), eq(mcpSubscriptions.configId, row.id)));
     }
+    await this.syncGatewayAccess(user.id, row, sets.effective.has(row.id));
     await this.audit.record({
       actorId: user.id,
       action: 'mcp_config.unsubscribed',
@@ -316,10 +347,12 @@ export class McpConfigsService {
       throw new ForbiddenException({ error: 'FORBIDDEN', message: '仅配置 Owner 或管理员可审批' });
     }
     if (row.status !== 'pending') throw new ConflictException({ error: 'CONFLICT', message: '该申请已被处理' });
+    const wasEffective = await this.subs.isEffective(row.userId, config.id);
     await this.db
       .update(mcpSubscriptions)
       .set({ status: dto.decision, decidedBy: user.id, decidedAt: new Date() })
       .where(eq(mcpSubscriptions.id, id));
+    await this.syncGatewayAccess(row.userId, config, wasEffective);
     await this.audit.record({
       actorId: user.id,
       action: 'mcp_config.subscription_decided',
@@ -416,11 +449,13 @@ export class McpConfigsService {
       throw new BadRequestException({ error: 'VALIDATION_FAILED', message: '该用户已禁用，无法为其订阅' });
     }
     const decided = { status: 'approved' as const, excluded: false, decidedBy: user.id, decidedAt: new Date() };
+    const wasEffective = await this.subs.isEffective(target.id, config.id);
     await this.db
       .insert(mcpSubscriptions)
       .values({ userId: target.id, configId: config.id, source: 'admin', ...decided })
       // 对方本来挂着一条待审批申请时，这一步就是批准它：source 保持 manual，不抹掉申请痕迹
       .onConflictDoUpdate({ target: [mcpSubscriptions.userId, mcpSubscriptions.configId], set: decided });
+    await this.syncGatewayAccess(target.id, config, wasEffective);
     await this.audit.record({
       actorId: user.id,
       action: 'mcp_config.subscriber_added',
@@ -454,9 +489,11 @@ export class McpConfigsService {
         message: '该订阅来自角色模板，请在模板里移除这个配置，或让对方改选模板',
       });
     }
+    const wasEffective = await this.subs.isEffective(target.id, config.id);
     await this.db
       .delete(mcpSubscriptions)
       .where(and(eq(mcpSubscriptions.userId, target.id), eq(mcpSubscriptions.configId, config.id)));
+    await this.syncGatewayAccess(target.id, config, wasEffective);
     await this.audit.record({
       actorId: user.id,
       action: 'mcp_config.subscriber_removed',
@@ -468,15 +505,30 @@ export class McpConfigsService {
   }
 
   /**
-   * sync 渲染：只含审批通过（或模板派生）的订阅，再按用户权限解析 ${env:slug/KEY} 引用。
-   * 有权限 → 实际值（经 pullValues，落 secret.read 审计）；
-   * 无权限/不存在 → 保留占位符并在 unresolved 中给出申请指引。
+   * sync 渲染：只含审批通过（或模板派生）的订阅。两种形态（决策 51）：
+   *
+   * - **经网关分发**：产出一条专属 URL，不含任何上游信息；凭证在服务端解析，
+   *   不落用户磁盘，`unresolved` 恒空——成员不需要对应变量的读取权限。
+   * - **直连**：仍按用户权限解析 `${env:slug/KEY}`。有权限 → 实际值（经 pullValues，
+   *   落 secret.read 审计）；无权限/不存在 → 保留占位符并在 unresolved 中给出申请指引。
    */
   async syncBundle(user: AuthUser): Promise<RenderedMcpConfig[]> {
     const sets = await this.subscriptionSets(user.id);
     if (sets.effective.size === 0) return [];
     const rows = await this.db.select().from(mcpConfigs).where(inArray(mcpConfigs.id, [...sets.effective]));
-    const visible = rows.filter((r) => this.canSee(r, user, sets));
+    const all = rows.filter((r) => this.canSee(r, user, sets));
+    const gatewayRows = all.filter((r) => r.gatewayEnabled);
+    const visible = all.filter((r) => !r.gatewayEnabled);
+
+    const gatewayEntries: RenderedMcpConfig[] = await Promise.all(
+      gatewayRows.map(async (c) => ({
+        slug: c.slug,
+        name: c.name,
+        viaGateway: true,
+        server: { type: 'http', url: await this.gateway.ensureUrl(user.id, c) },
+        unresolved: [],
+      })),
+    );
 
     // 汇总所有引用，按环境批量解值（一次审计一条）
     const refsByEnv = new Map<string, Set<string>>();
@@ -502,7 +554,7 @@ export class McpConfigsService {
       }
     }
 
-    return visible.map((c) => {
+    const directEntries = visible.map((c) => {
       const unresolved: RenderedMcpConfig['unresolved'] = [];
       const render = (value: string) =>
         value.replace(ENV_REF_PATTERN, (whole, envSlug: string, key: string) => {
@@ -519,6 +571,8 @@ export class McpConfigsService {
       const renderKv = (kv: Record<string, string>) =>
         Object.fromEntries(Object.entries(kv).map(([k, v]) => [k, render(v)]));
 
+      // 各传输只渲染自己用得上的那个字段：http 的 env 客户端会直接忽略，
+      // 渲染出来只是噪音，还会让「凭证明明配了却不生效」更难查
       const server: Record<string, unknown> =
         c.transport === 'stdio'
           ? { command: c.command, args: c.args, ...(Object.keys(c.env).length ? { env: renderKv(c.env) } : {}) }
@@ -526,9 +580,10 @@ export class McpConfigsService {
               type: 'http',
               url: c.url,
               ...(Object.keys(c.headers).length ? { headers: renderKv(c.headers) } : {}),
-              ...(Object.keys(c.env).length ? { env: renderKv(c.env) } : {}),
             };
-      return { slug: c.slug, name: c.name, server, unresolved };
+      return { slug: c.slug, name: c.name, viaGateway: false, server, unresolved };
     });
+
+    return [...gatewayEntries, ...directEntries].sort((a, b) => a.slug.localeCompare(b.slug));
   }
 }

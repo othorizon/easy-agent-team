@@ -22,6 +22,8 @@
 | `EAT_ADMIN_EMAIL` / `EAT_ADMIN_PASSWORD` | 建议 | 首次种子创建的管理员账号（默认 `admin@example.com` / `admin12345`，生产务必显式设置） |
 | `EAT_SKIP_SEED` | | 设为 `1` 跳过启动种子 |
 | `EAT_HELP_RATE_LIMIT` | | 每用户每小时求助上限，默认 10 |
+| `EAT_MCP_GATEWAY_ALLOW_PRIVATE` | | 设为 `1` 允许 MCP 网关转发到内网 / 回环 / 保留地址。**默认关闭**——任何成员都能建 MCP 配置，开着等于让平台成为可被成员驱动的 SSRF 跳板（云 metadata、平台自己的内网服务都在射程内）。只有「能建 MCP 配置的人都可信」且确实要连内网 MCP 服务时才打开 |
+| `EAT_MCP_GATEWAY_CALL_RETENTION_DAYS` | | MCP 网关调用记录保留天数，默认 90；到期由服务进程每日清扫删除 |
 | `NODE_ENV` | | 镜像内已设为 `production`（生产模式下缺少 `EAT_KEK` 会拒绝启动） |
 | `TZ` | | 服务进程时区。`Dockerfile_cn` 镜像内已设为 `Asia/Shanghai`（北京时间），根目录 `Dockerfile` 未设即 UTC；只影响日志时间戳等本地时间输出，数据库时间列均带时区、不受影响。运行时传 `TZ` 可覆盖镜像默认值 |
 

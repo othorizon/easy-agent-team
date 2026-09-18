@@ -408,6 +408,40 @@ export class EnvsService {
     return { environment: env.slug, values, denied };
   }
 
+  /**
+   * **特权读取：仅供 MCP 网关解析上游凭证（决策 51）。**
+   *
+   * 不做按用户的授权检查，也不落 `secret.read` 审计——两者都是刻意的：
+   * 网关模式下解析凭证的授权来自「配置 Owner 建了这条配置 + 订阅已被批准」，
+   * 调用的成员既看不到值、也不该被要求拥有该变量的读取权限；
+   * 而每次工具调用都写一条 secret.read 会把审计表冲掉，网关侧改为按配置粒度
+   * 记一条 `mcp_gateway.credentials_resolved`。
+   *
+   * 查不到的环境 / 变量静默跳过，由调用方决定怎么报（网关是拒掉整次请求）。
+   * **除网关外不要调用它**：任何面向用户的取值都必须走 pullValues。
+   */
+  async readValuesForGateway(refs: Map<string, Set<string>>): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    for (const [envSlug, keys] of refs) {
+      const env = (
+        await this.db.select().from(environments).where(eq(environments.slug, envSlug)).limit(1)
+      )[0];
+      if (!env) continue;
+      const vars = await this.db
+        .select()
+        .from(envVariables)
+        .where(and(eq(envVariables.environmentId, env.id), inArray(envVariables.key, [...keys])));
+      for (const v of vars) {
+        try {
+          out.set(`${envSlug}/${v.key}`, this.readValue(v));
+        } catch {
+          // 解密失败（KEK 轮换等）时跳过，网关会当作未解析处理
+        }
+      }
+    }
+    return out;
+  }
+
   // ---------- 授权 ----------
 
   async listGrants(user: AuthUser, slug: string) {

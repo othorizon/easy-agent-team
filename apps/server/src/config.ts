@@ -10,6 +10,15 @@ export interface AppConfig {
   publicUrl: string;
   /** CLI 单文件产物路径（平台自托管下载）。默认按 monorepo/镜像布局从 server dist 相对定位 */
   cliDistPath: string;
+  /**
+   * 允许 MCP 网关转发到内网 / 回环 / 保留地址（决策 51）。**默认关闭。**
+   * 关着是因为任何成员都能建 MCP 配置，开着等于把平台变成可被成员驱动的 SSRF 跳板
+   * （云 metadata、平台自己的内网服务都在射程内）。
+   * 只有在「所有能建 MCP 配置的人都可信」且确实要连内网 MCP 服务时才打开。
+   */
+  mcpGatewayAllowPrivateUpstream: boolean;
+  /** 网关调用记录保留天数（决策 51），到期由模块内的每日清扫删掉 */
+  mcpGatewayCallRetentionDays: number;
 }
 
 export function loadConfig(): AppConfig {
@@ -25,5 +34,7 @@ export function loadConfig(): AppConfig {
     publicUrl: process.env.EAT_PUBLIC_URL ?? `http://localhost:${process.env.PORT ?? 3000}`,
     // 与 web dist 同一套相对布局约定：apps/server/dist → apps/cli/dist（镜像内 /app/server/dist → /app/cli/dist）
     cliDistPath: process.env.EAT_CLI_DIST ?? path.resolve(__dirname, '../../cli/dist/index.js'),
+    mcpGatewayAllowPrivateUpstream: process.env.EAT_MCP_GATEWAY_ALLOW_PRIVATE === '1',
+    mcpGatewayCallRetentionDays: Number(process.env.EAT_MCP_GATEWAY_CALL_RETENTION_DAYS ?? 90),
   };
 }

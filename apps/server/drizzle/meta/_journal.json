@@ -99,6 +99,13 @@
       "when": 1789735729313,
       "tag": "0013_mcp_subscription_approval",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1789741400449,
+      "tag": "0014_mcp_gateway",
+      "breakpoints": true
     }
   ]
 }
