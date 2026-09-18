@@ -475,9 +475,24 @@ description: 设计稿 token 到 Tailwind 变量的映射表（草稿）。
     await api('POST', '/api/mcp-configs', { token: T[m.owner], body: m.body });
     console.log(`  + ${m.body.slug}（${m.body.transport}）`);
   }
-  for (const [who, slug] of [['zhengnan', 'crm-db'], ['zhouqi', 'internal-gateway'], ['zhouqi', 'oss-upload'], ['wumin', 'internal-gateway']]) {
-    await api('POST', `/api/mcp-configs/${slug}/subscribe`, { token: T[who] });
+  // 订阅要 Owner / 管理员审批（决策 50）：这里走完整链路——先申请，再由配置 Owner 批掉大部分，
+  // 故意留一条待审批，页头「订阅申请」上的圆点与弹窗里的待办才是真的
+  // 吴敏那条留着不批（截图里要看得到待审批的样子）；她申请的是 crm-db——
+  // internal-gateway / oss-upload 在她套的「运营同学」模板里，模板派生的订阅本就免审批
+  const MCP_REQUESTS = [
+    ['zhengnan', 'crm-db', '做客户流失分析，要直接查 CRM 只读副本'],
+    ['zhouqi', 'internal-gateway', '活动页要调内部订单接口'],
+    ['zhouqi', 'oss-upload', '批量上传活动素材'],
+    ['wumin', 'crm-db', '周报里的新客数要自己核一遍，想直接查只读库'],
+  ];
+  for (const [who, slug, reason] of MCP_REQUESTS) {
+    await api('POST', `/api/mcp-configs/${slug}/subscribe`, { token: T[who], body: { reason } });
   }
+  const pendingMcp = await api('GET', '/api/mcp-configs/subscription-requests', { token: admin });
+  for (const r of pendingMcp.filter((r) => r.userEmail !== 'wumin@example.com')) {
+    await api('POST', `/api/mcp-configs/subscription-requests/${r.id}/decision`, { token: admin, body: { decision: 'approved' } });
+  }
+  console.log(`  + ${MCP_REQUESTS.length} 条订阅申请（批准 ${MCP_REQUESTS.length - 1} 条，留 1 条待审批）`);
 
   // -------------------------------------------------------------- 角色模板
   step('角色模板');

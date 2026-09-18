@@ -2,6 +2,7 @@ import type { AccessRequestHistoryResult, AccessRequestHistoryStatus, AccessRequ
 import { ACCESS_REQUEST_HISTORY_DEFAULT_PAGE_SIZE } from '@eat/shared';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api, ApiError } from '../api';
 import { InlineCode } from '../components/code';
@@ -134,7 +135,12 @@ export function RequestsPage() {
     <div className="space-y-5">
       <PageHeader
         title="权限申请"
-        description="成员对环境变量发起的读取申请。CLI 里 eat env request 或 AI 通过 MCP 也可以发起。"
+        description={
+          <>
+            成员对环境变量发起的读取申请。CLI 里 eat env request 或 AI 通过 MCP 也可以发起。MCP
+            配置的订阅申请不在这里，去 <Link to="/mcp" className="underline underline-offset-2">MCP 配置</Link> 页的「订阅申请」审批。
+          </>
+        }
       />
 
       <Tabs value={tab} onValueChange={(v) => setParams({ tab: v })}>

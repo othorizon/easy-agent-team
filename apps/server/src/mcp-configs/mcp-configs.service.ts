@@ -1,11 +1,26 @@
 import {
+  BadRequestException,
+  ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { and, asc, eq, inArray } from 'drizzle-orm';
-import type { McpConfigInfo, RenderedMcpConfig, UpsertMcpConfigRequest } from '@eat/shared';
+import { and, asc, desc, eq, inArray, isNotNull, ne, or, sql, type SQL } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
+import type {
+  AddMcpSubscriberRequest,
+  DecideMcpSubscriptionRequest,
+  McpConfigInfo,
+  McpSubscriber,
+  McpSubscriptionRequest,
+  McpSubscriptionRequestQuery,
+  McpSubscriptionStatus,
+  RenderedMcpConfig,
+  SubscribeMcpConfigRequest,
+  SubscribeMcpConfigResult,
+  UpsertMcpConfigRequest,
+} from '@eat/shared';
 import { ENV_REF_PATTERN } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
@@ -14,6 +29,22 @@ import { mcpConfigs, mcpSubscriptions, templateItems, users, userTemplateSelecti
 import { EnvsService } from '../envs/envs.service';
 
 type ConfigRow = typeof mcpConfigs.$inferSelect;
+type UserRow = typeof users.$inferSelect;
+
+/** 申请人与审批人都是 user 表，一条查询里 join 两次，各起别名 */
+const requester = alias(users, 'mcp_requester');
+const decider = alias(users, 'mcp_decider');
+
+/** 当前用户在各个配置上的订阅关系（一次查完，避免逐行查） */
+interface SubscriptionSets {
+  approved: Set<string>;
+  pending: Set<string>;
+  rejected: Set<string>;
+  /** 角色模板派生（没有订阅行，选了模板即生效） */
+  template: Set<string>;
+  /** 真正进入 sync 范围的集合 */
+  effective: Set<string>;
+}
 
 @Injectable()
 export class McpConfigsService {
@@ -23,8 +54,20 @@ export class McpConfigsService {
     private readonly audit: AuditService,
   ) {}
 
-  private canSee(row: ConfigRow, user: AuthUser): boolean {
-    return row.visibility === 'team' || row.ownerId === user.id || user.role === 'admin';
+  /**
+   * 可见性（决策 50）：
+   * - `team` 全员可见（看得到说明、可申请订阅）；
+   * - `private` 不公开，只有 Owner / 管理员看得到——**但已经拿到订阅的人要看得到自己手上有什么**，
+   *   否则管理员分配下去的配置会「同步得到却在清单里查无此物」。
+   */
+  private canSee(row: ConfigRow, user: AuthUser, sets: SubscriptionSets): boolean {
+    if (row.visibility === 'team' || row.ownerId === user.id || user.role === 'admin') return true;
+    return sets.effective.has(row.id) || sets.pending.has(row.id);
+  }
+
+  /** 审批人：配置 Owner 或管理员（与环境变量的「环境 Owner 或管理员」同一条规则） */
+  private canApprove(row: ConfigRow, user: AuthUser): boolean {
+    return row.ownerId === user.id || user.role === 'admin';
   }
 
   private async getBySlug(slug: string): Promise<ConfigRow> {
@@ -33,12 +76,20 @@ export class McpConfigsService {
     return row;
   }
 
-  private async subscriptionSets(userId: string) {
+  private async subscriptionSets(userId: string): Promise<SubscriptionSets> {
     const rows = await this.db
-      .select({ configId: mcpSubscriptions.configId, excluded: mcpSubscriptions.excluded })
+      .select({
+        configId: mcpSubscriptions.configId,
+        status: mcpSubscriptions.status,
+        excluded: mcpSubscriptions.excluded,
+      })
       .from(mcpSubscriptions)
       .where(eq(mcpSubscriptions.userId, userId));
-    const subs = new Set(rows.filter((r) => !r.excluded).map((r) => r.configId));
+    const pick = (status: (typeof rows)[number]['status']) =>
+      new Set(rows.filter((r) => !r.excluded && r.status === status).map((r) => r.configId));
+    const approved = pick('approved');
+    const pending = pick('pending');
+    const rejected = pick('rejected');
     const excluded = new Set(rows.filter((r) => r.excluded).map((r) => r.configId));
     const template = new Set(
       (
@@ -49,12 +100,19 @@ export class McpConfigsService {
           .where(and(eq(userTemplateSelections.userId, userId), eq(templateItems.itemType, 'mcp_config')))
       ).map((r) => r.itemId),
     );
-    const effective = new Set(subs);
+    const effective = new Set(approved);
     for (const id of template) if (!excluded.has(id)) effective.add(id);
-    return { subs, template, effective };
+    return { approved, pending, rejected, template, effective };
   }
 
-  private toInfo(row: ConfigRow, ownerName: string, subscribed: boolean): McpConfigInfo {
+  private statusOf(configId: string, sets: SubscriptionSets): McpSubscriptionStatus {
+    if (sets.effective.has(configId)) return 'approved';
+    if (sets.pending.has(configId)) return 'pending';
+    if (sets.rejected.has(configId)) return 'rejected';
+    return 'none';
+  }
+
+  private toInfo(row: ConfigRow, ownerName: string, sets: SubscriptionSets): McpConfigInfo {
     return {
       id: row.id,
       slug: row.slug,
@@ -69,7 +127,8 @@ export class McpConfigsService {
       visibility: row.visibility,
       ownerId: row.ownerId,
       ownerName,
-      subscribed,
+      subscribed: sets.effective.has(row.id),
+      subscriptionStatus: this.statusOf(row.id, sets),
       updatedAt: row.updatedAt.toISOString(),
     };
   }
@@ -80,8 +139,8 @@ export class McpConfigsService {
       .from(mcpConfigs)
       .innerJoin(users, eq(mcpConfigs.ownerId, users.id))
       .orderBy(asc(mcpConfigs.slug));
-    const { effective } = await this.subscriptionSets(user.id);
-    return rows.filter((r) => this.canSee(r.config, user)).map((r) => this.toInfo(r.config, r.ownerName, effective.has(r.config.id)));
+    const sets = await this.subscriptionSets(user.id);
+    return rows.filter((r) => this.canSee(r.config, user, sets)).map((r) => this.toInfo(r.config, r.ownerName, sets));
   }
 
   /** 创建或更新（同 slug 存在时仅 Owner/管理员可改） */
@@ -106,7 +165,11 @@ export class McpConfigsService {
       [row] = await this.db.update(mcpConfigs).set({ ...values, updatedAt: new Date() }).where(eq(mcpConfigs.id, existing.id)).returning();
     } else {
       [row] = await this.db.insert(mcpConfigs).values({ ...values, slug: dto.slug, ownerId: user.id }).returning();
-      await this.db.insert(mcpSubscriptions).values({ userId: user.id, configId: row.id }).onConflictDoNothing();
+      // 作者自己的配置直接生效，不用等自己批自己
+      await this.db
+        .insert(mcpSubscriptions)
+        .values({ userId: user.id, configId: row.id, status: 'approved', decidedBy: user.id, decidedAt: new Date() })
+        .onConflictDoNothing();
     }
     await this.audit.record({
       actorId: user.id,
@@ -116,7 +179,7 @@ export class McpConfigsService {
       meta: { slug: dto.slug },
     });
     const [owner] = await this.db.select({ name: users.name }).from(users).where(eq(users.id, row.ownerId));
-    return this.toInfo(row, owner?.name ?? '', true);
+    return this.toInfo(row, owner?.name ?? '', await this.subscriptionSets(user.id));
   }
 
   async remove(user: AuthUser, slug: string) {
@@ -129,43 +192,291 @@ export class McpConfigsService {
     return { ok: true };
   }
 
-  async subscribe(user: AuthUser, slug: string) {
+  /**
+   * 订阅 = 提一条申请（决策 50）。Owner / 管理员订自己能审批的配置即时生效；
+   * 已在角色模板里的配置也即时生效——那本就是管理员分配的范围，被排除后再加回来不该重走审批。
+   */
+  async subscribe(user: AuthUser, slug: string, dto: SubscribeMcpConfigRequest): Promise<SubscribeMcpConfigResult> {
     const row = await this.getBySlug(slug);
-    if (!this.canSee(row, user)) throw new NotFoundException({ error: 'NOT_FOUND', message: `MCP 配置 ${slug} 不存在` });
+    const sets = await this.subscriptionSets(user.id);
+    if (!this.canSee(row, user, sets)) throw new NotFoundException({ error: 'NOT_FOUND', message: `MCP 配置 ${slug} 不存在` });
+    // 已经批过的别再动它：成员手上有一条 approved 时重复点订阅不能把自己打回 pending
+    if (sets.approved.has(row.id)) return { status: 'approved' };
+
+    const autoApprove = this.canApprove(row, user) || sets.template.has(row.id);
+    const now = new Date();
+    const values = {
+      source: 'manual' as const,
+      excluded: false,
+      status: autoApprove ? ('approved' as const) : ('pending' as const),
+      reason: dto.reason,
+      decidedBy: autoApprove ? user.id : null,
+      decidedAt: autoApprove ? now : null,
+    };
     await this.db
       .insert(mcpSubscriptions)
-      .values({ userId: user.id, configId: row.id })
-      .onConflictDoUpdate({ target: [mcpSubscriptions.userId, mcpSubscriptions.configId], set: { excluded: false, source: 'manual' } });
-    return { ok: true };
+      .values({ userId: user.id, configId: row.id, ...values })
+      .onConflictDoUpdate({ target: [mcpSubscriptions.userId, mcpSubscriptions.configId], set: values });
+    await this.audit.record({
+      actorId: user.id,
+      action: autoApprove ? 'mcp_config.subscribed' : 'mcp_config.subscribe_requested',
+      targetType: 'mcp_config',
+      targetId: row.id,
+      meta: { slug },
+    });
+    return { status: values.status };
   }
 
+  /** 退订；申请还在 pending 时等于撤回申请 */
   async unsubscribe(user: AuthUser, slug: string) {
     const row = await this.getBySlug(slug);
     const { template } = await this.subscriptionSets(user.id);
     if (template.has(row.id)) {
+      const values = { source: 'template' as const, excluded: true, status: 'approved' as const };
       await this.db
         .insert(mcpSubscriptions)
-        .values({ userId: user.id, configId: row.id, source: 'template', excluded: true })
+        .values({ userId: user.id, configId: row.id, ...values })
         .onConflictDoUpdate({ target: [mcpSubscriptions.userId, mcpSubscriptions.configId], set: { excluded: true } });
     } else {
       await this.db
         .delete(mcpSubscriptions)
         .where(and(eq(mcpSubscriptions.userId, user.id), eq(mcpSubscriptions.configId, row.id)));
     }
+    await this.audit.record({
+      actorId: user.id,
+      action: 'mcp_config.unsubscribed',
+      targetType: 'mcp_config',
+      targetId: row.id,
+      meta: { slug },
+    });
+    return { ok: true };
+  }
+
+  /** 审批范围：管理员见全部，其他人见自己 Own 的配置上的申请 */
+  private approverScope(user: AuthUser): SQL | undefined {
+    return user.role === 'admin' ? undefined : eq(mcpConfigs.ownerId, user.id);
+  }
+
+  /**
+   * 我能审批的订阅申请。只认**自助申请**（source=manual）：管理员分配出去的订阅不是申请，
+   * Owner / 管理员订阅自己配置时那条自批的记录（decided_by = user_id）也不该混进审批清单。
+   */
+  async requests(user: AuthUser, query: McpSubscriptionRequestQuery): Promise<McpSubscriptionRequest[]> {
+    const isRequest = and(
+      eq(mcpSubscriptions.source, 'manual'),
+      or(
+        eq(mcpSubscriptions.status, 'pending'),
+        and(isNotNull(mcpSubscriptions.decidedBy), ne(mcpSubscriptions.decidedBy, mcpSubscriptions.userId)),
+      ),
+    );
+    const where =
+      query.status === 'pending'
+        ? and(eq(mcpSubscriptions.status, 'pending'), isRequest, this.approverScope(user))
+        : and(isRequest, this.approverScope(user));
+    const rows = await this.db
+      .select({
+        sub: mcpSubscriptions,
+        config: mcpConfigs,
+        requesterName: requester.name,
+        requesterEmail: requester.email,
+        deciderName: decider.name,
+      })
+      .from(mcpSubscriptions)
+      .innerJoin(mcpConfigs, eq(mcpSubscriptions.configId, mcpConfigs.id))
+      .innerJoin(requester, eq(mcpSubscriptions.userId, requester.id))
+      .leftJoin(decider, eq(mcpSubscriptions.decidedBy, decider.id))
+      .where(where)
+      // 待审批的排前面，其余按处理时间倒序
+      .orderBy(desc(sql`case when ${mcpSubscriptions.status} = 'pending' then 1 else 0 end`), desc(mcpSubscriptions.createdAt))
+      .limit(200);
+    return rows.map((r) => ({
+      id: r.sub.id,
+      configId: r.config.id,
+      configSlug: r.config.slug,
+      configName: r.config.name,
+      configVisibility: r.config.visibility,
+      userId: r.sub.userId,
+      userName: r.requesterName,
+      userEmail: r.requesterEmail,
+      reason: r.sub.reason,
+      status: r.sub.status,
+      decidedBy: r.sub.decidedBy,
+      decidedByName: r.sub.decidedBy ? (r.deciderName ?? '(已删除)') : null,
+      decidedAt: r.sub.decidedAt?.toISOString() ?? null,
+      createdAt: r.sub.createdAt.toISOString(),
+    }));
+  }
+
+  async decide(user: AuthUser, id: string, dto: DecideMcpSubscriptionRequest) {
+    const row = (await this.db.select().from(mcpSubscriptions).where(eq(mcpSubscriptions.id, id)).limit(1))[0];
+    if (!row) throw new NotFoundException({ error: 'NOT_FOUND', message: '订阅申请不存在' });
+    const config = (await this.db.select().from(mcpConfigs).where(eq(mcpConfigs.id, row.configId)).limit(1))[0];
+    if (!config) throw new NotFoundException({ error: 'NOT_FOUND', message: 'MCP 配置已删除' });
+    if (!this.canApprove(config, user)) {
+      throw new ForbiddenException({ error: 'FORBIDDEN', message: '仅配置 Owner 或管理员可审批' });
+    }
+    if (row.status !== 'pending') throw new ConflictException({ error: 'CONFLICT', message: '该申请已被处理' });
+    await this.db
+      .update(mcpSubscriptions)
+      .set({ status: dto.decision, decidedBy: user.id, decidedAt: new Date() })
+      .where(eq(mcpSubscriptions.id, id));
+    await this.audit.record({
+      actorId: user.id,
+      action: 'mcp_config.subscription_decided',
+      targetType: 'mcp_config',
+      targetId: config.id,
+      meta: { slug: config.slug, decision: dto.decision, targetUserId: row.userId },
+    });
+    return { ok: true };
+  }
+
+  /** 订阅者明细与分配都归 Owner / 管理员——与审批同一条规则 */
+  private async assertCanManageSubscribers(user: AuthUser, slug: string): Promise<ConfigRow> {
+    const config = await this.getBySlug(slug);
+    if (!this.canApprove(config, user)) {
+      throw new ForbiddenException({ error: 'FORBIDDEN', message: '仅配置 Owner 或管理员可管理订阅者' });
+    }
+    return config;
+  }
+
+  /** 生效中的订阅者（审批通过的 + 模板派生的，去掉被排除的与已禁用的用户） */
+  async subscribers(user: AuthUser, slug: string): Promise<McpSubscriber[]> {
+    const config = await this.assertCanManageSubscribers(user, slug);
+    const [subRows, tplRows, activeUsers] = await Promise.all([
+      this.db
+        .select({
+          userId: mcpSubscriptions.userId,
+          source: mcpSubscriptions.source,
+          status: mcpSubscriptions.status,
+          excluded: mcpSubscriptions.excluded,
+          createdAt: mcpSubscriptions.createdAt,
+          decidedAt: mcpSubscriptions.decidedAt,
+        })
+        .from(mcpSubscriptions)
+        .where(eq(mcpSubscriptions.configId, config.id)),
+      this.db
+        .select({ userId: userTemplateSelections.userId })
+        .from(userTemplateSelections)
+        .innerJoin(templateItems, eq(userTemplateSelections.templateId, templateItems.templateId))
+        .where(and(eq(templateItems.itemType, 'mcp_config'), eq(templateItems.itemId, config.id))),
+      this.db
+        .select({ id: users.id, name: users.name, email: users.email, role: users.role })
+        .from(users)
+        .where(eq(users.status, 'active')),
+    ]);
+    const userById = new Map(activeUsers.map((u) => [u.id, u]));
+    const out = new Map<string, McpSubscriber>();
+    const excluded = new Set<string>();
+    for (const r of subRows) {
+      if (r.excluded) {
+        excluded.add(r.userId);
+        continue;
+      }
+      if (r.status !== 'approved') continue;
+      const u = userById.get(r.userId);
+      if (!u) continue;
+      out.set(u.id, {
+        userId: u.id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        source: r.source,
+        removable: true,
+        subscribedAt: (r.decidedAt ?? r.createdAt).toISOString(),
+      });
+    }
+    for (const r of tplRows) {
+      if (excluded.has(r.userId) || out.has(r.userId)) continue;
+      const u = userById.get(r.userId);
+      if (!u) continue;
+      out.set(u.id, {
+        userId: u.id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        source: 'template',
+        removable: false,
+        subscribedAt: null,
+      });
+    }
+    return [...out.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
+  }
+
+  private async getTargetUser(userId: string): Promise<UserRow> {
+    const row = (await this.db.select().from(users).where(eq(users.id, userId)).limit(1))[0];
+    if (!row) throw new NotFoundException({ error: 'NOT_FOUND', message: '用户不存在' });
+    return row;
+  }
+
+  /** 主动分配：不公开的配置只有这一条路能到成员手里，所以这里不看可见性 */
+  async addSubscriber(user: AuthUser, slug: string, dto: AddMcpSubscriberRequest) {
+    const config = await this.assertCanManageSubscribers(user, slug);
+    const target = await this.getTargetUser(dto.userId);
+    if (target.status !== 'active') {
+      throw new BadRequestException({ error: 'VALIDATION_FAILED', message: '该用户已禁用，无法为其订阅' });
+    }
+    const decided = { status: 'approved' as const, excluded: false, decidedBy: user.id, decidedAt: new Date() };
+    await this.db
+      .insert(mcpSubscriptions)
+      .values({ userId: target.id, configId: config.id, source: 'admin', ...decided })
+      // 对方本来挂着一条待审批申请时，这一步就是批准它：source 保持 manual，不抹掉申请痕迹
+      .onConflictDoUpdate({ target: [mcpSubscriptions.userId, mcpSubscriptions.configId], set: decided });
+    await this.audit.record({
+      actorId: user.id,
+      action: 'mcp_config.subscriber_added',
+      targetType: 'mcp_config',
+      targetId: config.id,
+      meta: { slug, targetUserId: target.id, targetUserEmail: target.email },
+    });
+    return { ok: true };
+  }
+
+  async removeSubscriber(user: AuthUser, slug: string, targetUserId: string) {
+    const config = await this.assertCanManageSubscribers(user, slug);
+    const target = await this.getTargetUser(targetUserId);
+    const fromTemplate = (
+      await this.db
+        .select({ userId: userTemplateSelections.userId })
+        .from(userTemplateSelections)
+        .innerJoin(templateItems, eq(userTemplateSelections.templateId, templateItems.templateId))
+        .where(
+          and(
+            eq(userTemplateSelections.userId, target.id),
+            eq(templateItems.itemType, 'mcp_config'),
+            eq(templateItems.itemId, config.id),
+          ),
+        )
+        .limit(1)
+    ).length > 0;
+    if (fromTemplate) {
+      throw new BadRequestException({
+        error: 'VALIDATION_FAILED',
+        message: '该订阅来自角色模板，请在模板里移除这个配置，或让对方改选模板',
+      });
+    }
+    await this.db
+      .delete(mcpSubscriptions)
+      .where(and(eq(mcpSubscriptions.userId, target.id), eq(mcpSubscriptions.configId, config.id)));
+    await this.audit.record({
+      actorId: user.id,
+      action: 'mcp_config.subscriber_removed',
+      targetType: 'mcp_config',
+      targetId: config.id,
+      meta: { slug, targetUserId: target.id, targetUserEmail: target.email },
+    });
     return { ok: true };
   }
 
   /**
-   * sync 渲染：按用户权限解析 ${env:slug/KEY} 引用。
+   * sync 渲染：只含审批通过（或模板派生）的订阅，再按用户权限解析 ${env:slug/KEY} 引用。
    * 有权限 → 实际值（经 pullValues，落 secret.read 审计）；
    * 无权限/不存在 → 保留占位符并在 unresolved 中给出申请指引。
    */
   async syncBundle(user: AuthUser): Promise<RenderedMcpConfig[]> {
-    const { subs, effective } = await this.subscriptionSets(user.id);
-    void subs;
-    if (effective.size === 0) return [];
-    const rows = await this.db.select().from(mcpConfigs).where(inArray(mcpConfigs.id, [...effective]));
-    const visible = rows.filter((r) => this.canSee(r, user));
+    const sets = await this.subscriptionSets(user.id);
+    if (sets.effective.size === 0) return [];
+    const rows = await this.db.select().from(mcpConfigs).where(inArray(mcpConfigs.id, [...sets.effective]));
+    const visible = rows.filter((r) => this.canSee(r, user, sets));
 
     // 汇总所有引用，按环境批量解值（一次审计一条）
     const refsByEnv = new Map<string, Set<string>>();

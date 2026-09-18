@@ -176,10 +176,12 @@ describe('MCP 配置分发', () => {
       },
     });
     expect(r.status).toBe(201);
-    // 私有配置对他人不可见
+    // 创建者自己的订阅即时生效，不用等自己批自己
+    expect(r.body.subscriptionStatus).toBe('approved');
+    // 不公开的配置对他人不可见
     await api('POST', '/api/mcp-configs', {
       token: adminToken,
-      payload: { slug: 'secret-mcp', name: '私有', transport: 'stdio', command: 'x', visibility: 'private' },
+      payload: { slug: 'secret-mcp', name: '不公开', transport: 'stdio', command: 'x', visibility: 'private' },
     });
     const list = await api('GET', '/api/mcp-configs', { token: m2Token });
     const slugs = list.body.map((c: { slug: string }) => c.slug);
@@ -191,10 +193,120 @@ describe('MCP 配置分发', () => {
       payload: { slug: 'internal-api', name: 'x', transport: 'stdio', command: 'y' },
     });
     expect(steal.status).toBe(403);
+    // 不可见的配置也订阅不到（连存在都不该知道）
+    const blind = await api('POST', '/api/mcp-configs/secret-mcp/subscribe', { token: m2Token });
+    expect(blind.status).toBe(404);
+  });
+
+  it('成员订阅需审批：批准前不进 sync 范围（决策 50）', async () => {
+    const sub = await api('POST', '/api/mcp-configs/internal-api/subscribe', {
+      token: m2Token,
+      payload: { reason: '要连内部服务' },
+    });
+    expect(sub.body.status).toBe('pending');
+    let list = await api('GET', '/api/mcp-configs', { token: m2Token });
+    let item = list.body.find((c: { slug: string }) => c.slug === 'internal-api');
+    expect(item.subscriptionStatus).toBe('pending');
+    expect(item.subscribed).toBe(false);
+    // 待审批期间不下发
+    let bundle = await api('GET', '/api/mcp-configs/sync-bundle', { token: m2Token });
+    expect(bundle.body).toHaveLength(0);
+
+    // 既不是 Owner 也不是管理员 → 看不到别人的申请、也批不了
+    const requests = await api('GET', '/api/mcp-configs/subscription-requests', { token: adminToken });
+    expect(requests.body).toHaveLength(1);
+    expect(requests.body[0]).toMatchObject({ configSlug: 'internal-api', userEmail: 'zhang@test.dev', reason: '要连内部服务' });
+    const requestId = requests.body[0].id;
+    expect((await api('GET', '/api/mcp-configs/subscription-requests', { token: m1Token })).body).toHaveLength(0);
+    const usurp = await api('POST', `/api/mcp-configs/subscription-requests/${requestId}/decision`, {
+      token: m1Token,
+      payload: { decision: 'approved' },
+    });
+    expect(usurp.status).toBe(403);
+
+    // 管理员批准 → 立刻进入 sync 范围
+    const decided = await api('POST', `/api/mcp-configs/subscription-requests/${requestId}/decision`, {
+      token: adminToken,
+      payload: { decision: 'approved' },
+    });
+    expect(decided.status).toBe(201);
+    // 重复审批 → 409
+    expect(
+      (
+        await api('POST', `/api/mcp-configs/subscription-requests/${requestId}/decision`, {
+          token: adminToken,
+          payload: { decision: 'rejected' },
+        })
+      ).status,
+    ).toBe(409);
+
+    list = await api('GET', '/api/mcp-configs', { token: m2Token });
+    item = list.body.find((c: { slug: string }) => c.slug === 'internal-api');
+    expect(item.subscriptionStatus).toBe('approved');
+    expect(item.subscribed).toBe(true);
+    bundle = await api('GET', '/api/mcp-configs/sync-bundle', { token: m2Token });
+    expect(bundle.body).toHaveLength(1);
+    // 批准后重复点订阅不会把自己打回待审批
+    expect((await api('POST', '/api/mcp-configs/internal-api/subscribe', { token: m2Token })).body.status).toBe('approved');
+  });
+
+  it('驳回的申请不下发，可以重新申请', async () => {
+    await api('POST', '/api/mcp-configs', {
+      token: m1Token,
+      payload: { slug: 'wang-mcp', name: '小王的 MCP', transport: 'stdio', command: 'node' },
+    });
+    await api('POST', '/api/mcp-configs/wang-mcp/subscribe', { token: m2Token, payload: { reason: '想用' } });
+    // Owner（非管理员）也能审批自己的配置
+    const inbox = await api('GET', '/api/mcp-configs/subscription-requests', { token: m1Token });
+    expect(inbox.body).toHaveLength(1);
+    await api('POST', `/api/mcp-configs/subscription-requests/${inbox.body[0].id}/decision`, {
+      token: m1Token,
+      payload: { decision: 'rejected' },
+    });
+    const list = await api('GET', '/api/mcp-configs', { token: m2Token });
+    expect(list.body.find((c: { slug: string }) => c.slug === 'wang-mcp').subscriptionStatus).toBe('rejected');
+    const bundle = await api('GET', '/api/mcp-configs/sync-bundle', { token: m2Token });
+    expect(bundle.body.map((c: { slug: string }) => c.slug)).not.toContain('wang-mcp');
+    // 已处理的申请在 status=all 里还看得到，pending 清单则空了
+    expect((await api('GET', '/api/mcp-configs/subscription-requests', { token: m1Token })).body).toHaveLength(0);
+    const all = await api('GET', '/api/mcp-configs/subscription-requests?status=all', { token: m1Token });
+    expect(all.body).toHaveLength(1);
+    expect(all.body[0]).toMatchObject({ status: 'rejected', decidedByName: '小王' });
+    // 重新申请 → 回到待审批
+    await api('POST', '/api/mcp-configs/wang-mcp/subscribe', { token: m2Token, payload: { reason: '再申请一次' } });
+    expect((await api('GET', '/api/mcp-configs/subscription-requests', { token: m1Token })).body).toHaveLength(1);
+    // 撤回申请
+    await api('DELETE', '/api/mcp-configs/wang-mcp/subscribe', { token: m2Token });
+    expect((await api('GET', '/api/mcp-configs/subscription-requests', { token: m1Token })).body).toHaveLength(0);
+  });
+
+  it('不公开的配置靠管理员主动分配', async () => {
+    const users = await api('GET', '/api/users', { token: adminToken });
+    const zhang = users.body.find((u: { email: string }) => u.email === 'zhang@test.dev');
+    expect((await api('GET', '/api/mcp-configs/secret-mcp/subscribers', { token: m2Token })).status).toBe(403);
+    const added = await api('POST', '/api/mcp-configs/secret-mcp/subscribers', {
+      token: adminToken,
+      payload: { userId: zhang.id },
+    });
+    expect(added.status).toBe(201);
+    // 分配后：清单里看得到（哪怕配置不公开）、直接生效、也能同步下来
+    const list = await api('GET', '/api/mcp-configs', { token: m2Token });
+    const item = list.body.find((c: { slug: string }) => c.slug === 'secret-mcp');
+    expect(item).toMatchObject({ subscribed: true, subscriptionStatus: 'approved' });
+    const bundle = await api('GET', '/api/mcp-configs/sync-bundle', { token: m2Token });
+    expect(bundle.body.map((c: { slug: string }) => c.slug)).toContain('secret-mcp');
+    const subscribers = await api('GET', '/api/mcp-configs/secret-mcp/subscribers', { token: adminToken });
+    expect(subscribers.body.find((s: { email: string }) => s.email === 'zhang@test.dev')).toMatchObject({
+      source: 'admin',
+      removable: true,
+    });
+    // 收回分配
+    await api('DELETE', `/api/mcp-configs/secret-mcp/subscribers/${zhang.id}`, { token: adminToken });
+    const after = await api('GET', '/api/mcp-configs', { token: m2Token });
+    expect(after.body.map((c: { slug: string }) => c.slug)).not.toContain('secret-mcp');
   });
 
   it('无权限时引用保留占位符并给出申请指引', async () => {
-    await api('POST', '/api/mcp-configs/internal-api/subscribe', { token: m2Token });
     const bundle = await api('GET', '/api/mcp-configs/sync-bundle', { token: m2Token });
     const item = bundle.body.find((c: { slug: string }) => c.slug === 'internal-api');
     expect(item.server.env.MODE).toBe('prod');
