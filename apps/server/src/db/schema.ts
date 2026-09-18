@@ -276,6 +276,12 @@ export const mcpConfigs = pgTable('mcp_config', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * MCP 订阅关系。决策 50 起自助订阅要审批：成员点订阅先落一条 `pending`，
+ * 配置 Owner / 管理员批准后才是 `approved`（= 进入 sync 范围）。
+ * `source=admin` 是管理员主动分配（不公开的配置只有这一条路），建行时即 `approved`。
+ * 模板派生的订阅没有行（选了模板即生效），只有排除时才写一条 `excluded`。
+ */
 export const mcpSubscriptions = pgTable(
   'mcp_subscription',
   {
@@ -286,11 +292,21 @@ export const mcpSubscriptions = pgTable(
     configId: uuid('config_id')
       .notNull()
       .references(() => mcpConfigs.id, { onDelete: 'cascade' }),
-    source: text('source', { enum: ['manual', 'template'] }).notNull().default('manual'),
+    source: text('source', { enum: ['manual', 'template', 'admin'] }).notNull().default('manual'),
+    status: text('status', { enum: ['pending', 'approved', 'rejected'] })
+      .notNull()
+      .default('approved'),
+    /** 申请理由（自助订阅时填，管理员分配为空） */
+    reason: text('reason').notNull().default(''),
+    decidedBy: uuid('decided_by').references(() => users.id),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
     excluded: boolean('excluded').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [uniqueIndex('mcp_subscription_user_config_idx').on(t.userId, t.configId)],
+  (t) => [
+    uniqueIndex('mcp_subscription_user_config_idx').on(t.userId, t.configId),
+    index('mcp_subscription_status_idx').on(t.status),
+  ],
 );
 
 /** 团队共享数据库实例（管理凭证加密存储） */
