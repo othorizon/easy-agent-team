@@ -462,6 +462,28 @@ describe('数据库账号分配（真实建库）', () => {
     await client.end();
   });
 
+  it('public schema 归到分配账号名下：账号能自己删建 schema（迁移工具常做），不是只靠 pg_database_owner 兜底', async () => {
+    const client = new Client({
+      host: creds.DB_HOST,
+      port: Number(creds.DB_PORT),
+      user: creds.DB_USER,
+      password: creds.DB_PASSWORD,
+      database: creds.DB_NAME,
+    });
+    await client.connect();
+    // CREATE DATABASE ... OWNER 不改 public 的归属（它是从 template1 复制来的），建库后必须显式摆正
+    const owner = await client.query(
+      `select pg_get_userbyid(nspowner) as owner from pg_namespace where nspname = 'public'`,
+    );
+    expect(owner.rows[0].owner).toBe(creds.DB_USER);
+    // 只有 owner 才做得了这几件事：加固过的集群（PUBLIC 无 CREATE）上第一条就会失败
+    await client.query('comment on schema public is $$mine$$');
+    await client.query('drop schema public cascade');
+    await client.query('create schema public');
+    await client.query('create table after_reset(id int)');
+    await client.end();
+  });
+
   it('禁用后拒绝登录，恢复后可再连', async () => {
     await api('POST', `/api/db/assignments/${assignmentId}/disable`, { token: adminToken });
     const blocked = new Client({ host: creds.DB_HOST, port: Number(creds.DB_PORT), user: creds.DB_USER, database: creds.DB_NAME });
