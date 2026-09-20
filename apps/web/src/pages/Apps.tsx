@@ -67,7 +67,7 @@ const BUILD_TYPE_OPTIONS: Array<{ label: string; value: AppBuildType }> = [
 
 /**
  * 一次部署是谁发起的（决策 30 / 31）。platform 为 null 就是「有人绕过平台、直接在 Dokploy 侧触发」；
- * source=console 是控制台按钮触发的，同样没做本地密钥扫描——两种都要显眼地标出来。
+ * source=console / remote 分别是控制台按钮与云端 MCP 触发的，同样没做本地密钥扫描——都要显眼地标出来。
  */
 function OriginCell({ d }: { d: DeploymentInfo }) {
   if (!d.platform) {
@@ -77,6 +77,7 @@ function OriginCell({ d }: { d: DeploymentInfo }) {
     <span className="flex flex-wrap items-center gap-1 text-muted-foreground" title={d.platform.claim === 'inferred' ? '归属按触发时间推断，未必准确' : undefined}>
       {d.platform.triggeredByName}
       {d.platform.source === 'console' && <Badge variant="warning">控制台</Badge>}
+      {d.platform.source === 'remote' && <Badge variant="warning">远程 MCP</Badge>}
       {d.platform.claim === 'inferred' && ' ⚠'}
     </span>
   );

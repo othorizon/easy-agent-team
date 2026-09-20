@@ -1,11 +1,12 @@
 import { buildAgentInstallGuide } from '@eat/shared';
-import { Bot, Copy, TerminalSquare, Unplug } from 'lucide-react';
+import { Bot, Copy, TerminalSquare } from 'lucide-react';
 import * as React from 'react';
 import { Cmd, CodeBlock, copyText, InlineCode } from '../components/code';
 import { PageHeader } from '../components/page-header';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { McpAccessCard } from './install-mcp';
 
 type Os = 'unix' | 'windows';
 
@@ -55,7 +56,7 @@ export function InstallPage() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="安装 CLI" description="把团队能力接入你（和你的 AI）的工作环境。" />
+      <PageHeader title="安装与接入" description="把团队能力接入你（和你的 AI）的工作环境：本机装 CLI，云端 AI 服务走 MCP 接入地址。" />
 
       <Card>
         <CardContent>
@@ -173,39 +174,8 @@ export function InstallPage() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardContent>
-          <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold">
-            <Unplug className="size-4 text-primary" />
-            MCP 配置（无终端环境的 AI 客户端）
-          </h2>
-          <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
-            eat 的全部能力都可以通过 CLI 使用——<strong className="text-foreground">Agent 有 shell 环境时装好 CLI 即可，不需要配置 MCP</strong>。
-            只有当 AI 客户端不能执行 shell 命令时，才把 eat 注册为 MCP server 接入平台。 前提：本机已完成上面的 CLI
-            安装与登录；MCP 复用 CLI 凭证（<InlineCode>~/.eat/credentials.json</InlineCode>），无需再登录。
-          </p>
-          <div className="mb-2 text-sm font-medium">Claude Code（macOS / Linux）：</div>
-          <Cmd text="claude mcp add --scope user eat -- eat mcp" />
-          <div className="mt-3 mb-2 text-sm font-medium">Claude Code（Windows）：</div>
-          <Cmd text="claude mcp add --scope user eat -- cmd /c eat mcp" />
-          <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
-            Windows 上 <InlineCode>eat</InlineCode> 实际是 <InlineCode>eat.cmd</InlineCode>，而 Node
-            出于安全不允许不经 shell 直接拉起 <InlineCode>.cmd</InlineCode>，所以要加{' '}
-            <InlineCode>cmd /c</InlineCode>。其他 MCP 客户端：配置一个 stdio server，命令{' '}
-            <InlineCode>eat</InlineCode>、参数 <InlineCode>mcp</InlineCode>（Windows 为命令{' '}
-            <InlineCode>cmd</InlineCode>、参数 <InlineCode>/c eat mcp</InlineCode>）。
-          </p>
-          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            兜底写法（<InlineCode>eat</InlineCode> 不在 PATH，或客户端不走 shell）：命令{' '}
-            <InlineCode>node</InlineCode>、参数为 CLI 绝对路径加 <InlineCode>mcp</InlineCode>——类 Unix 是{' '}
-            <InlineCode>~/.eat/bin/eat.js</InlineCode>，Windows 是{' '}
-            <InlineCode>%USERPROFILE%\.eat\bin\eat.js</InlineCode>。
-          </p>
-          <p className="mt-3 flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
-            这份指引也可直接获取：<Cmd text={`${origin}/install/MCP.md`} />
-          </p>
-        </CardContent>
-      </Card>
+      <McpAccessCard origin={origin} />
+
     </div>
   );
 }

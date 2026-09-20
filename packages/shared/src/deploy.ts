@@ -344,10 +344,11 @@ export type PrecheckReport = z.infer<typeof precheckReportSchema>;
 // ---------- 部署 ----------
 
 /**
- * 部署来源。cli = `eat deploy` / MCP `trigger_deploy`，必须携带通过的本地检查报告（决策 #8）；
- * console = 控制台的「部署」按钮，没有本地代码可扫，记录会明确标成「未做密钥扫描」（决策 31）。
+ * 部署来源。cli = `eat deploy` / 本地 stdio MCP 的 `trigger_deploy`，必须携带通过的本地检查报告（决策 #8）；
+ * console = 控制台的「部署」按钮；remote = 平台 HTTP MCP 端点上的 `trigger_deploy`（决策 55，云端 AI 客户端）。
+ * 后两者都没有本地代码可扫，记录会明确标成「未做密钥扫描」（决策 31）。
  */
-export const deploySourceSchema = z.enum(['cli', 'console']);
+export const deploySourceSchema = z.enum(['cli', 'console', 'remote']);
 export type DeploySource = z.infer<typeof deploySourceSchema>;
 
 export const triggerDeploySchema = z.object({

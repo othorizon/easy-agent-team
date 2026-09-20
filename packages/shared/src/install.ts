@@ -69,16 +69,53 @@ export function buildAgentInstallGuide(publicUrl: string): string {
 }
 
 /**
- * MCP 配置指引（独立板块）：只给没有 shell 环境、无法直接执行 eat 命令的
- * AI 客户端用；有终端的 Agent 装 CLI 即可，不需要配置 MCP。
+ * MCP 配置指引（独立板块，决策 55 后分两条路）：
+ * - 云端 AI 服务：平台自己的 Streamable HTTP 端点 `<平台>/mcp` + 请求头里的 API Key；
+ * - 本机没有 shell 的客户端：仍走 `eat mcp`（stdio），复用 CLI 凭证。
+ * 有终端的 Agent 装 CLI 即可，两条都不需要。
  */
 export function buildMcpSetupGuide(publicUrl: string): string {
-  return `# eat MCP 配置（给没有终端的 AI 客户端）
+  return `# eat MCP 接入
 
 eat 的全部能力都可以通过 \`eat\` CLI 使用——**AI Agent 有 shell 环境时，装好 CLI 即可，无需配置 MCP**。
-只有当 AI 客户端不能执行 shell 命令时，才把 eat 注册为 MCP server 接入平台。
+装不了 CLI 的客户端按下面两种方式之一接入。
 
-前提：本机已完成 CLI 安装与登录（macOS/Linux 用 \`curl -fsSL ${publicUrl}/install.sh | sh\`，Windows 用 \`powershell -ExecutionPolicy ByPass -c "irm ${publicUrl}/install.ps1 | iex"\`，随后 \`eat login --server ${publicUrl}\`）。MCP 复用 CLI 凭证（\`~/.eat/credentials.json\`），无需再登录。
+## 一、云端 AI 服务（标准 HTTP MCP，推荐）
+
+跑在别人机器上的 AI 服务（各家云端 Agent 平台、工作流编排、团队里的自建服务）装不了 CLI、也读不到你本地的凭证文件，用平台自己的 MCP 端点接入：
+
+- **接入地址**：\`${publicUrl}/mcp\`（Streamable HTTP，无状态）
+- **鉴权**：请求头 \`Authorization: Bearer <API Key>\`；客户端不支持自定义 Authorization 时用 \`X-API-Key: <API Key>\` 也认。
+  **不要把密钥放进 URL**——URL 会被各级日志记下来。
+- **API Key 从哪来**：登录平台控制台 → 「安装与接入」页 → 「我的 API 密钥」→ 生成。明文只显示一次；密钥代表**你本人**的权限，平台按你的身份审计，给每个接入的服务单独生成一把，不用了随时吊销。
+
+多数客户端通用的 JSON 配置：
+
+\`\`\`json
+{
+  "mcpServers": {
+    "eat": {
+      "type": "http",
+      "url": "${publicUrl}/mcp",
+      "headers": { "Authorization": "Bearer <你的 API Key>" }
+    }
+  }
+}
+\`\`\`
+
+Claude Code 一条命令即可：
+
+\`\`\`sh
+claude mcp add --transport http eat ${publicUrl}/mcp --header "Authorization: Bearer <你的 API Key>"
+\`\`\`
+
+接入后客户端会拿到平台全套工具（环境变量清单与取值、权限申请、经验搜索、求助、应用创建与 env、部署与日志）。
+让 AI 先调一次 \`get_platform_guide\` 读平台使用指南——云端客户端没有 \`eat sync\` 那条路，行为规范只能靠这个工具取回去。
+
+## 二、本机客户端（stdio）
+
+本机上不能执行 shell 命令的 AI 客户端，把 CLI 注册成 stdio MCP server。
+前提：本机已完成 CLI 安装与登录（macOS/Linux 用 \`curl -fsSL ${publicUrl}/install.sh | sh\`，Windows 用 \`powershell -ExecutionPolicy ByPass -c "irm ${publicUrl}/install.ps1 | iex"\`，随后 \`eat login --server ${publicUrl}\`）。stdio 方式复用 CLI 凭证（\`~/.eat/credentials.json\`），不需要 API Key。
 
 - Claude Code（macOS / Linux）：\`claude mcp add --scope user eat -- eat mcp\`
 - Claude Code（Windows）：\`claude mcp add --scope user eat -- cmd /c eat mcp\`
@@ -87,6 +124,6 @@ eat 的全部能力都可以通过 \`eat\` CLI 使用——**AI Agent 有 shell 
 - 兜底写法（\`eat\` 不在 PATH，或客户端不走 shell）：命令 \`node\`、参数 \`<CLI 路径>/eat.js mcp\`——
   类 Unix 是 \`~/.eat/bin/eat.js\`，Windows 是 \`%USERPROFILE%\\.eat\\bin\\eat.js\`（配置里请写展开后的绝对路径）。
 
-注册后客户端将获得平台全套 MCP 工具（环境变量清单/取值/权限申请、经验搜索、求助、应用创建与 env、部署与日志等）。
+两条路的工具集一致，只有一处差别：本地 stdio 的 \`trigger_deploy\` 会先扫描本地代码再部署，HTTP 端点没有本地代码可扫，触发的部署会被标成「未做密钥扫描」。
 `;
 }

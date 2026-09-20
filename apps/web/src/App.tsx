@@ -67,7 +67,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/', label: '环境变量', icon: KeyRound, match: ['/envs'] },
       { to: '/skills', label: 'Skill', icon: Sparkles },
-      { to: '/mcp', label: 'MCP 配置', icon: Plug },
+      { to: '/mcp-configs', label: 'MCP 配置', icon: Plug },
       { to: '/templates', label: '角色模板', icon: LayoutGrid },
     ],
   },
@@ -88,7 +88,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: '接入',
     items: [
-      { to: '/install', label: '安装 CLI', icon: Download },
+      { to: '/install', label: '安装与接入', icon: Download },
       { to: '/device', label: '设备授权', icon: MonitorSmartphone },
     ],
   },
@@ -271,7 +271,8 @@ export function App() {
       <Route path="/skills" element={<RequireAuth><SkillsPage /></RequireAuth>} />
       <Route path="/skills/:slug" element={<RequireAuth><SkillDetailPage /></RequireAuth>} />
       <Route path="/templates" element={<RequireAuth><TemplatesPage /></RequireAuth>} />
-      <Route path="/mcp" element={<RequireAuth><McpConfigsPage /></RequireAuth>} />
+      {/* /mcp 留给平台自己的 MCP 端点（决策 55），控制台页面挪到 /mcp-configs */}
+      <Route path="/mcp-configs" element={<RequireAuth><McpConfigsPage /></RequireAuth>} />
       <Route path="/db" element={<RequireAuth><DbsPage /></RequireAuth>} />
       <Route path="/db/:id" element={<RequireAuth><DbAssignmentDetailPage /></RequireAuth>} />
       <Route path="/apps" element={<RequireAuth><AppsPage /></RequireAuth>} />

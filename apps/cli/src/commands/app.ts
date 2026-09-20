@@ -139,7 +139,11 @@ export async function deployRun(slug: string | undefined, opts: { dir?: string; 
 /** 一行里说清这次部署是谁发起的、有没有过平台的密钥扫描门禁（决策 30 / 31） */
 function originNote(dep: DeploymentInfo): string {
   if (!dep.platform) return '绕过平台直接触发 ⚠ 未经密钥扫描';
-  const who = `${dep.platform.triggeredByName}（${dep.platform.source === 'console' ? '控制台 ⚠ 未做密钥扫描' : 'eat 平台'}）`;
+  const SOURCE_NOTE: Record<string, string> = {
+    console: '控制台 ⚠ 未做密钥扫描',
+    remote: '远程 MCP ⚠ 未做密钥扫描',
+  };
+  const who = `${dep.platform.triggeredByName}（${SOURCE_NOTE[dep.platform.source] ?? 'eat 平台'}）`;
   return dep.platform.claim === 'inferred' ? `${who} ⚠ 归属按时间推断，未必准确` : who;
 }
 

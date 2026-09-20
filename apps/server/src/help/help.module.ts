@@ -9,5 +9,6 @@ import { HelpersService } from './helpers.service';
   imports: [SkillsModule],
   controllers: [HelpController],
   providers: [HelpersService, HelpService, ExperiencesService],
+  exports: [HelpersService, HelpService, ExperiencesService],
 })
 export class HelpModule {}

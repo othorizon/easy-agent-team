@@ -127,9 +127,11 @@ README 里挑了一部分，这里是全部。所有画面来自同一份可复�
 
 ![系统设置](assets/screenshots/settings.png)
 
-![安装 CLI](assets/screenshots/install.png)
+![安装与接入](assets/screenshots/install.png)
 
-安装页按 UA 分 macOS/Linux 与 Windows 两个页签，并给出可以直接丢给 AI 的一段安装指令。
+安装页按 UA 分 macOS/Linux 与 Windows 两个页签，并给出可以直接丢给 AI 的一段安装指令；
+页尾的「MCP 接入」给云端 AI 服务用：HTTP 接入地址 + 请求头里的 API Key（就地生成与吊销），
+本机没有 shell 的客户端仍可切到 stdio 页签。
 
 ![登录](assets/screenshots/login.png)
 

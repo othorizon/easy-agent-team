@@ -1,10 +1,12 @@
 import { Body, Controller, Delete, Get, Param, Post, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import {
+  createApiKeyRequestSchema,
   deviceApproveRequestSchema,
   devicePollRequestSchema,
   loginRequestSchema,
   registerRequestSchema,
+  type CreateApiKeyRequest,
   type DeviceApproveRequest,
   type DevicePollRequest,
   type LoginRequest,
@@ -65,6 +67,18 @@ export class AuthController {
   @Post('device/poll')
   devicePoll(@Body(new ZodValidationPipe(devicePollRequestSchema)) body: DevicePollRequest) {
     return this.auth.devicePoll(body.deviceCode);
+  }
+
+  /**
+   * 生成 API Key（决策 55）：给云端 AI 服务接入 HTTP MCP 端点用。
+   * 明文只在这一次响应里返回，之后只能在清单里看到名字与最近使用时间。
+   */
+  @Post('api-keys')
+  createApiKey(
+    @Body(new ZodValidationPipe(createApiKeyRequestSchema)) body: CreateApiKeyRequest,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.auth.createApiKey(user, body);
   }
 
   @Get('tokens')

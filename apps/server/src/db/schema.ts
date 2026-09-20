@@ -33,7 +33,8 @@ export const apiTokens = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     tokenHash: text('token_hash').notNull(),
-    kind: text('kind', { enum: ['web', 'cli'] }).notNull().default('cli'),
+    /** web = 网页登录会话；cli = 设备码授权（CLI / 本地 stdio MCP）；apikey = 用户生成的 API Key（HTTP MCP 接入，决策 55） */
+    kind: text('kind', { enum: ['web', 'cli', 'apikey'] }).notNull().default('cli'),
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
@@ -657,8 +658,11 @@ export const deployments = pgTable(
     triggeredBy: uuid('triggered_by')
       .notNull()
       .references(() => users.id),
-    /** cli = eat deploy / MCP（带扫描报告）；console = 控制台按钮（没做扫描，决策 31） */
-    source: text('source', { enum: ['cli', 'console'] })
+    /**
+     * cli = eat deploy / 本地 stdio MCP（带扫描报告）；console = 控制台按钮；
+     * remote = 平台 HTTP MCP 端点（决策 55）。后两者都没有本地代码可扫（决策 31）。
+     */
+    source: text('source', { enum: ['cli', 'console', 'remote'] })
       .notNull()
       .default('cli'),
     /**

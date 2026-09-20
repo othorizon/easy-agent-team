@@ -8,6 +8,7 @@ export * from './feishu-card.js';
 export * from './ai.js';
 export * from './template.js';
 export * from './mcp.js';
+export * from './mcp-tools.js';
 export * from './db.js';
 export * from './deploy.js';
 export * from './dotenv.js';
