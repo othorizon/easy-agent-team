@@ -94,7 +94,8 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
   - `eat login` 走**设备码授权**：CLI 显示一个链接和短码，链接自带 `?code=` 短码（决策 47），用户在浏览器登录后打开即已回填、点「确认授权」即可，CLI 获得长期 Token；
   - **阻塞与否由调用方选**（决策 54）：默认阻塞等待（人在终端里敲，`--timeout <秒>` 可封顶）；AI 代为执行时用 `eat login --no-wait` 发起后立即返回、`eat login --status` 查一次并在通过后领取凭证（未确认时打印 `状态：pending` 并以退出码 2 结束）。待授权记录（设备码 + 短码 + 链接 + 失效时刻）按凭证规格落在 `~/.eat/pending-login.json`（0600），领到 Token 或确认失效即删；重复发起会沿用尚未完成的那条（`--new` 强制换新），以免作废已经转告给用户的短码；
   - Token 可在控制台查看与吊销（决策 48：`/device/authorized`「已授权的设备」页，从授权页底部进入，只列设备码签发的 CLI Token）、授权时命名，支持有效期；
-  - MCP Server 复用 CLI 的本地凭证（`~/.eat/credentials`），无需单独登录。
+  - **本机 MCP**（`eat mcp`，stdio）复用 CLI 的本地凭证（`~/.eat/credentials.json`），无需单独登录；
+  - **云端 AI 服务**（决策 55）连平台自己的 HTTP MCP 端点，鉴权用**用户自助生成的 API Key**（`api_token.kind='apikey'`）：控制台「安装与接入」页生成，明文只显示一次，可命名、可设有效期、随时吊销；Key 代表生成者本人的权限，调用按其身份鉴权与审计。
 - **审计**：登录、Token 签发/吊销均记审计日志。
 
 ## 3.2 Skill 管理与分发
@@ -421,7 +422,15 @@ sequenceDiagram
 
 ## 3.8 CLI 与 MCP 能力总览
 
-CLI 与 MCP Server 同一个产物分发（平台自托管下载：类 Unix `curl -fsSL <平台>/install.sh | sh`，Windows `irm <平台>/install.ps1 | iex`，见 §7.5），MCP Server 由 `eat mcp` 启动（Windows 的 MCP 客户端要写成 `cmd /c eat mcp`，§10 决策 24）。
+CLI 与本机 MCP Server 同一个产物分发（平台自托管下载：类 Unix `curl -fsSL <平台>/install.sh | sh`，Windows `irm <平台>/install.ps1 | iex`，见 §7.5），本机 MCP Server 由 `eat mcp` 启动（Windows 的 MCP 客户端要写成 `cmd /c eat mcp`，§10 决策 24）。
+
+平台能力对 AI 有三条入口，工具集是同一份（`packages/shared/src/mcp-tools.ts`）：
+
+| 入口 | 适用客户端 | 鉴权 |
+|---|---|---|
+| `eat` CLI | 有 shell 环境的 Agent（推荐） | `eat login` 的本地凭证 |
+| `eat mcp`（stdio） | 本机上不能执行 shell 命令的客户端 | 复用 CLI 凭证 |
+| `POST <平台>/mcp`（Streamable HTTP，决策 55） | **云端 AI 服务**：装不了 CLI、读不到本地凭证 | 请求头 `Authorization: Bearer <API Key>`（或 `X-API-Key`） |
 
 ### CLI 命令
 
@@ -449,6 +458,7 @@ CLI 与 MCP Server 同一个产物分发（平台自托管下载：类 Unix `cur
 
 | 工具 | 说明 |
 |---|---|
+| `get_platform_guide` | 取回内置「平台使用指南」正文（**仅 HTTP 端点有**：云端客户端没有 `eat sync` 那条路，行为规范只能靠工具下发，决策 55） |
 | `list_env_variables` | 变量清单（含备注与权限状态），供 AI 认路 |
 | `get_env_values` | 取值；无权限返回结构化 `PERMISSION_REQUIRED` |
 | `request_access` | 发起权限申请 |
@@ -459,7 +469,7 @@ CLI 与 MCP Server 同一个产物分发（平台自托管下载：类 Unix `cur
 | `get_help_request` / `reply_help_request` / `delete_help_request` | 读取回复、追问、删除误发起的求助 |
 | `list_apps` / `create_app` / `update_app` | 应用清单（含 isMember / deployApproved / canDeploy 与自动分配的 domain / url）/ 自助创建（`port` 声明容器端口）/ 改配置（决策 31、32） |
 | `get_app_env` / `set_app_env` | 读写应用 env（`target=runtime\|build`），set 为整体覆盖、只回 key 级差异（决策 31） |
-| `trigger_deploy` / `get_deploy_status` | 触发部署 / 查最近一次（或指定那次）的状态与失败原因；必须带 `app`，`history` + `all` 可列完整历史（决策 30）；应用未授权时回 `DEPLOY_NOT_APPROVED` |
+| `trigger_deploy` / `get_deploy_status` | 触发部署 / 查最近一次（或指定那次）的状态与失败原因；必须带 `app`，`history` + `all` 可列完整历史（决策 30）；应用未授权时回 `DEPLOY_NOT_APPROVED`。stdio 版收 `workdir` 并先做本地密钥扫描；**HTTP 端点没有本地代码可扫，触发的部署记为 `source=remote`「未做密钥扫描」**（与控制台按钮同级，决策 55） |
 | `get_build_logs` / `get_run_logs` | 构建日志 / 容器运行日志（决策 28） |
 
 💡 设计说明：平台内置一个「平台使用指南」基础 Skill（`eat-platform-guide`，§10 决策 11），教 AI 正确的行为序列（先搜经验 → 再求助；先 list → 再 pull → 无权限则申请），这比在每个工具描述里堆规则更有效。实现为**内置虚拟 Skill**：内容随平台代码维护（`packages/shared/src/platform-guide.ts`，改内容须递增版本号），`sync-bundle` 对所有登录用户始终注入首位（`relation=builtin`），不落数据库、不可退订，slug 为保留名不可被 push 占用；登录后首次 `eat sync` 即落地，之后随平台升级自动更新。安装到登录之间的窗口由免鉴权的 `/install/AGENT.md` 兜底。
@@ -538,7 +548,7 @@ erDiagram
 
 **user**：id, name, email, role(admin|member), password_hash, status, created_at
 
-**api_token**：id, user_id, name, token_hash, expires_at, last_used_at, revoked_at
+**api_token**：id, user_id, name, token_hash, kind（`web` 网页会话 / `cli` 设备码授权 / `apikey` 用户自助生成、供云端 AI 服务接入 HTTP MCP，决策 55）, expires_at, last_used_at, revoked_at
 
 **skill**：id, slug, name, description, owner_id, visibility(team|granted|private), allow_help(bool), **bundled(bool，捆绑模式，决策 37)**, source(manual|experience), current_version_id, created_at
 
@@ -570,7 +580,7 @@ erDiagram
 **experience**：id, help_request_id, skill_id(沉淀生成的 skill), public(bool), granted_to_requester(bool), granted_to_helper(bool), created_by(=helper), updated_at
 
 **app**：id, slug, name, repo_url, branch, build_type(static|dockerfile|null=挂载), dockerfile, docker_context_path, publish_directory, static_spa, port(容器端口), domain(自动分配的域名，null=未分配), domain_https, dokploy_domain_id, dokploy_application_id, description, owner_id, managed(bool), deploy_approved(bool), approved_by, approved_at, approval_requested_at —— **app_member**：app_id, user_id
-**deployment**：id, app_id, triggered_by, source(cli|console), dokploy_deployment_id, report(jsonb, 检查报告；console 触发为 null), created_at（状态一律实时读 Dokploy，决策 30）
+**deployment**：id, app_id, triggered_by, source(cli|console|remote；remote = 云端 HTTP MCP 触发，决策 55), dokploy_deployment_id, report(jsonb, 检查报告；console / remote 触发为 null), created_at（状态一律实时读 Dokploy，决策 30）
 **dokploy_setting**：id, api_url, api_token_encrypted, enabled, project_id, environment_id, ssh_key_id（自助建应用的落点，决策 31）, domain_suffix, domain_https（自动分配域名，决策 32）
 
 **ai_setting**：id, api_base_url, api_key_encrypted, model, enabled（单行系统配置，OpenAI 接口范式）
@@ -782,3 +792,4 @@ easy-agent-team/
 | 52 | MCP 配置的凭证归属按传输方式收敛 | `mcp_config` 上 `headers` 与 `env` 两个字段**一直是两种传输都能填**（zod 契约里 `env` 的注释甚至明确写着「两种传输都可用」），但这句话对 http 是错的：stdio 的 server 是本机起的进程，凭证只能靠进程环境变量传进去，`headers` 无处可用；http 的客户端靠请求头鉴权，配置里的 `env` 会被直接忽略。两个字段混挂在两种传输上的后果不是「多一个没用的选项」，而是**把凭证填错地方会静默失效**——尤其经网关分发时（决策 51 的网关只解析 `url` + `headers`），一个 http 配置把 token 填在 `env` 里，界面上看着凭证配好了，请求发出去却没带，上游回 401 而平台不给任何提示。这个坑被界面放大了：控制台此前**只有 env 编辑器、没有 headers 编辑器**（决策 51 顺带补上的），所以想给 http 配置加凭证的人只有 env 这一个地方可填，等于被引导着踩坑。现在：`upsert` 按传输清空不适用的字段（http 清 `env`、stdio 清 `headers`），`syncBundle` 也只渲染用得上的那个（http 不再输出 `env`），控制台编辑弹窗按传输切换——stdio 显示「环境变量」、http 显示「请求头」+「分发方式」，各只有一个填凭证的地方；schema 与 zod 契约的注释一并改对（那句「两种传输都可用」就是这次混乱的源头）。**存量数据直接清掉**（并进迁移 `0014_mcp_gateway`，该迁移尚未合入主干、未在任何环境执行过，不必另开一条）：放错位置的那一份从来没真正生效过，留着只会继续误导 Owner。演示数据本来就是按这个切分写的（stdio 用 env、http 用 headers），说明设计意图一直如此，只是代码从未收敛。CLI 契约里只有注释变化、行为不变，0.5.15 也尚未发布（由决策 51 在同一分支引入），版本号不再递增；指南未变。 |
 | 53 | 建库后必须把 `public` schema 归到分配账号名下 | **`CREATE DATABASE ... OWNER x` 只改库的归属，管不到库里的 `public` schema**——它是从 `template1` 复制过来的，归属跟着模板走，所以平台建出来的库，`public` 的 owner 从来不是分配账号。三种实例形态下后果不同：① **PG 15+ 干净集群**：owner 是 `pg_database_owner`，库 owner 隐式是它的成员，建表能用，但 `\dn` 看到的不是自己的账号，`ALTER SCHEMA` / `COMMENT ON SCHEMA` 做不了，**迁移工具常见的 `DROP SCHEMA public CASCADE; CREATE SCHEMA public;` 直接报 `must be owner of schema public`**；② **PG 14 及更早（含 pg_upgrade 上来的集群）**：owner 是超级用户，建表只靠 `PUBLIC` 默认的 CREATE 授权兜底，DBA 一句 `REVOKE ALL ON SCHEMA public FROM PUBLIC`（PG 15 的默认方向正是这个）分配账号连建表都做不了，报 `no schema has been selected to create in`；③ **模板里 `public` 被删过**：新库压根没有 `public`，同样是 `no schema has been selected to create in`。改法：`provisionPostgres` 建完库后**再连进新库**摆正——有 `public` 就 `ALTER SCHEMA public OWNER TO <账号>`，没有就 `CREATE SCHEMA public AUTHORIZATION <账号>`。**改不动归属不等于库不能用**（管理账号不是超级用户时很常见），所以这一步失败只记 warn，最后统一按实际权限判定：`has_schema_privilege(账号,'public','CREATE')` 为真就算建库成功，为假才抛错、把分配标成 `failed`，错误信息直接给出管理员该执行的那条 `ALTER SCHEMA public OWNER TO ...`——比让人对着「建表失败」自己猜要快。**只影响新批准的申请**：已经建好的库不会被追改，存量要修得在实例上手动执行同一条 SQL（平台不做物理改库，与决策 13 一致）。e2e 补一条对本地 PG 的真实断言：批准后以分配账号连库，`pg_get_userbyid(nspowner)` 必须等于账号名，且能自己 `COMMENT` / `DROP` / `CREATE` schema——去掉修复后这条用例会以 `expected 'pg_database_owner' to be 'u_proj_wang'` 失败，不会被 PG 15+ 的兜底蒙混过去。不涉及 CLI / MCP / 指南，版本号不动。 |
 | 54 | `eat login` 提供非阻塞模式：`--no-wait` 发起 + `--status` 领取 | **设备码流程的等待是给人设计的，AI 代为执行时它就是一次会话级的死等。** `eat login` 拿到链接和短码后就进 poll 循环，直到用户在浏览器确认或设备码过期（10 分钟）——人自己在终端里敲没问题，但 AI 客户端跑这条命令时，转告用户的那句话要等命令返回才能说出口，等于让用户在「看不到链接」的前提下去授权，必然空转到超时；AGENT.md 里原先写的正是「命令会输出一个链接和一个短码，然后阻塞等待授权」，坑是照着文档踩的。改法不是把默认行为改成不等（人在终端里等着自动完成是更好的体验，也是 OAuth 设备码流程的常态），而是**把「发起」和「领取」拆成两条可独立执行的命令**：① `eat login --no-wait` 发起授权、打印链接与短码后立即返回；② `eat login --status` 查一次并在通过时领取凭证，同样立即返回。两者靠落在 `~/.eat/pending-login.json` 的待授权记录（serverUrl / deviceCode / userCode / verificationUri / interval / expiresAt）串起来——`deviceCode` 能换回 Token，所以按凭证规格存（0600、领到 Token 或确认失效即删、`eat logout` 一并清掉）。四个设计点：**① 退出码要能区分「还没授权」和「失败」**：`--status` 未确认时打印 `状态：pending` 并以退出码 2 结束——用 0 会让脚本和 AI 把「还没授权」当成已登录，用 1 则和真正的失败混在一起，而这时正确处置是过会儿再查一次、不是重来；每条结果都带一个机器可读的 `状态：approved|pending|expired|none` 首行。**② 阻塞模式也先落盘、超时不作废**：待授权记录在打印链接之前就写下，用户 Ctrl-C、或 `--timeout <秒>`（新增，封顶不超过设备码有效期）到点，设备码都还在有效期内，`eat login --status` 可以接着领，不必让用户重走一遍浏览器；只有服务端回 `expired` 或本地已过期才清记录、退 1。**③ 重复发起沿用未完成的那条授权**：同一平台、剩余 ≥30 秒的待授权记录会被接着用（打印时标注「沿用上次尚未完成的授权请求」），要换新的显式 `--new`——AI 最容易做的事就是「没成功就再跑一遍」，而重新发起会让**已经转告给用户、用户可能正开着的那个短码**当场作废，用户点确认只会看到「设备码不存在或已过期」；参数校验（`--timeout`）也因此提前到发请求之前，非法参数不该白白作废一个设备码。**④ 不做 TTY 判断**（与决策 26 的更新提示一致）：非交互环境自动切非阻塞看似聪明，但 CI、管道、AI 客户端的 TTY 表现各不相同，隐式切换会让同一条命令在两处行为不同；要什么行为就显式写什么参数。服务端与设备码接口一行未改（`POST /api/auth/device/start` / `poll` 本就是无状态轮询，CLI 只是把轮询的节奏交给调用方）。文档同步改两处 AI 入口：`GET /install/AGENT.md` 的第 2 步改成「非阻塞两步」并写明退出码 2 不是失败、不要重复发起（重发会让已转告的短码作废），内置指南速查表补一行同样的说明（指南升 16）。CLI 升 0.5.16，单测覆盖 `parseTimeoutSeconds` / `resolveTimeoutMs` / `remainingMs` / `formatRemaining` / `reusablePending` 五个纯函数，e2e 补断言 AGENT.md 含 `--no-wait` / `--status` / 退出码说明。真机走查：非阻塞两步（0.24 秒返回 → 浏览器确认 → `--status` 领到凭证 → `eat whoami`）、`--timeout 5` 超时后 `--status` 接着领、重复发起沿用同一短码、`--new` 换新、本地过期与服务端已领走两条失效路径、默认阻塞路径仍自动结束。 |
+| 55 | eat 自身能力提供标准 HTTP MCP 端点，鉴权用请求头里的 API Key | **此前 eat 把自己的能力暴露成 MCP 只有 `eat mcp` 一条路——stdio，跑在用户机器上，靠 `~/.eat/credentials.json` 认人。** 而 MCP 的主要消费方已经是**云端 AI 服务**（各家 Agent 平台、工作流编排、团队自建的服务）：它们跑在别人的机器上，起不了本地进程、也读不到谁的凭证文件，等于被挡在门外——平台把第三方 MCP 配置代理出去了（决策 51），却唯独没给自己开一条能被云端连上的口子。现在补上：`POST <平台>/mcp`，Streamable HTTP，**无状态**（不发 `Mcp-Session-Id`，每个请求自带身份，多实例部署不需要会话亲和）。**鉴权是请求头**：`Authorization: Bearer <API Key>`，客户端不支持自定义 Authorization 时 `X-API-Key` 也认；401 按 MCP 鉴权规范带 `WWW-Authenticate` challenge。**刻意不支持把密钥放进 URL**——网关那条路（决策 51）是路径鉴权，因为代理的是别人的 server、客户端只能配一个 URL；自己的端点没有这个约束，而 URL 会进各级访问日志。**API Key = `api_token` 表新增的 `kind='apikey'`**：用户在控制台「安装与接入」页自助生成（命名、可选有效期、明文只回一次、随时吊销），鉴权复用同一条 `AuthService.authenticate()`——守卫与 MCP 端点共用一份实现，「吊销即失效」这类规则不会在某一条路径上走样；Key 代表**生成者本人**的权限，所有调用按其身份鉴权并落审计（审计里记得到 `actorTokenId`，看得出是哪把 Key 干的）。**工具定义提到 `packages/shared/src/mcp-tools.ts` 三端共用**：stdio 与 HTTP 两套实现各自映射到 CLI 的 REST 调用与服务端的 Service 调用，但工具名、描述、入参 schema 只有一份，否则两个 MCP 面的描述必然漂移。两处刻意的差异：① **`trigger_deploy`**——stdio 版收 `workdir` 并先做本地密钥扫描，HTTP 版没有本地代码可扫，参数里没有 `workdir`，触发的部署记 `source=remote`、在 CLI / 控制台上都显眼标「未做密钥扫描」。这不是新开的绕过口子：控制台按钮早就是同样的「无扫描部署」，同一个人换个入口而已，**没有权限提升**；描述里写明「有终端就用 CLI 部署」。② **`get_platform_guide`**——只有 HTTP 端点有。云端客户端没有 `eat sync`，内置指南（决策 11）落不到它本地，行为规范（先搜经验再求助、`PERMISSION_REQUIRED` 要走申请而不是重试）只能靠一个工具取回去；`initialize` 的 `instructions` 里只放一段「先调 get_platform_guide」的引子，不把一万多字的指南塞进每轮上下文。**传输层手写而不引官方 SDK 的 `StreamableHTTPServerTransport`**：一个无状态、只有 tools 的 server，协议面就是 initialize / tools/list / tools/call 三件事；而 SDK 的传输层绑 Node 原生 req/res（Fastify 上要 hijack 才能接），且对 `Accept` 头校验极严——不带 `text/event-stream` 直接 406，而真实世界里不少云端服务只发 `Accept: application/json`。自己实现才能做到「发出去的严格守规范、收进来的尽量宽容」：POST 默认回 JSON、客户端只接受 SSE 时回单事件 SSE 流，通知回 202，批量数组照应，GET 回 405（没有服务端推送流，挂一条不出数据的连接只会让客户端干等），DELETE 回 204，OPTIONS 给 CORS（`*` 是安全的：只认请求头里的 Key、不用 Cookie，跨站页面拿不到别人的 Key）。**协议合规不靠自觉**：e2e 里用**官方 MCP SDK 的客户端**对平台真 listen 的实例连一次，跑通 initialize / listTools / callTool / close。**破坏性变更**：控制台的「MCP 配置」页从 `/mcp` 挪到 `/mcp-configs`——`/mcp` 让给真正的 MCP 端点（GET 在那里要回 405，不能再回退成 SPA），旧书签失效；安装页改名「安装与接入」。CLI 只有工具定义换成 import 共享，行为不变，按版本号约定升 0.5.17；指南升 17（补了身份来源、远程部署不扫描、API Key 也是凭证三处）。 |

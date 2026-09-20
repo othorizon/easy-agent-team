@@ -6,8 +6,15 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
-import { and, desc, eq, gt, isNull } from 'drizzle-orm';
-import type { DevicePollResponse, DeviceStartResponse, LoginResponse, UserPublic } from '@eat/shared';
+import { and, desc, eq, gt, isNull, or, sql } from 'drizzle-orm';
+import type {
+  CreateApiKeyRequest,
+  CreateApiKeyResult,
+  DevicePollResponse,
+  DeviceStartResponse,
+  LoginResponse,
+  UserPublic,
+} from '@eat/shared';
 import { formatDate } from '@eat/shared';
 import { randomBytes } from 'node:crypto';
 import { AuditService } from '../audit/audit.service';
@@ -15,6 +22,7 @@ import { decryptSecret, encryptSecret, randomToken, sha256Hex } from '../common/
 import { loadConfig } from '../config';
 import { DB, type Db } from '../db/db.module';
 import { apiTokens, deviceAuths, users } from '../db/schema';
+import type { AuthUser } from './auth.decorators';
 
 const WEB_TOKEN_TTL_MS = 7 * 24 * 3600 * 1000;
 const DEVICE_FLOW_TTL_MS = 10 * 60 * 1000;
@@ -47,7 +55,7 @@ export class AuthService {
   async issueToken(
     userId: string,
     name: string,
-    kind: 'web' | 'cli',
+    kind: 'web' | 'cli' | 'apikey',
     expiresAt?: Date,
   ): Promise<{ token: string; tokenId: string }> {
     const token = randomToken();
@@ -63,6 +71,62 @@ export class AuthService {
       meta: { name, kind },
     });
     return { token, tokenId: row.id };
+  }
+
+  /**
+   * Bearer / API Key 认证：查出 Token 对应的活跃用户并顺带记一次「最近使用」。
+   * AuthGuard 与 HTTP MCP 端点（决策 55）共用这一条——鉴权逻辑只能有一份实现，
+   * 否则「吊销 Token 立即失效」这类规则迟早在其中一条路径上走样。
+   */
+  async authenticate(token: string): Promise<AuthUser | null> {
+    if (!token) return null;
+    const rows = await this.db
+      .select({
+        tokenId: apiTokens.id,
+        userId: users.id,
+        name: users.name,
+        email: users.email,
+        role: users.role,
+      })
+      .from(apiTokens)
+      .innerJoin(users, eq(apiTokens.userId, users.id))
+      .where(
+        and(
+          eq(apiTokens.tokenHash, sha256Hex(token)),
+          isNull(apiTokens.revokedAt),
+          or(isNull(apiTokens.expiresAt), gt(apiTokens.expiresAt, new Date())),
+          eq(users.status, 'active'),
+        ),
+      )
+      .limit(1);
+    const row = rows[0];
+    if (!row) return null;
+
+    // 记录最近使用时间（不阻塞请求）
+    void this.db
+      .update(apiTokens)
+      .set({ lastUsedAt: sql`now()` })
+      .where(eq(apiTokens.id, row.tokenId))
+      .catch(() => undefined);
+
+    return { id: row.userId, name: row.name, email: row.email, role: row.role, tokenId: row.tokenId };
+  }
+
+  /** 生成 API Key（决策 55）：明文只在这一次响应里出现，之后平台只有哈希 */
+  async createApiKey(user: { id: string }, dto: CreateApiKeyRequest): Promise<CreateApiKeyResult> {
+    const expiresAt = dto.expiresInDays ? new Date(Date.now() + dto.expiresInDays * 24 * 3600 * 1000) : undefined;
+    const { token, tokenId } = await this.issueToken(user.id, dto.name.trim(), 'apikey', expiresAt);
+    const row = (await this.db.select().from(apiTokens).where(eq(apiTokens.id, tokenId)).limit(1))[0];
+    return {
+      id: row.id,
+      name: row.name,
+      kind: 'apikey',
+      token,
+      createdAt: row.createdAt.toISOString(),
+      lastUsedAt: null,
+      expiresAt: row.expiresAt?.toISOString() ?? null,
+      revokedAt: null,
+    };
   }
 
   async listTokens(userId: string) {

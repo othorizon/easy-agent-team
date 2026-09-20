@@ -62,7 +62,7 @@ const SHOTS = [
   { name: 'requests', as: 'liwei', url: '/requests?tab=inbox', wait: 'INTERNAL_API_TOKEN' },
   { name: 'skills', as: 'admin', url: '/skills', wait: 'CRM 数据查询' },
   { name: 'skill-detail', as: 'admin', url: '/skills/crm-data-query', wait: '统计口径' },
-  { name: 'mcp', as: 'admin', url: '/mcp', wait: 'CRM 只读数据库' },
+  { name: 'mcp', as: 'admin', url: '/mcp-configs', wait: 'CRM 只读数据库' },
   { name: 'templates', as: 'wumin', url: '/templates', wait: '运营同学' },
   { name: 'help', as: 'sunhao', url: '/help', wait: '首屏白屏' },
   // 求助页默认只看「待回复」（决策 43），已解决的 40008 那条要挂上 status=all 才在列表里
@@ -90,7 +90,7 @@ const SHOTS = [
     } },
   { name: 'users', as: 'admin', url: '/users', wait: '李维' },
   { name: 'settings', as: 'admin', url: '/settings', wait: '部署后台', fullPage: true },
-  { name: 'install', as: 'wumin', url: '/install', wait: 'install.sh' },
+  { name: 'install', as: 'wumin', url: '/install', wait: 'install.sh', fullPage: true },
   { name: 'login', as: null, url: '/login', wait: '登录' },
   { name: 'mobile-apps', as: 'admin', url: '/apps', wait: '客户看板', viewport: MOBILE },
   { name: 'mobile-nav', as: 'admin', url: '/skills', wait: 'CRM 数据查询', viewport: MOBILE, prepare: async (page) => {

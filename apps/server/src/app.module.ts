@@ -15,6 +15,7 @@ import { HelpModule } from './help/help.module';
 import { InstallModule } from './install/install.module';
 import { McpConfigsModule } from './mcp-configs/mcp-configs.module';
 import { McpGatewayModule } from './mcp-gateway/mcp-gateway.module';
+import { McpServerModule } from './mcp-server/mcp-server.module';
 import { NotifyModule } from './notify/notify.module';
 import { SkillsModule } from './skills/skills.module';
 import { TemplatesModule } from './templates/templates.module';
@@ -35,6 +36,7 @@ import { UsersModule } from './users/users.module';
     TemplatesModule,
     McpConfigsModule,
     McpGatewayModule,
+    McpServerModule,
     DbsModule,
     DeployModule,
   ],

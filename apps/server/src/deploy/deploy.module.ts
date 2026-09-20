@@ -8,5 +8,6 @@ import { DokploySettingsService } from './dokploy-settings.service';
 @Module({
   controllers: [AppsController, DeployController],
   providers: [DokploySettingsService, AppsService, DeployService],
+  exports: [AppsService, DeployService],
 })
 export class DeployModule {}

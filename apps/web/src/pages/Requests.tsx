@@ -138,7 +138,7 @@ export function RequestsPage() {
         description={
           <>
             成员对环境变量发起的读取申请。CLI 里 eat env request 或 AI 通过 MCP 也可以发起。MCP
-            配置的订阅申请不在这里，去 <Link to="/mcp" className="underline underline-offset-2">MCP 配置</Link> 页的「订阅申请」审批。
+            配置的订阅申请不在这里，去 <Link to="/mcp-configs" className="underline underline-offset-2">MCP 配置</Link> 页的「订阅申请」审批。
           </>
         }
       />

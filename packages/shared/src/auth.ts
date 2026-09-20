@@ -99,11 +99,31 @@ export type RegisterRequest = z.infer<typeof registerRequestSchema>;
 export const apiTokenSchema = z.object({
   id: z.string(),
   name: z.string(),
-  /** web = 网页登录会话；cli = 设备码授权签发、CLI 与 MCP 共用 */
-  kind: z.enum(['web', 'cli']),
+  /**
+   * web = 网页登录会话；cli = 设备码授权签发、CLI 与本地 stdio MCP 共用；
+   * apikey = 用户自己在控制台生成的 API Key，供云端 AI 服务接入平台 HTTP MCP 端点（决策 55）。
+   */
+  kind: z.enum(['web', 'cli', 'apikey']),
   createdAt: z.string(),
   lastUsedAt: z.string().nullable(),
   expiresAt: z.string().nullable(),
   revokedAt: z.string().nullable(),
 });
 export type ApiTokenInfo = z.infer<typeof apiTokenSchema>;
+
+/**
+ * 生成 API Key（决策 55）：给云端 AI 服务接入 HTTP MCP 用。
+ * 明文只在创建响应里出现一次，平台只存哈希，丢了只能重新生成。
+ */
+export const createApiKeyRequestSchema = z.object({
+  name: z.string().min(1, '给密钥起个名字，便于日后辨认是哪个服务在用').max(100),
+  /** 有效期天数；缺省 = 长期有效（吊销才失效） */
+  expiresInDays: z.number().int().min(1).max(3650).optional(),
+});
+export type CreateApiKeyRequest = z.infer<typeof createApiKeyRequestSchema>;
+
+export const createApiKeyResultSchema = apiTokenSchema.extend({
+  /** 明文密钥，仅此一次 */
+  token: z.string(),
+});
+export type CreateApiKeyResult = z.infer<typeof createApiKeyResultSchema>;

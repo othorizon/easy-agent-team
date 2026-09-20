@@ -61,6 +61,8 @@ flowchart TB
         AI -->|"stdio"| MCPS
     end
 
+    CLOUD["云端 AI 服务<br/>装不了 CLI 的客户端"] ==>|"HTTP MCP · API Key 鉴权"| S
+
     U ==>|"HTTPS REST · Token 鉴权"| S
 
     subgraph S["平台服务：NestJS + Fastify 单体（一个容器）"]
@@ -194,7 +196,8 @@ flowchart TB
 |---|---|
 | Web 控制台 | 管理、授权与审批的图形入口；桌面侧边栏 + 移动端抽屉布局，移动端同样可用 |
 | eat CLI | 成员与本地 AI 的主通道，命令按模块分组；完整命令与参数以 `eat --help` 为准 |
-| MCP Server | `eat mcp` 启动 stdio server，将平台能力封装为工具供本地 AI 自助调用；完整工具清单以 MCP 客户端中列出的为准 |
+| MCP（本机） | `eat mcp` 启动 stdio server，将平台能力封装为工具供本地 AI 自助调用；完整工具清单以 MCP 客户端中列出的为准 |
+| MCP（云端） | 平台自带标准 Streamable HTTP 端点 `<平台>/mcp`，鉴权为请求头 `Authorization: Bearer <API Key>`（密钥在控制台「安装与接入」页自助生成、随时吊销），供装不了 CLI 的云端 AI 服务接入；工具集与本机一致 |
 | CLI 分发 | 由平台自托管分发，不发布至 npm registry：一条命令完成安装（见下方「快速开始」），版本与平台天然一致，升级即重新安装；macOS / Linux / Windows 全链路兼容 |
 
 ## 快速开始
