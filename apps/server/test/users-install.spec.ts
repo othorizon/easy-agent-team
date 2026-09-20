@@ -271,6 +271,10 @@ describe('CLI 自托管分发', () => {
     expect(r.body).toContain('/install.sh | sh');
     expect(r.body).toContain('/install.ps1 | iex');
     expect(r.body).toContain("process.platform === 'win32'");
+    // 决策 54：给 AI 的登录步骤必须是非阻塞两步，且写明 pending 不是失败
+    expect(r.body).toContain('--no-wait');
+    expect(r.body).toContain('eat login --status');
+    expect(r.body).toContain('退出码 2');
   });
 
   it('MCP.md 独立板块：面向无 shell 环境的客户端，含注册命令', async () => {

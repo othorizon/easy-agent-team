@@ -38,3 +38,38 @@ export function resolveServerUrl(option?: string): string {
     'http://localhost:3000'
   ).replace(/\/+$/, '');
 }
+
+/**
+ * 待授权的设备码登录（决策 54：非阻塞登录）。
+ * deviceCode 能换回 Token，按凭证对待：同样落 0600、用完即删。
+ */
+export interface PendingLogin {
+  serverUrl: string;
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  /** 建议的轮询间隔（秒），由服务端下发 */
+  interval: number;
+  /** 设备码失效时刻（ISO） */
+  expiresAt: string;
+}
+
+const PENDING_FILE = path.join(CONFIG_DIR, 'pending-login.json');
+
+export function loadPendingLogin(): PendingLogin | null {
+  try {
+    const p = JSON.parse(fs.readFileSync(PENDING_FILE, 'utf8')) as PendingLogin;
+    return p.deviceCode && p.serverUrl ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+export function savePendingLogin(pending: PendingLogin): void {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(PENDING_FILE, JSON.stringify(pending, null, 2), { mode: 0o600 });
+}
+
+export function clearPendingLogin(): void {
+  fs.rmSync(PENDING_FILE, { force: true });
+}

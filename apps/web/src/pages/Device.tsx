@@ -47,7 +47,11 @@ export function DevicePage() {
         <div>
           <h1 className="text-xl font-semibold">授权成功</h1>
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-            回到终端即可，CLI 会自动完成登录。此页面可以关闭。
+            回到终端即可，正在等待的 CLI 会自动完成登录。此页面可以关闭。
+          </p>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            如果是 AI 替你执行的登录，告诉它你已确认授权即可——它会用{' '}
+            <InlineCode>eat login --status</InlineCode> 领取凭证。
           </p>
         </div>
         <Button
