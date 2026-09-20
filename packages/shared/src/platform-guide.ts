@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 15;
+export const PLATFORM_GUIDE_VERSION = 16;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -84,7 +84,8 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 | \`eat app list / show / status / deployments\` | 应用清单 / 配置详情 / 最近一次部署状态 / 部署历史（\`--all\` 看完整历史） |
 | \`eat app build-logs / run-logs <slug>\` | 构建日志 / 运行日志（排查部署与线上问题的第一手材料） |
 | \`eat db list\` | 名下数据库账号 |
-| \`eat whoami\` | 当前身份；报错说明凭证失效，让用户重新 \`eat login\` |
+| \`eat whoami\` | 当前身份；报错说明未登录或凭证失效，按下一行重新授权 |
+| \`eat login --no-wait\` → \`eat login --status\` | 需要登录时走这两步：\`--no-wait\` 发起授权后**立即返回**，把打印出的链接与代码转告用户；用户在浏览器确认后执行 \`--status\` 领取凭证（也立即返回）。尚未确认时 \`--status\` 打印 \`状态：pending\` 并以退出码 2 结束，这不是失败——等一会儿再查一次就行，要等的是用户（重复发起登录会沿用同一个未完成的授权，不会作废已转告的代码，但也没有意义）。**不要直接执行 \`eat login\`**：它会阻塞等到用户确认或授权码过期（10 分钟），把你的会话卡死 |
 | \`eat self-update\` | 把 CLI 更新到平台当前分发的版本（跨平台同一条命令，不用重跑安装脚本） |
 
 ## 看到更新提示时怎么办

@@ -35,8 +35,12 @@ program
 
 program
   .command('login')
-  .description('通过设备码授权登录平台')
+  .description('通过设备码授权登录平台（默认阻塞等待用户确认；AI 自动执行时用 --no-wait + --status）')
   .option('--server <url>', '平台地址（默认 http://localhost:3000，或 EAT_SERVER 环境变量）')
+  .option('--no-wait', '发起授权后立即返回，不等待用户确认；之后用 eat login --status 领取凭证')
+  .option('--status', '查询已发起的授权（通过则领取凭证），立即返回；尚未授权时退出码 2')
+  .option('--timeout <seconds>', '阻塞等待的上限秒数（默认等到授权码过期）；超时后授权链接仍有效，可用 --status 接着领')
+  .option('--new', '丢开上次尚未完成的授权请求，重新发一个（默认沿用，避免作废已转告用户的代码）')
   .action(login);
 
 program.command('logout').description('退出登录（删除本地凭证）').action(logout);

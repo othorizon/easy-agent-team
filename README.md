@@ -91,7 +91,7 @@ flowchart TB
 | 账号与角色 | 管理员 / 成员两级平台角色 + 资源级 Owner，不引入复杂 RBAC |
 | 用户管理 | 创建账号、变更角色、禁用 / 启用、重置密码；禁用与改密即时吊销该用户全部 Token |
 | 开放注册 | 管理员开关 + 允许的邮箱后缀白名单，注册后即登录，无审批流程 |
-| 设备码登录 | `eat login` 生成设备码 → 浏览器授权页确认，CLI 凭证写入 `~/.eat/credentials.json` |
+| 设备码登录 | `eat login` 生成设备码 → 浏览器授权页确认，CLI 凭证写入 `~/.eat/credentials.json`；AI 代为登录时用 `eat login --no-wait` 发起、`eat login --status` 领取，不阻塞会话 |
 
 ### 环境变量
 
