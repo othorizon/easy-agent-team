@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 17;
+export const PLATFORM_GUIDE_VERSION = 18;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -72,7 +72,8 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 
 | 命令 | 用途 |
 |---|---|
-| \`eat sync\` | 同步 Skill 与 MCP 配置到本地（本指南也由它维护更新）；默认装到全局 \`~/.agents/skills\`，\`--project\` 装到当前项目 \`./.agents/skills\` |
+| \`eat sync\` | 同步 Skill 与 MCP 配置到本地（本指南也由它维护更新）。**落点由配置记住，裸跑即可**：默认全局 \`~/.agents/skills\`，\`--project\` 装到当前项目 \`./.agents/skills\`，\`--dir <目录>\` 直接落该目录、不创建 \`.agents\` / \`.claude\`（给不用这套目录规范的 Agent）。带参数跑过一次就会被记住，之后裸跑落到同一处；\`--dry-run\` 只看落点与将要变更的内容、不写文件 |
+| \`eat config list / set / unset\` | 看/改 \`eat sync\` 的落点（\`set sync.dir <目录>\`、\`set sync.scope global|project|dir\`）。**装到了非预期的位置就改这里**，别每次给 \`eat sync\` 带参数——更新提示让你执行的是裸命令 |
 | \`eat env list / pull / request\` | 环境变量：看清单 / 取值 / 申请权限 |
 | \`eat skill list / export <slug>\` | 看团队里有哪些 skill（默认 100 条；\`--search <词>\` 按关键词过滤、\`--scope subscribed|unsubscribed|mine\`、\`--kind bundled|private|experience|…\` 筛选、\`--limit <n>\` 最多 1000）/ 把某个 skill 下载到本地目录（\`--out\` 指定落点）——想读它的完整内容、或以它为底改一份自己的时用 |
 | \`eat skill push <dir>\` | 把本地写好的 skill 上传到平台纳管分享（改别人的 skill 要么你是作者，要么 \`--slug\` 换个名字推成自己的）。**推送不会自动订阅**：想让它随 \`eat sync\` 落到本地，还要 \`eat skill subscribe <slug>\` 一次 |
@@ -93,7 +94,8 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 eat 命令偶尔会在 **stderr** 附一段 \`[eat] 有可用更新\` 的提示（同一个版本只提示一次）。它**不影响本次命令的结果**，标准输出始终是干净的，可以照常解析：
 
 - \`CLI x → y\`：执行 \`eat self-update\`。
-- \`团队 Skill 有变更\`：执行 \`eat sync\`——说明团队更新了能力或给你加/减了订阅，同步后你能用的 skill 才是最新的。
+- \`团队 Skill 有变更\`：执行 \`eat sync\`——说明团队更新了能力或给你加/减了订阅，同步后你能用的 skill 才是最新的。提示里的「落点：…」就是这次会装到哪（由 \`eat config\` 记住的配置决定）：**照着裸跑就行，不要自己加 \`--global\` / \`--project\` / \`--dir\`**——那会把 skill 装到和当初不同的地方，原落点从此不再更新。落点确实不对，改配置（\`eat config set sync.dir <目录>\`）而不是每次带参数。
+- \`eat sync\` 报「落点与上次同步不一致，已中止」：这是在拦「本来装在 A、这次要装到 B」。别直接加 \`--yes\` 蒙混过去，先看它打印的两个路径哪个才是对的——通常是配置丢了导致回落到默认值，此时应该用 \`eat sync --dir <上次的落点>\` 装回去（它会顺便把落点记住）。
 
 **不要在任务中途打断手上的活去更新**：先把当前任务做完，或者在两个任务之间顺手执行。也不要因为看到提示就反复重试刚才的命令——它已经成功了。用户明确不想再看到这类提示时，让他们设置环境变量 \`EAT_NO_UPDATE_NOTIFIER=1\`。
 

@@ -3,7 +3,14 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { RenderedMcpConfig, SyncSkill } from '@eat/shared';
 import { Api } from '../client.js';
-import { markSkillsSynced } from '../update.js';
+import { loadState, markSkillsSynced, recordSyncTarget } from '../update.js';
+import {
+  persistSyncChoice,
+  resolveSyncRoots,
+  type SyncOpts,
+  type SyncResolution,
+  type SyncSource,
+} from '../sync-config.js';
 
 interface EatMeta {
   slug: string;
@@ -140,51 +147,93 @@ export function ensureLink(
   return st?.isSymbolicLink() ? 'ok' : 'linked';
 }
 
-export interface SyncOpts {
-  dir?: string;
-  force?: boolean;
-  global?: boolean;
-  project?: boolean;
+/**
+ * .claude 下同名目录是否会挡住本次同步。判定与 ensureLink 里完全一致（两种策略同一条件），
+ * 抽出来是为了 --dry-run 能在不写任何文件的前提下报出同样的冲突。
+ */
+export function wouldConflict(linkPath: string, force: boolean): boolean {
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(linkPath);
+  } catch {
+    return false;
+  }
+  return !st.isSymbolicLink() && !readMeta(linkPath) && !force;
 }
 
-interface SyncRoots {
-  target: string;
-  /** null = --dir 自定义目录模式，不建软链 */
-  linkRoot: string | null;
-  relativeLinks: boolean;
+/**
+ * 落点漂移检测（决策 56）：**只在回落到内置默认时**拦——上次装在别处，这次却没有任何东西
+ * 指定落点，说明配置丢了 / 换了机器 / 有人手删了它，再跑下去就会把 skill 装进
+ * ~/.agents/skills，原落点从此不再更新，而 markSkillsSynced() 还会把基线刷成最新，
+ * 连「有更新」的提示都一并消失。
+ *
+ * 判定刻意不含「配置给出的落点和上次不一样」：在项目目录与自定义目录之间来回同步是正常用法，
+ * 配置是可见、可查（eat config list）、刻意写下的东西，拦它只会变成次次误报，
+ * 而次次误报的拦截等于没有拦截——用的人会固定加上 --yes。
+ *
+ * 命令行与环境变量显式指定时同样不拦：那本来就是「我现在就要装到这里」。
+ * 预演也不拦：它正是排查「这次会装到哪」的手段，拦掉等于把中止信息里给的排查办法堵死。
+ */
+export function syncTargetDrifted(
+  lastTarget: string | undefined,
+  target: string,
+  source: SyncSource,
+  confirmed: boolean,
+  dryRun = false,
+): boolean {
+  if (!lastTarget || lastTarget === target || confirmed || dryRun) return false;
+  return source.kind === 'default';
 }
 
-/** 安装范围：默认/--global 落用户目录，--project 落当前项目，--dir 自定义目录；三者互斥 */
-export function resolveSyncRoots(opts: SyncOpts, cwd = process.cwd()): SyncRoots {
-  const picked = [
-    opts.global ? '--global' : null,
-    opts.project ? '--project' : null,
-    opts.dir !== undefined ? '--dir' : null,
-  ].filter((f): f is string => f !== null);
-  if (picked.length > 1) {
-    throw new Error(`${picked.join(' 与 ')} 不能同时使用，请只指定一种安装范围`);
-  }
-  if (opts.dir !== undefined) {
-    return { target: path.resolve(cwd, opts.dir), linkRoot: null, relativeLinks: false };
-  }
-  const root = opts.project ? cwd : os.homedir();
-  return {
-    target: path.join(root, '.agents', 'skills'),
-    linkRoot: path.join(root, '.claude', 'skills'),
-    relativeLinks: opts.project ?? false,
-  };
+/** 决议先于动作打印：中途失败也看得见这次要落到哪，而不是只在成功的末尾打一行 */
+export function describeResolution(
+  res: SyncResolution,
+  strategy: LinkStrategy,
+  dryRun: boolean,
+  lead = '本次同步：',
+): string[] {
+  const linkWord = strategy === 'copy' ? '复制' : '软链';
+  return [
+    `${dryRun ? '[预演] ' : ''}${lead}作用域 ${res.scope}（来源：${res.source.label}）`,
+    `  落地目录：${res.target}`,
+    `  .claude 同步：${res.linkRoot ? `${res.linkRoot}（${linkWord}）` : '不启用（自定义目录模式）'}`,
+  ];
 }
 
 export async function sync(opts: SyncOpts): Promise<void> {
   // 实际文件落 .agents/skills（跨 Agent 工具共用），.claude/skills 里放软链（Windows 上放副本）；
-  // 默认落用户目录（--global），--project 落当前项目（类 npx skills 的 global/project 语义），
-  // 指定 --dir 时直接落该目录，不建链接（保持可预期）。
-  const { target, linkRoot, relativeLinks } = resolveSyncRoots(opts);
+  // 落点按 命令行 > 环境变量 > 项目配置 > 用户配置 > 内置默认 解析（决策 56），
+  // 自定义目录（--dir / sync.scope=dir）直接落该目录、不建任何链接。
+  const cwd = process.cwd();
+  const res = resolveSyncRoots(opts, cwd);
+  const { target, linkRoot, relativeLinks, source } = res;
   const strategy = defaultLinkStrategy();
   const linkWord = strategy === 'copy' ? '复制' : '软链';
+  const dryRun = opts.dryRun ?? false;
+
+  for (const line of describeResolution(res, strategy, dryRun)) console.log(line);
+
+  const lastTarget = loadState().lastSyncTarget;
+  if (syncTargetDrifted(lastTarget, target, source, opts.yes ?? false, dryRun)) {
+    const hint = [
+      '没有任何配置指定落点，而上次同步装在别处，已中止（继续跑会把 skill 装到默认目录，原落点从此不再更新）',
+      `      上次落点：${lastTarget}`,
+      `      本次落点：${target}（来源：${source.label}）`,
+      `      装回上次的位置（并记住它）：eat sync --dir ${lastTarget}`,
+      '      确实要改用默认目录：eat sync --yes',
+      '      先看看会发生什么：eat sync --dry-run',
+    ].join('\n');
+    throw new Error(hint);
+  }
+  if (dryRun && lastTarget && lastTarget !== target) {
+    console.log(`  注意：上次同步落在 ${lastTarget}，与本次不同`);
+  }
+
   const api = Api.fromSaved();
-  fs.mkdirSync(target, { recursive: true });
-  if (linkRoot) fs.mkdirSync(linkRoot, { recursive: true });
+  if (!dryRun) {
+    fs.mkdirSync(target, { recursive: true });
+    if (linkRoot) fs.mkdirSync(linkRoot, { recursive: true });
+  }
   const bundle = await api.request<SyncSkill[]>('GET', '/api/skills/sync-bundle');
 
   const added: string[] = [];
@@ -198,7 +247,7 @@ export async function sync(opts: SyncOpts): Promise<void> {
     const dir = path.join(target, skill.slug);
     const meta = fs.existsSync(dir) ? readMeta(dir) : null;
     if (!fs.existsSync(dir)) {
-      writeSkill(dir, skill);
+      if (!dryRun) writeSkill(dir, skill);
       added.push(skill.slug);
     } else if (!meta && !opts.force) {
       conflicts.push(skill.slug);
@@ -206,41 +255,39 @@ export async function sync(opts: SyncOpts): Promise<void> {
     } else if (meta && meta.version === skill.version && !opts.force) {
       upToDate.push(skill.slug);
     } else {
-      writeSkill(dir, skill);
+      if (!dryRun) writeSkill(dir, skill);
       updated.push(`${skill.slug}（v${meta?.version ?? '?'} → v${skill.version}）`);
     }
-    if (linkRoot) {
-      try {
-        if (
-          ensureLink(
-            path.join(linkRoot, skill.slug),
-            dir,
-            opts.force ?? false,
-            relativeLinks,
-            strategy,
-          ) === 'conflict'
-        ) {
-          linkConflicts.push(skill.slug);
-        }
-      } catch (err) {
-        linkFailed = err instanceof Error ? err.message : String(err);
+    if (!linkRoot) continue;
+    const linkPath = path.join(linkRoot, skill.slug);
+    if (dryRun) {
+      if (wouldConflict(linkPath, opts.force ?? false)) linkConflicts.push(skill.slug);
+      continue;
+    }
+    try {
+      if (ensureLink(linkPath, dir, opts.force ?? false, relativeLinks, strategy) === 'conflict') {
+        linkConflicts.push(skill.slug);
       }
+    } catch (err) {
+      linkFailed = err instanceof Error ? err.message : String(err);
     }
   }
 
   // 清理：受管但已不在同步范围（退订/删除/不可见）的 skill，连同 .claude 里的软链/副本/历史落地
   const bundleSlugs = new Set(bundle.map((s) => s.slug));
   const removed: string[] = [];
-  for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const dir = path.join(target, entry.name);
-    const meta = readMeta(dir);
-    if (meta && !bundleSlugs.has(meta.slug)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-      removed.push(meta.slug);
+  if (fs.existsSync(target)) {
+    for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const dir = path.join(target, entry.name);
+      const meta = readMeta(dir);
+      if (meta && !bundleSlugs.has(meta.slug)) {
+        if (!dryRun) fs.rmSync(dir, { recursive: true, force: true });
+        removed.push(meta.slug);
+      }
     }
   }
-  if (linkRoot) {
+  if (linkRoot && !dryRun) {
     for (const entry of fs.readdirSync(linkRoot, { withFileTypes: true })) {
       const p = path.join(linkRoot, entry.name);
       if (entry.isSymbolicLink()) {
@@ -255,10 +302,11 @@ export async function sync(opts: SyncOpts): Promise<void> {
     }
   }
 
-  console.log(`Skill 同步完成 → ${target}${linkRoot ? `（已${linkWord}到 ${linkRoot}）` : ''}`);
-  if (added.length) console.log(`  新增: ${added.join(', ')}`);
-  if (updated.length) console.log(`  更新: ${updated.join(', ')}`);
-  if (removed.length) console.log(`  移除(退订/已删除): ${removed.join(', ')}`);
+  const verb = dryRun ? '将同步' : '同步完成';
+  console.log(`Skill ${verb} → ${target}${linkRoot ? `（${dryRun ? '并' : '已'}${linkWord}到 ${linkRoot}）` : ''}`);
+  if (added.length) console.log(`  ${dryRun ? '将新增' : '新增'}: ${added.join(', ')}`);
+  if (updated.length) console.log(`  ${dryRun ? '将更新' : '更新'}: ${updated.join(', ')}`);
+  if (removed.length) console.log(`  ${dryRun ? '将移除' : '移除'}(退订/已删除): ${removed.join(', ')}`);
   if (upToDate.length) console.log(`  已是最新: ${upToDate.length} 个`);
   if (conflicts.length) {
     console.log(`  跳过(目录已存在但非 eat 管理): ${conflicts.join(', ')}`);
@@ -272,17 +320,37 @@ export async function sync(opts: SyncOpts): Promise<void> {
   }
   if (bundle.length === 0) console.log('  （没有订阅任何 skill；eat skill list 看看团队里有什么）');
 
+  await syncMcpConfigs(api, dryRun);
+
+  if (dryRun) {
+    console.log('\n以上为预演，未写入任何文件。确认无误后去掉 --dry-run 执行。');
+    return;
+  }
+
   // 本次落地的指纹记为基线：后续任何命令的响应头与它不一致即说明本地落后（决策 26）
   markSkillsSynced();
+  recordSyncTarget(target);
 
-  await syncMcpConfigs(api);
+  // 显式指定过的落点记进配置，让之后裸跑的 eat sync（更新提示里写的就是它）落到同一个地方。
+  // 环境变量不落盘：它是本进程的一次性设定，持久化会让人意外。
+  if (source.kind === 'flag' && opts.save !== false) {
+    const saved = persistSyncChoice(res.scope, target, cwd);
+    console.log(`\n已记住本次落点：后续 eat sync 继续同步到 ${target}`);
+    console.log(
+      `  写入 ${saved.file}${saved.location === 'project' ? '（只在这个目录下生效）' : ''}；恢复默认执行 eat config unset sync，本次不记用 --no-save`,
+    );
+  }
 }
 
 /** MCP 配置：按权限渲染后写入 ~/.eat/mcp.generated.json，由用户合并进自己的 MCP 配置 */
-async function syncMcpConfigs(api: Api): Promise<void> {
+async function syncMcpConfigs(api: Api, dryRun = false): Promise<void> {
   const rendered = await api.request<RenderedMcpConfig[]>('GET', '/api/mcp-configs/sync-bundle');
   if (rendered.length === 0) return;
   const outPath = path.join(os.homedir(), '.eat', 'mcp.generated.json');
+  if (dryRun) {
+    console.log(`\nMCP 配置将渲染 → ${outPath}（${rendered.length} 个）`);
+    return;
+  }
   const mcpServers = Object.fromEntries(rendered.map((r) => [r.slug, r.server]));
   fs.mkdirSync(path.dirname(outPath), { recursive: true, mode: 0o700 });
   fs.writeFileSync(outPath, JSON.stringify({ mcpServers }, null, 2), { mode: 0o600 });

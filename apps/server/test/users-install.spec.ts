@@ -275,6 +275,11 @@ describe('CLI 自托管分发', () => {
     expect(r.body).toContain('--no-wait');
     expect(r.body).toContain('eat login --status');
     expect(r.body).toContain('退出码 2');
+    // 决策 56：不用 .agents/.claude 规范的 Agent 要能看到 --dir，并知道落点会被记住
+    expect(r.body).toContain('eat sync --dir');
+    expect(r.body).toContain('不创建');
+    expect(r.body).toContain('--dry-run');
+    expect(r.body).toContain('显式指定过的落点会被记住');
   });
 
   it('MCP.md 独立板块：面向无 shell 环境的客户端，含注册命令', async () => {

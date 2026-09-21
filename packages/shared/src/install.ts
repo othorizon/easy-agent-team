@@ -52,15 +52,27 @@ export function buildAgentInstallGuide(publicUrl: string): string {
 
    不带 \`--no-wait\` 的 \`eat login\` 会一直阻塞到用户确认或授权码过期，适合用户自己在终端里敲，不适合你代为执行。
 
-3. **同步团队能力**：
-   \`\`\`sh
-   eat sync
-   \`\`\`
-   会把有权限的 Skill 落地到 \`~/.agents/skills/\`，并同步一份到 \`~/.claude/skills/\`（类 Unix 用软链，Windows 因为建软链需要管理员权限，改为复制实文件，行为等价）。其中始终包含平台内置的 \`eat-platform-guide\`——之后的 AI 会话读它就知道 eat 平台有哪些能力、该怎么用（先查经验再求助、无权限走申请等）。只想装进当前项目时用 \`eat sync --project\`（落 \`./.agents/skills/\` 并同步到 \`./.claude/skills/\`）。
+3. **同步团队能力**。**先确认你（这个 AI 客户端）的 skill 该放在哪，再决定用哪条命令**：
+
+   - 你遵循 \`.agents\` / \`.claude\` 目录规范（Claude Code 等）：
+     \`\`\`sh
+     eat sync
+     \`\`\`
+     Skill 落地到 \`~/.agents/skills/\`，并同步一份到 \`~/.claude/skills/\`（类 Unix 用软链，Windows 因为建软链需要管理员权限，改为复制实文件，行为等价）。只想装进当前项目时用 \`eat sync --project\`（落 \`./.agents/skills/\` 并同步到 \`./.claude/skills/\`）。
+   - **你不用这套目录规范**（自己有 skill / 提示词目录，或跑在容器、自建 Agent 框架里）：
+     \`\`\`sh
+     eat sync --dir <你的 skill 目录>
+     \`\`\`
+     Skill 直接落在这个目录下（每个 skill 一个子目录），**不创建 \`.agents\`，也不碰 \`.claude\`**。
+
+   不管用哪条，落地内容里始终包含平台内置的 \`eat-platform-guide\`——之后的 AI 会话读它就知道 eat 平台有哪些能力、该怎么用（先查经验再求助、无权限走申请等）。
+
+   **显式指定过的落点会被记住**：带 \`--dir\` / \`--project\` / \`--global\` 跑过一次之后，以后裸跑 \`eat sync\` 就继续落到同一个地方，不必每次都带参数（\`eat config list\` 可以查当前落点）。这一点很重要——后面收到「团队 Skill 有变更」的提示时，照着提示执行的就是裸的 \`eat sync\`。
+   拿不准会装到哪，先跑 \`eat sync --dry-run\` 看一眼：它只打印落点和将要新增/更新/移除的内容，不写任何文件。
 
 4. **验证**：\`eat whoami\` 应输出用户身份；失败则回到第 2 步重试。
 
-之后 CLI 或团队 Skill 有更新时，\`eat\` 命令会在 stderr 附一行提示（不影响命令结果，同一版本只提示一次）：CLI 更新执行 \`eat self-update\`（跨平台同一条命令，不用重跑本安装脚本），Skill 更新执行 \`eat sync\`。
+之后 CLI 或团队 Skill 有更新时，\`eat\` 命令会在 stderr 附一行提示（不影响命令结果，同一版本只提示一次）：CLI 更新执行 \`eat self-update\`（跨平台同一条命令，不用重跑本安装脚本），Skill 更新执行 \`eat sync\`——提示里会写明落点，裸跑即可，**不要自作主张加 \`--global\` / \`--project\`**，那会把 skill 装到和当初不同的地方。
 
 装好后你就可以直接执行 \`eat\` 命令使用平台全部能力（env / skill / ask / db / app / deploy 等），无需其他配置。
 
