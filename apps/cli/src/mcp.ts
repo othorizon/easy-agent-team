@@ -6,8 +6,8 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import * as path from 'node:path';
-import { buildEatTools, CLI_VERSION, STATIC_CONTAINER_PORT } from '@eat/shared';
-import type { AppInfo, SecretFingerprint } from '@eat/shared';
+import { buildEatTools, CLI_VERSION, resolveDbInstance, STATIC_CONTAINER_PORT } from '@eat/shared';
+import type { AppInfo, DbInstanceInfo, SecretFingerprint } from '@eat/shared';
 import { Api, ApiError, setClientTag } from './client.js';
 import { scanWorkspace } from './scan.js';
 import { takeUpdateNoticeForMcp } from './update.js';
@@ -156,6 +156,30 @@ export async function startMcpServer(): Promise<void> {
         }
         case 'delete_help_request': {
           return jsonResult(await api.request('DELETE', `/api/help-requests/${args.requestId as string}`));
+        }
+        case 'list_db_instances': {
+          return jsonResult(await api.request('GET', '/api/db/instances'));
+        }
+        case 'request_db': {
+          const instances = await api.request<DbInstanceInfo[]>('GET', '/api/db/instances');
+          const inst = resolveDbInstance(instances, args.instance as string);
+          if (!inst) {
+            return jsonResult({
+              error: 'DB_INSTANCE_NOT_FOUND',
+              message: `找不到实例 ${String(args.instance)}，用 list_db_instances 查看可用实例`,
+              instances: instances.map((i) => ({ id: i.id, name: i.name })),
+            });
+          }
+          return jsonResult(
+            await api.request('POST', '/api/db/assignments', {
+              instanceId: inst.id,
+              dbName: args.dbName,
+              purpose: args.purpose,
+            }),
+          );
+        }
+        case 'list_db_assignments': {
+          return jsonResult(await api.request('GET', '/api/db/assignments/mine'));
         }
         case 'list_apps': {
           return jsonResult((await api.request<AppInfo[]>('GET', '/api/apps')).map(forAgent));

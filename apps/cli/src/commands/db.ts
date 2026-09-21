@@ -1,3 +1,4 @@
+import { resolveDbInstance } from '@eat/shared';
 import type { DbAssignmentInfo, DbInstanceInfo } from '@eat/shared';
 import { Api } from '../client.js';
 
@@ -25,7 +26,7 @@ export async function dbInstances(): Promise<void> {
 export async function dbRequest(dbName: string, opts: { instance: string; purpose: string }): Promise<void> {
   const api = Api.fromSaved();
   const instances = await api.request<DbInstanceInfo[]>('GET', '/api/db/instances');
-  const inst = instances.find((i) => i.id === opts.instance || i.name === opts.instance);
+  const inst = resolveDbInstance(instances, opts.instance);
   if (!inst) {
     console.error(`错误: 找不到实例 ${opts.instance}（eat db instances 查看）`);
     process.exitCode = 1;

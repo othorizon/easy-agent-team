@@ -34,6 +34,9 @@ die() { echo "[dev-dokploy] 错误: $*" >&2; exit 1; }
 # 代理端口每个会话都可能变（容器重建就换一个），daemon.json 里留着旧端口会让
 # 镜像拉取报 "proxyconnect ... connection refused"，所以每次都按当前环境重写。
 # 返回 0 表示配置有变化。
+# no-proxy 必须与 anytocontext 的 scripts/dev-docker.sh 写的那串**逐字节一致**：两个脚本都按
+# 「文件内容变了就重启 dockerd」来判断，同一容器里先后跑时只要有一个字符不同，就会互相
+# 把对方的 dockerd 踢掉（host.docker.internal 这一项当初就是这么漏掉的）。
 write_docker_proxy_config() {
   [ -n "${HTTPS_PROXY:-}" ] || return 1
   mkdir -p /etc/docker
@@ -43,7 +46,7 @@ write_docker_proxy_config() {
   "proxies": {
     "http-proxy": "${HTTP_PROXY:-$HTTPS_PROXY}",
     "https-proxy": "$HTTPS_PROXY",
-    "no-proxy": "localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    "no-proxy": "localhost,127.0.0.1,::1,host.docker.internal,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
   }
 }
 EOF
@@ -157,6 +160,16 @@ start() {
   fi
 
   if [ "$SKIP_TRAEFIK" != "1" ] && ! docker inspect dokploy-traefik >/dev/null 2>&1; then
+    # traefik.yml 是 dokploy 容器起来之后才写出来的。抢在它前面 docker run，
+    # bind mount 会把还不存在的路径**建成目录**，traefik 于是反复
+    # 「read /etc/traefik/traefik.yml: is a directory」起不来 —— 而且配置文件后来
+    # 补上了也救不回来，容器里挂的仍是当初那个目录。所以这里必须等文件真出现。
+    log "等待 dokploy 写出 traefik.yml..."
+    for _ in $(seq 1 60); do
+      [ -f /etc/dokploy/traefik/traefik.yml ] && break
+      sleep 2
+    done
+    [ -f /etc/dokploy/traefik/traefik.yml ] || die "dokploy 始终没有写出 /etc/dokploy/traefik/traefik.yml"
     log "启动 dokploy-traefik..."
     docker run -d --name dokploy-traefik --restart always --network dokploy-network \
       -v /etc/dokploy/traefik/traefik.yml:/etc/traefik/traefik.yml \

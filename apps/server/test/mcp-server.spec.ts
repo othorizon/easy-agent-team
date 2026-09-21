@@ -276,6 +276,51 @@ describe('工具', () => {
     expect(status.status).toBe('approved');
   });
 
+  it('数据库：列实例 → 按名字申请 → 清单里看到 pending（决策 57）', async () => {
+    const instance = await api('POST', '/api/db/instances', {
+      token: adminToken,
+      payload: {
+        name: '业务 PostgreSQL',
+        engine: 'postgres',
+        host: '127.0.0.1',
+        port: 5433,
+        adminUser: 'dev',
+        adminPassword: '',
+        note: '',
+      },
+    });
+    expect(instance.status).toBe(201);
+
+    const instances = toolJson((await rpc('tools/call', { name: 'list_db_instances', arguments: {} })).body);
+    expect(instances.map((i: { name: string }) => i.name)).toContain('业务 PostgreSQL');
+    // 实例的管理凭证不能随清单下发
+    expect(JSON.stringify(instances)).not.toContain('adminPassword');
+
+    // 用**名字**而不是 uuid 申请：AI 手上拿到的就是刚读回来的名字（resolveDbInstance）
+    const created = toolJson(
+      (await rpc('tools/call', {
+        name: 'request_db',
+        arguments: { instance: '业务 PostgreSQL', dbName: 'usage_anomaly', purpose: '存用量异常跑批结果' },
+      })).body,
+    );
+    expect(created.status).toBe('pending');
+    expect(created.dbName).toBe('usage_anomaly');
+
+    const mine = toolJson((await rpc('tools/call', { name: 'list_db_assignments', arguments: {} })).body);
+    expect(mine.find((a: { dbName: string }) => a.dbName === 'usage_anomaly').status).toBe('pending');
+  });
+
+  it('实例名打错时把候选清单一起回过去，省掉一轮往返', async () => {
+    const r = await rpc('tools/call', {
+      name: 'request_db',
+      arguments: { instance: '不存在的实例', dbName: 'whatever_db', purpose: '随便' },
+    });
+    expect(r.body.result.isError).toBe(true);
+    const err = toolJson(r.body);
+    expect(err.error).toBe('DB_INSTANCE_NOT_FOUND');
+    expect(err.instances.map((i: { name: string }) => i.name)).toContain('业务 PostgreSQL');
+  });
+
   it('敏感读取记进审计，且认得出是哪把 Key 干的', async () => {
     const audits = await api('GET', '/api/audit?action=secret.read', { token: adminToken });
     const row = audits.body.find((a: { actorTokenId: string | null }) => a.actorTokenId === apiKeyId);

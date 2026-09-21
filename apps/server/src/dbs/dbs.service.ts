@@ -152,13 +152,22 @@ export class DbsService {
   async createAssignment(user: AuthUser, dto: CreateDbAssignmentRequest): Promise<DbAssignmentInfo> {
     await this.getInstance(dto.instanceId);
     const dbUser = `u_${dto.dbName}`.slice(0, 31);
-    const exists = await this.db
-      .select({ id: dbAssignments.id })
+    // 占用判定**包含已删除的分配**：删除只到记录级（决策 13），实例上的库与账号多半还在，
+    // 放行会让批准时的 CREATE DATABASE / CREATE ROLE 当场失败。但两种情况得说清楚区别——
+    // 只回一句「已被占用」时，申请人（尤其是 AI）在清单里一条都看不到，无从判断下一步该干嘛。
+    const [exists] = await this.db
+      .select({ id: dbAssignments.id, status: dbAssignments.status })
       .from(dbAssignments)
       .where(and(eq(dbAssignments.instanceId, dto.instanceId), eq(dbAssignments.dbName, dto.dbName)))
       .limit(1);
-    if (exists.length > 0) {
-      throw new ConflictException({ error: 'CONFLICT', message: `该实例上库名 ${dto.dbName} 已被占用` });
+    if (exists) {
+      throw new ConflictException({
+        error: 'CONFLICT',
+        message:
+          exists.status === 'deleted'
+            ? `该实例上库名 ${dto.dbName} 曾被分配过，分配记录已删除但实例上的库与账号未必清理过——换个库名，或请管理员在实例上清理后再申请`
+            : `该实例上库名 ${dto.dbName} 已被占用`,
+      });
     }
     const [row] = await this.db
       .insert(dbAssignments)
