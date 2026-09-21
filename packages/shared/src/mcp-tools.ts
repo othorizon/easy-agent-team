@@ -174,6 +174,48 @@ function helpTools(mode: EatToolMode): EatToolDef[] {
   ];
 }
 
+/**
+ * 数据库账号。
+ *
+ * 此前这块只有 CLI 有命令、MCP 一个工具都没有，指南还写着「引导用户去控制台申请」——
+ * 于是接 HTTP MCP 的云端 AI 想自己建个库放结果，唯一的出路是让人替它点一遍界面。
+ * 申请本身是一次带用途说明、等管理员批准的常规动作，和 request_access 同一个形状，
+ * 没有理由只对 AI 关着。
+ */
+function dbTools(): EatToolDef[] {
+  return [
+    {
+      name: 'list_db_instances',
+      description:
+        '列出可申请的数据库实例（管理员登记的，不含实例的管理凭证）。要自己建库时先调这个挑一台，再用 request_db 申请。',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'request_db',
+      description:
+        '申请在某实例上创建一个库和一个专属账号。**需要自己写数据（建表、落结果）时才申请库**；只读地取别人的业务库数据走 list_env_variables / get_env_values 那条路。提交后状态是 pending，要等管理员批准——告诉用户已提交、需要谁去批，不要反复申请。批准时平台会真实建库建号，状态转 active 并生成一组凭证环境变量，用 list_db_assignments 查进度。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          instance: { type: 'string', description: '实例 id 或名称（list_db_instances 查看）' },
+          dbName: {
+            type: 'string',
+            description: '库名：小写字母开头，允许小写字母、数字、下划线，3-31 位',
+          },
+          purpose: { type: 'string', description: '用途说明（会展示给审批人）' },
+        },
+        required: ['instance', 'dbName', 'purpose'],
+      },
+    },
+    {
+      name: 'list_db_assignments',
+      description:
+        '列出我名下的数据库分配，兼作申请进度查询。status=pending 还在等批准；active 表示库和账号已建好，此时 environmentSlug 就是凭证所在的环境，用 get_env_values 取值连上去；failed 时 error 里是失败原因。',
+      inputSchema: { type: 'object', properties: {} },
+    },
+  ];
+}
+
 function appTools(): EatToolDef[] {
   return [
     {
@@ -346,6 +388,7 @@ export function buildEatTools(mode: EatToolMode): EatToolDef[] {
     ...(mode === 'remote' ? [platformGuideTool] : []),
     ...envTools(),
     ...helpTools(mode),
+    ...dbTools(),
     ...appTools(),
     ...deployTools(mode),
   ];

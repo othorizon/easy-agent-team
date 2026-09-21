@@ -72,3 +72,18 @@ export const dbAssignmentInfoSchema = z.object({
   updatedAt: z.string(),
 });
 export type DbAssignmentInfo = z.infer<typeof dbAssignmentInfoSchema>;
+
+/**
+ * 按 id 或名称找实例。
+ *
+ * AI 与人一样，手上多半是刚从清单里读到的**名字**而不是 uuid，两边（CLI 的
+ * `eat db request --instance`、MCP 的 `request_db`）都得认。判定只能有一份实现，
+ * 否则两条路迟早对「这个名字算不算数」给出不同答案。
+ */
+export function resolveDbInstance<T extends { id: string; name: string }>(
+  instances: T[],
+  ref: string,
+): T | undefined {
+  const needle = ref.trim();
+  return instances.find((i) => i.id === needle) ?? instances.find((i) => i.name === needle);
+}

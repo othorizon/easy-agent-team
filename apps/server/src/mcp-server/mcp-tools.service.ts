@@ -3,8 +3,10 @@ import {
   buildEatTools,
   createAccessRequestSchema,
   createAppSchema,
+  createDbAssignmentSchema,
   createHelpRequestSchema,
   logsQuerySchema,
+  resolveDbInstance,
   platformGuideSyncSkill,
   updateAppEnvSchema,
   updateAppSchema,
@@ -14,6 +16,7 @@ import {
 } from '@eat/shared';
 import { z } from 'zod';
 import type { AuthUser } from '../auth/auth.decorators';
+import { DbsService } from '../dbs/dbs.service';
 import { AppsService } from '../deploy/apps.service';
 import { DeployService } from '../deploy/deploy.service';
 import { AccessRequestsService } from '../envs/access-requests.service';
@@ -75,6 +78,7 @@ export class McpToolsService {
     private readonly help: HelpService,
     private readonly apps: AppsService,
     private readonly deploy: DeployService,
+    private readonly dbs: DbsService,
   ) {}
 
   listTools(): EatToolDef[] {
@@ -137,6 +141,29 @@ export class McpToolsService {
         const { requestId } = parse(requestIdArg, args);
         return this.help.remove(user, requestId);
       }
+
+      // ---------- 数据库账号 ----------
+      case 'list_db_instances':
+        return this.dbs.listInstances();
+      case 'request_db': {
+        const { instance, ...rest } = parse(
+          z.object({ instance: z.string().min(1).max(200), dbName: z.string(), purpose: z.string() }),
+          args,
+        );
+        const instances = await this.dbs.listInstances();
+        const found = resolveDbInstance(instances, instance);
+        // 名字打错是最常见的一种失败，直接把候选清单回给它，省一轮往返
+        if (!found) {
+          throw new BadRequestException({
+            error: 'DB_INSTANCE_NOT_FOUND',
+            message: `找不到实例 ${instance}，用 list_db_instances 查看可用实例`,
+            instances: instances.map((i) => ({ id: i.id, name: i.name })),
+          });
+        }
+        return this.dbs.createAssignment(user, parse(createDbAssignmentSchema, { ...rest, instanceId: found.id }));
+      }
+      case 'list_db_assignments':
+        return this.dbs.listMine(user);
 
       // ---------- 应用 ----------
       case 'list_apps':
