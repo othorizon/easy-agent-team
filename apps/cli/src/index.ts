@@ -23,6 +23,7 @@ import {
 import { skillExport, skillList, skillPush, skillSubscribe, skillUnsubscribe } from './commands/skill.js';
 import { selfUpdate } from './commands/self-update.js';
 import { sync } from './commands/sync.js';
+import { configGet, configList, configSet, configUnset } from './commands/config.js';
 import { startMcpServer } from './mcp.js';
 import { flushUpdateNotice } from './update.js';
 
@@ -113,12 +114,33 @@ ask.command('delete <id>').description('删除求助（支持 ID 前缀；仅求
 
 program
   .command('sync')
-  .description('同步 Skill 到本地（默认全局：落地 ~/.agents/skills 并同步到 ~/.claude/skills；类 Unix 用软链，Windows 用复制）')
+  .description('同步 Skill 到本地（落点按 eat config 记住的配置；默认落地 ~/.agents/skills 并同步到 ~/.claude/skills）')
   .option('-g, --global', '安装到全局目录 ~/.agents/skills + 同步 ~/.claude/skills（默认）')
   .option('-p, --project', '安装到当前项目 ./.agents/skills + 同步 ./.claude/skills')
-  .option('--dir <dir>', '自定义落地目录（指定后不同步到 .claude/skills）')
+  .option('--dir <dir>', '直接落地到指定目录，不创建 .agents / .claude（适合不用这套目录规范的 Agent）')
   .option('--force', '覆盖非 eat 管理的同名目录 / 强制重写')
+  .option('--dry-run', '只打印本次会落到哪、会新增/更新/移除什么，不写任何文件')
+  .option('-y, --yes', '确认本次落点与上次同步不同（落点变更检测拦下时用）')
+  .option('--no-save', '不把本次显式指定的落点记为默认（默认会记住，之后裸跑 eat sync 落到同一处）')
   .action(sync);
+
+const configCmd = program
+  .command('config')
+  .description('eat sync 的落点配置：让之后裸跑的 eat sync 落到同一个地方');
+configCmd.command('list').description('当前生效的落点与各配置文件内容').action(configList);
+configCmd.command('get <key>').description('读取某项（sync / sync.scope / sync.dir）').action(configGet);
+configCmd
+  .command('set <key> <value>')
+  .description('设置 sync.scope（global|project|dir）或 sync.dir（目录，自动存绝对路径并切到 dir 作用域）')
+  .option('--project', '写入项目配置 ./.eat/config.json')
+  .option('--user', '写入用户配置 ~/.eat/config.json')
+  .action(configSet);
+configCmd
+  .command('unset <key>')
+  .description('清除某项，恢复默认落点（不指定文件时项目与用户配置都清）')
+  .option('--project', '只清项目配置')
+  .option('--user', '只清用户配置')
+  .action(configUnset);
 
 const db = program.command('db').description('数据库账号：查看实例、申请库、查看我的分配');
 db.command('instances').description('查看可用的数据库实例').action(dbInstances);

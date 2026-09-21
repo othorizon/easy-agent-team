@@ -128,6 +128,16 @@ describe('buildUpdateNotice：提示什么、什么时候闭嘴', () => {
     expect(buildUpdateNotice(state, local, 'aaaa')).toBeNull();
   });
 
+  // 决策 56：提示里写的是裸 eat sync，Agent 照着跑之前得能看出会装到哪
+  it('Skill 提示带上落点，没有落点时不多写括号', () => {
+    const state: UpdateState = { serverSkillVersion: 'aaaa', syncedSkillVersion: 'bbbb' };
+    expect(buildUpdateNotice(state, local, null, '/srv/agent/skills')?.lines.join('\n')).toContain(
+      'eat sync（落点：/srv/agent/skills）',
+    );
+    expect(buildUpdateNotice(state, local, null, null)?.lines.join('\n')).toContain('更新: eat sync');
+    expect(buildUpdateNotice(state, local, null, null)?.lines.join('\n')).not.toContain('落点');
+  });
+
   it('本地状态无法确定时不提示 Skill 更新（宁可漏也不误报）', () => {
     const state: UpdateState = { serverSkillVersion: 'aaaa' };
     expect(buildUpdateNotice(state, local, null)).toBeNull();

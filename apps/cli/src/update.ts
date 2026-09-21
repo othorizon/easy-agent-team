@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { CLI_VERSION, CLI_VERSION_HEADER, isNewerVersion, SKILL_VERSION_HEADER, skillBundleVersion } from '@eat/shared';
+import { resolveSyncRoots } from './sync-config.js';
 
 /**
  * CLI / Skill 更新提示（决策 26）。
@@ -33,6 +34,8 @@ export interface UpdateState {
   /** 已经就该版本 / 该指纹提示过，不再重复 */
   notifiedCliVersion?: string;
   notifiedSkillVersion?: string;
+  /** 上次 eat sync 实际落地的目录，用于落点漂移检测（决策 56） */
+  lastSyncTarget?: string;
 }
 
 export function loadState(): UpdateState {
@@ -111,6 +114,33 @@ export function markSkillsSynced(): void {
   }
 }
 
+/** eat sync 成功后调用：记下本次实际落点，供下次的漂移检测与更新提示使用（决策 56） */
+export function recordSyncTarget(target: string): void {
+  try {
+    const state = loadState();
+    if (state.lastSyncTarget === target) return;
+    state.lastSyncTarget = target;
+    saveState(state);
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * 清掉落点基线。`eat config set/unset` 改动同步配置时调用：
+ * 改配置本身就是「我知道落点要变」的授权，不该在下一次 sync 时再拦一道。
+ */
+export function clearSyncTarget(): void {
+  try {
+    const state = loadState();
+    if (state.lastSyncTarget === undefined) return;
+    delete state.lastSyncTarget;
+    saveState(state);
+  } catch {
+    // ignore
+  }
+}
+
 /** eat self-update 成功后调用：抑制「刚更新完又提示更新」 */
 export function markCliUpdated(version: string): void {
   try {
@@ -126,7 +156,8 @@ export function markCliUpdated(version: string): void {
 /**
  * 「装过 Skill 但状态里没有基线」时的兜底：从 ~/.agents/skills 的 .eat-meta.json 反推指纹。
  * 覆盖本功能上线前就装好的老客户端——否则它们要先跑一次 eat sync 才可能收到 Skill 更新提示。
- * 只看默认的全局目录；--project 落地的用户跑一次 sync 后走基线，不再依赖这里。
+ * 目录由调用方按当前配置解析后传入（决策 56）——写死全局目录会让 --dir / --project 的用户
+ * 在还没有基线时恒被判成「需要 sync」，而那条提示又会把他们引向错误的落点。
  */
 export function localSkillVersion(dir: string = GLOBAL_SKILLS_DIR): string | null {
   let entries: fs.Dirent[];
@@ -175,6 +206,7 @@ export function buildUpdateNotice(
   state: UpdateState,
   localCliVersion: string,
   localSkills: string | null,
+  syncTarget?: string | null,
 ): UpdateNotice | null {
   const items: string[] = [];
   const notice: UpdateNotice = { lines: [] };
@@ -188,7 +220,8 @@ export function buildUpdateNotice(
   const server = state.serverSkillVersion;
   const local = state.syncedSkillVersion ?? localSkills;
   if (server && local !== null && local !== undefined && server !== local && state.notifiedSkillVersion !== server) {
-    items.push('团队 Skill 有变更 —— 更新: eat sync');
+    // 带上落点：Agent 照着提示裸跑 eat sync 之前就能看出会装到哪（决策 56）
+    items.push(`团队 Skill 有变更 —— 更新: eat sync${syncTarget ? `（落点：${syncTarget}）` : ''}`);
     notice.skillVersion = server;
   }
 
@@ -199,6 +232,15 @@ export function buildUpdateNotice(
     '      不再提示: 设置环境变量 EAT_NO_UPDATE_NOTIFIER=1',
   ];
   return notice;
+}
+
+/** 解析当前配置下的 sync 落点；配置有问题时返回 null——更新检测绝不能影响命令本身 */
+function resolvedSyncTarget(): string | null {
+  try {
+    return resolveSyncRoots({}).target;
+  } catch {
+    return null;
+  }
 }
 
 let flushed = false;
@@ -212,7 +254,13 @@ export function flushUpdateNotice(): void {
   flushed = true;
   try {
     const state = loadState();
-    const notice = buildUpdateNotice(state, CLI_VERSION, state.syncedSkillVersion ? null : localSkillVersion());
+    const target = resolvedSyncTarget();
+    const notice = buildUpdateNotice(
+      state,
+      CLI_VERSION,
+      state.syncedSkillVersion ? null : localSkillVersion(target ?? GLOBAL_SKILLS_DIR),
+      target,
+    );
     if (!notice) return;
     console.error(notice.lines.join('\n'));
     if (notice.cliVersion) state.notifiedCliVersion = notice.cliVersion;
@@ -231,7 +279,13 @@ export function takeUpdateNoticeForMcp(): string | null {
   if (flushed || notifierDisabled()) return null;
   try {
     const state = loadState();
-    const notice = buildUpdateNotice(state, CLI_VERSION, state.syncedSkillVersion ? null : localSkillVersion());
+    const target = resolvedSyncTarget();
+    const notice = buildUpdateNotice(
+      state,
+      CLI_VERSION,
+      state.syncedSkillVersion ? null : localSkillVersion(target ?? GLOBAL_SKILLS_DIR),
+      target,
+    );
     if (!notice) return null;
     flushed = true;
     if (notice.cliVersion) state.notifiedCliVersion = notice.cliVersion;

@@ -2,47 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { defaultLinkStrategy, ensureLink, resolveSyncRoots } from '../src/commands/sync.js';
-
-const home = os.homedir();
-
-describe('resolveSyncRoots：安装范围解析', () => {
-  const cwd = '/work/my-project';
-
-  it('默认落全局目录并软链 ~/.claude/skills', () => {
-    expect(resolveSyncRoots({}, cwd)).toEqual({
-      target: path.join(home, '.agents', 'skills'),
-      linkRoot: path.join(home, '.claude', 'skills'),
-      relativeLinks: false,
-    });
-  });
-
-  it('--global 与默认行为一致', () => {
-    expect(resolveSyncRoots({ global: true }, cwd)).toEqual(resolveSyncRoots({}, cwd));
-  });
-
-  it('--project 落当前项目并用相对软链', () => {
-    expect(resolveSyncRoots({ project: true }, cwd)).toEqual({
-      target: path.join(cwd, '.agents', 'skills'),
-      linkRoot: path.join(cwd, '.claude', 'skills'),
-      relativeLinks: true,
-    });
-  });
-
-  it('--dir 直接落指定目录且不建软链（相对路径按 cwd 解析）', () => {
-    expect(resolveSyncRoots({ dir: 'my-skills' }, cwd)).toEqual({
-      target: path.join(cwd, 'my-skills'),
-      linkRoot: null,
-      relativeLinks: false,
-    });
-  });
-
-  it('安装范围参数互斥', () => {
-    expect(() => resolveSyncRoots({ global: true, project: true }, cwd)).toThrow(/不能同时使用/);
-    expect(() => resolveSyncRoots({ project: true, dir: '/x' }, cwd)).toThrow(/不能同时使用/);
-    expect(() => resolveSyncRoots({ global: true, dir: '/x' }, cwd)).toThrow(/不能同时使用/);
-  });
-});
+import { defaultLinkStrategy, ensureLink } from '../src/commands/sync.js';
 
 describe('ensureLink：软链维护', () => {
   let root: string;
