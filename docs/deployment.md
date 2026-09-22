@@ -25,7 +25,7 @@
 | `EAT_MCP_GATEWAY_ALLOW_PRIVATE` | | 设为 `1` 允许 MCP 网关转发到内网 / 回环 / 保留地址。**默认关闭**——任何成员都能建 MCP 配置，开着等于让平台成为可被成员驱动的 SSRF 跳板（云 metadata、平台自己的内网服务都在射程内）。只有「能建 MCP 配置的人都可信」且确实要连内网 MCP 服务时才打开 |
 | `EAT_MCP_GATEWAY_CALL_RETENTION_DAYS` | | MCP 网关调用记录保留天数，默认 90；到期由服务进程每日清扫删除 |
 | `EAT_MCP_GATEWAY_UPSTREAM_TIMEOUT_MS` | | MCP 网关等上游**响应头**的上限（毫秒），默认 180000（3 分钟）。多数 MCP 服务是等结果出来才发响应头，所以这个值实际管的是单次 `tools/call` 能跑多久——**要比客户端自己的超时更宽松**，否则网关会先于客户端掐断。拿到响应头之后的流式传输不设限（SSE 是长连接）；超时会明确回 `504 MCP_GATEWAY_UPSTREAM_TIMEOUT` 并留下调用记录 |
-| `EAT_KEEP_ALIVE_TIMEOUT_MS` | | 空闲 keep-alive 连接的保持时长（毫秒），默认 120000。**必须大于前置反向代理回收空闲后端连接的时间**（Traefik / Go 默认 90 秒，nginx 与多数云 LB 常见 60 秒）。配小了会出现一个「代理以为连接还在、平台其实已经关了」的窗口，复用时撞上 FIN——带 body 的 POST 不会被重试，调用方直接拿到 **502 Bad Gateway**，而平台侧没有任何记录（请求根本没到）。典型受害者是两次请求隔得久的调用方（AI Agent 想一会儿再调一次工具），连着点的测试工具撞不上 |
+| `EAT_KEEP_ALIVE_TIMEOUT_MS` | | 空闲 keep-alive 连接的保持时长（毫秒），默认 120000，生效值可从 `GET /api/health` 的 `keepAliveTimeoutMs` 读到。**必须大于前置反向代理回收空闲后端连接的时间**（Traefik / Go 默认 90 秒，nginx 与多数云 LB 常见 60 秒）。配小了会出现一个「代理以为连接还在、平台其实已经关了」的窗口，复用时撞上 FIN——带 body 的 POST 不会被重试，调用方直接拿到 **502 Bad Gateway**，而平台侧没有任何记录（请求根本没到）。典型受害者是两次请求隔得久的调用方（AI Agent 想一会儿再调一次工具），连着点的测试工具撞不上 |
 | `NODE_ENV` | | 镜像内已设为 `production`（生产模式下缺少 `EAT_KEK` 会拒绝启动） |
 | `TZ` | | 服务进程时区。`Dockerfile_cn` 镜像内已设为 `Asia/Shanghai`（北京时间），根目录 `Dockerfile` 未设即 UTC；只影响日志时间戳等本地时间输出，数据库时间列均带时区、不受影响。运行时传 `TZ` 可覆盖镜像默认值 |
 
@@ -112,6 +112,6 @@ CLI 会先做密钥扫描（防止把平台自己的密钥提交进仓库），�
 | 控制台白屏 / 404 | 镜像构建时 web 产物缺失——确认用仓库根 Dockerfile 构建（其中包含 `pnpm build`） |
 | CLI 登录卡在轮询 | `EAT_PUBLIC_URL` 配错导致设备码页地址不对；确认成员能访问该地址 |
 | Dokploy 部署触发失败 | 系统设置里的 Dokploy API 地址（注意带 `/api`）与 Token；平台容器需能访问 Dokploy |
-| 间歇性 502，且平台侧查不到对应记录（含 MCP 网关调用记录） | 请求没到平台：多半是 `EAT_KEEP_ALIVE_TIMEOUT_MS` 小于反向代理的空闲连接回收时间。`curl -i https://<平台>/api/health` 看 `Keep-Alive: timeout=<秒>`，这个值要大于代理侧（Traefik / Go 默认 90 秒）。特征是「隔一会儿才发的那次请求」才失败，连着发不复现 |
+| 间歇性 502，且平台侧查不到对应记录（含 MCP 网关调用记录） | 请求没到平台：多半是 `EAT_KEEP_ALIVE_TIMEOUT_MS` 小于反向代理的空闲连接回收时间。`curl -s https://<平台>/api/health` 看回包里的 `keepAliveTimeoutMs`（毫秒，取的是运行中 HTTP server 的实际值），它要大于代理侧的空闲回收时间（Traefik / Go 默认 90 秒，nginx 与云 LB 常见 60 秒）。**不要去看 `Keep-Alive` 响应头**：那是 hop-by-hop 头、HTTP/2 里根本不允许存在，各级反代也会照规范摘掉，从外面一定看不到。特征是「隔一会儿才发的那次请求」才失败，连着发不复现 |
 
 > 云端开发会话的已知行为（Postgres/进程被回收）见 CLAUDE.md，与生产部署无关。
