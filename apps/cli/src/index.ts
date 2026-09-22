@@ -37,7 +37,7 @@ program
 program
   .command('login')
   .description('通过设备码授权登录平台（默认阻塞等待用户确认；AI 自动执行时用 --no-wait + --status）')
-  .option('--server <url>', '平台地址（默认 http://localhost:3000，或 EAT_SERVER 环境变量）')
+  .option('--server <url>', '平台地址（默认取上次登录记住的地址，或 EAT_SERVER 环境变量）')
   .option('--no-wait', '发起授权后立即返回，不等待用户确认；之后用 eat login --status 领取凭证')
   .option('--status', '查询已发起的授权（通过则领取凭证），立即返回；尚未授权时退出码 2')
   .option('--timeout <seconds>', '阻塞等待的上限秒数（默认等到授权码过期）；超时后授权链接仍有效，可用 --status 接着领')
@@ -126,18 +126,18 @@ program
 
 const configCmd = program
   .command('config')
-  .description('eat sync 的落点配置：让之后裸跑的 eat sync 落到同一个地方');
-configCmd.command('list').description('当前生效的落点与各配置文件内容').action(configList);
-configCmd.command('get <key>').description('读取某项（sync / sync.scope / sync.dir）').action(configGet);
+  .description('本地配置：平台地址（server）与 eat sync 的落点');
+configCmd.command('list').description('当前生效的平台地址、落点与各配置文件内容').action(configList);
+configCmd.command('get <key>').description('读取某项（server / sync / sync.scope / sync.dir）').action(configGet);
 configCmd
   .command('set <key> <value>')
-  .description('设置 sync.scope（global|project|dir）或 sync.dir（目录，自动存绝对路径并切到 dir 作用域）')
+  .description('设置 server（平台地址）、sync.scope（global|project|dir）或 sync.dir（目录，自动存绝对路径并切到 dir 作用域）')
   .option('--project', '写入项目配置 ./.eat/config.json')
   .option('--user', '写入用户配置 ~/.eat/config.json')
   .action(configSet);
 configCmd
   .command('unset <key>')
-  .description('清除某项，恢复默认落点（不指定文件时项目与用户配置都清）')
+  .description('清除某项（server / sync*），恢复默认（不指定文件时项目与用户配置都清）')
   .option('--project', '只清项目配置')
   .option('--user', '只清用户配置')
   .action(configUnset);

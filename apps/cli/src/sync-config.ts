@@ -28,6 +28,11 @@ export interface SyncSettings {
 }
 
 export interface EatConfig {
+  /**
+   * 记住的平台地址（决策 59）。放这里而不是凭证文件里：
+   * 凭证会随 logout / 过期消失，地址不该跟着一起丢，否则裸跑 eat login 会回落到 localhost。
+   */
+  server?: string;
   sync?: SyncSettings;
 }
 

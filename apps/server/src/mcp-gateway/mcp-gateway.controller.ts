@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Req, Res } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Logger, Param, Post, Query, Req, Res } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { IncomingMessage } from 'node:http';
 import { pipeline } from 'node:stream/promises';
@@ -13,6 +13,21 @@ import { filterRequestHeaders, filterResponseHeaders, requestUpstream, UpstreamR
 interface CallShape {
   method: string | null;
   toolName: string | null;
+}
+
+/**
+ * 转发失败时的**技术原因**，只进调用记录与服务端日志，不回给调用方（照决策 33）。
+ *
+ * 回给客户端的那句「这个服务暂时连不上」对排查毫无帮助：一次 502 背后可能是 DNS 解析不了、
+ * 连接被中途重置、TLS 握手失败……而这些差别恰恰决定了该去查谁。原先这些细节被整句丢掉，
+ * 留在记录里的只有那句安慰话，等于每次都要靠猜。
+ */
+function describeCause(err: unknown): string {
+  if (err instanceof UpstreamRejected) return err.message;
+  const e = err as { code?: unknown; name?: unknown; message?: unknown };
+  const code = typeof e?.code === 'string' ? e.code : typeof e?.name === 'string' ? e.name : 'ERROR';
+  const message = typeof e?.message === 'string' ? e.message : String(err);
+  return `${code}: ${message}`.slice(0, 500);
 }
 
 /** 从 JSON-RPC 请求体里取要记的那两个字段。**不碰 params 的其余部分**（业务数据 / 可能含密钥） */
@@ -65,6 +80,8 @@ function readFirstChunk(res: IncomingMessage): Promise<Buffer | undefined> {
 
 @Controller()
 export class McpGatewayController {
+  private readonly logger = new Logger(McpGatewayController.name);
+
   constructor(
     private readonly gateway: McpGatewayService,
     private readonly subs: McpSubscriptionsService,
@@ -138,7 +155,8 @@ export class McpGatewayController {
     const shape = describeCall(httpMethod, body);
     let identity: GatewayIdentity | null = null;
 
-    const fail = async (status: number, code: string, message: string) => {
+    // detail 是给运维看的技术原因（调用记录 + 服务端日志），message 是给调用方看的那句话
+    const fail = async (status: number, code: string, message: string, detail?: string) => {
       await this.gateway.recordCall({
         tokenId: identity?.tokenId ?? null,
         userId: identity?.user.id ?? null,
@@ -147,8 +165,13 @@ export class McpGatewayController {
         toolName: shape.toolName,
         status: 0,
         durationMs: Date.now() - startedAt,
-        error: message,
+        error: detail ?? message,
       });
+      // 容器日志里也留一条：出问题时多半先看的是这里（上游地址与凭证一个字都不打）
+      this.logger.warn(
+        `网关转发失败 ${code} slug=${slug} method=${shape.method ?? '-'} tool=${shape.toolName ?? '-'} ` +
+          `耗时=${Date.now() - startedAt}ms 原因=${detail ?? message}`,
+      );
       if (reply.sent || reply.raw.headersSent) {
         reply.raw.end();
         return;
@@ -168,7 +191,7 @@ export class McpGatewayController {
       target = await this.gateway.resolveUpstream(identity.config);
     } catch (err) {
       const message = err instanceof UpstreamRejected ? err.message : '这个服务暂时不可用，请联系配置负责人';
-      await fail(502, 'MCP_GATEWAY_UPSTREAM_UNAVAILABLE', message);
+      await fail(502, 'MCP_GATEWAY_UPSTREAM_UNAVAILABLE', message, describeCause(err));
       return;
     }
 
@@ -215,7 +238,12 @@ export class McpGatewayController {
       if (status >= 300 && status < 400) {
         // 3xx 交回客户端就等于把上游真实地址交出去了
         upstream.destroy();
-        await fail(502, 'MCP_GATEWAY_UPSTREAM_UNAVAILABLE', '这个服务的地址配置有误，请联系配置负责人');
+        await fail(
+          502,
+          'MCP_GATEWAY_UPSTREAM_UNAVAILABLE',
+          '这个服务的地址配置有误，请联系配置负责人',
+          `上游回了 ${status} 跳转（平台不跟随跳转，以免把上游地址交出去）`,
+        );
         return;
       }
 
@@ -269,12 +297,13 @@ export class McpGatewayController {
           504,
           'MCP_GATEWAY_UPSTREAM_TIMEOUT',
           `这个服务超过 ${Math.round(timeoutMs / 1000)} 秒没有响应，请稍后重试或联系配置负责人`,
+          `等上游响应头超过 ${timeoutMs}ms（可用 EAT_MCP_GATEWAY_UPSTREAM_TIMEOUT_MS 调整）`,
         );
         return;
       }
       const message =
         err instanceof UpstreamRejected ? err.message : '这个服务暂时连不上，请稍后重试或联系配置负责人';
-      await fail(502, 'MCP_GATEWAY_UPSTREAM_UNAVAILABLE', message);
+      await fail(502, 'MCP_GATEWAY_UPSTREAM_UNAVAILABLE', message, describeCause(err));
     } finally {
       clearTimeout(headerTimer);
       reply.raw.off('close', onClientGone);

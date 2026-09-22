@@ -27,6 +27,18 @@ export interface AppConfig {
    * 拿到响应头之后的流式传输不设限：SSE 本来就是长连接。
    */
   mcpGatewayUpstreamTimeoutMs: number;
+  /**
+   * 空闲 keep-alive 连接的保持时长（毫秒，决策 61）。**必须比前置反向代理的空闲连接回收时间更长。**
+   *
+   * Fastify 的默认值是 72 秒，而 Traefik（Dokploy 用的就是它）默认把到后端的空闲连接留 90 秒。
+   * 两者一错位就出现一个 72–90 秒的窗口：代理以为连接还活着、后端其实已经关了，
+   * 复用时撞上 FIN——而 Go 的 http.Transport **不会重试带 body 的 POST**，客户端直接拿到 502。
+   * 平台这边连请求都没收到，所以调用记录里连一行都不会有。
+   *
+   * 这条只影响「两次请求之间隔得比较久」的调用方：AI Agent 想一会儿再调一次工具，正好落在窗口里；
+   * 而连着点的测试工具永远撞不上——「同一个地址，别人用没事、我这边就 502」的典型成因。
+   */
+  keepAliveTimeoutMs: number;
 }
 
 /** 环境变量里的正整数；写歪了就用默认值，**绝不能把 NaN 交给 setTimeout**（那等于立刻超时） */
@@ -51,5 +63,7 @@ export function loadConfig(): AppConfig {
     mcpGatewayAllowPrivateUpstream: process.env.EAT_MCP_GATEWAY_ALLOW_PRIVATE === '1',
     mcpGatewayCallRetentionDays: positiveInt(process.env.EAT_MCP_GATEWAY_CALL_RETENTION_DAYS, 90),
     mcpGatewayUpstreamTimeoutMs: positiveInt(process.env.EAT_MCP_GATEWAY_UPSTREAM_TIMEOUT_MS, 180_000),
+    // 默认 120 秒：高于 Traefik / Go 默认的 90 秒空闲回收，也高于 nginx、云厂商 LB 常见的 60 秒
+    keepAliveTimeoutMs: positiveInt(process.env.EAT_KEEP_ALIVE_TIMEOUT_MS, 120_000),
   };
 }

@@ -548,9 +548,13 @@ function GatewayCallsDialog({ onClose }: { onClose: () => void }) {
                     </TableCell>
                     <TableCell>
                       {r.status === 0 ? (
-                        <Badge variant="destructive" title={r.error ?? undefined}>
-                          失败
-                        </Badge>
+                        // 失败原因直接摊开：藏在 title 里等于没有，排查时要看的就是这一句
+                        <div className="space-y-1">
+                          <Badge variant="destructive">失败</Badge>
+                          {r.error && (
+                            <div className="max-w-56 break-words text-xs text-muted-foreground">{r.error}</div>
+                          )}
+                        </div>
                       ) : r.status < 400 ? (
                         <Badge variant="success">{r.status}</Badge>
                       ) : (
