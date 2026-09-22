@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 19;
+export const PLATFORM_GUIDE_VERSION = 20;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -23,7 +23,7 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 ### 需要配置 / 密钥 / 连接串（环境变量）
 
 1. 先看清单认路：MCP 工具 \`list_env_variables\`（或 \`eat env list\`）。每个变量都带备注说明用途，先确认目标再取值，不要盲目拉全量。
-2. 取值：\`get_env_values\`（或 \`eat env pull <环境> --keys KEY1,KEY2\`）。
+2. 取值：\`get_env_values\`（或 \`eat env pull <环境> --keys KEY1,KEY2\`）。**\`eat env pull\` 会往本地写 \`.env\`**：同名文件不是 eat 写的时会直接中止报错——那是用户自己维护的文件，覆盖了就没了。按报错里的出路走：\`--out <别的文件>\` 写到别处、\`--print\` 只打印不落盘；**不要习惯性加 \`--force\`**，确实该覆盖再加（会先自动备份）。
 3. 无权限会返回结构化 \`PERMISSION_REQUIRED\`：**不要重试、不要猜值、不要向用户索要**。用 \`request_access\`（或 \`eat env request <环境> <KEY> --reason "<用途>"\`）附真实理由发起申请，告诉用户已申请、需等资源 Owner 审批；之后用 \`get_access_request_status\` 查进度，批准后重新取值。
 
 ### 遇到搞不定的内部问题（求助真人）
@@ -50,7 +50,7 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 
 **首次部署需要管理员授权一次**：新建的应用 \`deployApproved=false\`，部署会返回 \`DEPLOY_NOT_APPROVED\`——告诉用户找管理员在控制台「应用」页点「授权部署」，**不要反复重试**；授权一次后永久有效。
 
-**应用 env**：\`eat app env pull <slug>\` / \`eat app env push <slug> --file .env\`（MCP: \`get_app_env\` / \`set_app_env\`）读写应用的运行时 env；加 \`--build\`（MCP: \`target=build\`）是构建时变量（Dockerfile 里以 ARG 取用）。**推送是整体覆盖不是合并**：先 pull 再改再 push，否则没带上的变量会被删掉。值可能是密钥，只用于当前任务、不写进代码或对话。
+**应用 env**：\`eat app env pull <slug>\` / \`eat app env push <slug> --file .env\`（MCP: \`get_app_env\` / \`set_app_env\`）读写应用的运行时 env；加 \`--build\`（MCP: \`target=build\`）是构建时变量（Dockerfile 里以 ARG 取用）。**推送是整体覆盖不是合并**：先 pull 再改再 push，否则没带上的变量会被删掉。pull 的落盘规则同环境变量那节：同名文件不是 eat 写的会中止，按提示用 \`--out\` / \`--print\`，别无脑 \`--force\`。值可能是密钥，只用于当前任务、不写进代码或对话。
 
 **部署**：\`eat deploy [slug]\`（MCP: \`trigger_deploy\`）。部署前 CLI 会自动做密钥扫描，报告不过会被拒绝——按报告修复后重试，**不要绕过检查**。从云端 HTTP MCP 端点触发时平台拿不到本地代码，那次部署做不了扫描、会被标成「未做密钥扫描」：手边有代码和终端就用 CLI 部署。
 
@@ -78,13 +78,13 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 |---|---|
 | \`eat sync\` | 同步 Skill 与 MCP 配置到本地（本指南也由它维护更新）。**落点由配置记住，裸跑即可**：默认全局 \`~/.agents/skills\`，\`--project\` 装到当前项目 \`./.agents/skills\`，\`--dir <目录>\` 直接落该目录、不创建 \`.agents\` / \`.claude\`（给不用这套目录规范的 Agent）。带参数跑过一次就会被记住，之后裸跑落到同一处；\`--dry-run\` 只看落点与将要变更的内容、不写文件 |
 | \`eat config list / set / unset\` | 看/改 \`eat sync\` 的落点（\`set sync.dir <目录>\`、\`set sync.scope global|project|dir\`）。**装到了非预期的位置就改这里**，别每次给 \`eat sync\` 带参数——更新提示让你执行的是裸命令 |
-| \`eat env list / pull / request\` | 环境变量：看清单 / 取值 / 申请权限 |
+| \`eat env list / pull / request\` | 环境变量：看清单 / 取值（默认写本地 \`.env\`）/ 申请权限。同名文件不是 eat 写的时 pull 会中止，改 \`--out <文件>\` 或 \`--print\`，别无脑 \`--force\` |
 | \`eat skill list / export <slug>\` | 看团队里有哪些 skill（默认 100 条；\`--search <词>\` 按关键词过滤、\`--scope subscribed|unsubscribed|mine\`、\`--kind bundled|private|experience|…\` 筛选、\`--limit <n>\` 最多 1000）/ 把某个 skill 下载到本地目录（\`--out\` 指定落点）——想读它的完整内容、或以它为底改一份自己的时用 |
 | \`eat skill push <dir>\` | 把本地写好的 skill 上传到平台纳管分享（改别人的 skill 要么你是作者，要么 \`--slug\` 换个名字推成自己的）。**推送不会自动订阅**：想让它随 \`eat sync\` 落到本地，还要 \`eat skill subscribe <slug>\` 一次 |
 | \`eat skill subscribe / unsubscribe <slug>\` | 订阅 / 退订（决定它进不进 \`eat sync\` 的范围）。清单里标 \`◆\` 的是**捆绑** skill：管理员设定、全员始终同步，退订会被拒绝，这是正常的，别反复重试 |
 | \`eat ask create / show / reply\` | 求助的 CLI 入口 |
 | \`eat app create / update / delete <slug>\` | 自助创建应用（\`--repo\` + \`--build dockerfile|static\`，dockerfile 加 \`--port\` 声明容器端口，\`--description\` 写一句应用说明；管理员配了后缀则自动得到域名）/ 改配置 / 删除 |
-| \`eat app env pull / push <slug> [--build]\` | 读写应用的 env（运行时；\`--build\` 为构建时），push 是整体覆盖 |
+| \`eat app env pull / push <slug> [--build]\` | 读写应用的 env（运行时；\`--build\` 为构建时），push 是整体覆盖；pull 的落盘规则同上一行 |
 | \`eat deploy [slug]\` | 触发部署（自动前置检查；应用需先经管理员授权一次） |
 | \`eat app list / show / status / deployments\` | 应用清单 / 配置详情 / 最近一次部署状态 / 部署历史（\`--all\` 看完整历史） |
 | \`eat app build-logs / run-logs <slug>\` | 构建日志 / 运行日志（排查部署与线上问题的第一手材料） |

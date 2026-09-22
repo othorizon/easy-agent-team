@@ -9,6 +9,7 @@ import {
   STATIC_CONTAINER_PORT,
   appBuildTypeSchema,
   formatDateTime,
+  parseDotenv,
 } from '@eat/shared';
 import type {
   AppBuildType,
@@ -25,6 +26,7 @@ import type {
   UpdateAppRequest,
 } from '@eat/shared';
 import { Api } from '../client.js';
+import { printWriteResult, stripEatHeader, writeEnvFile } from '../dotenv-file.js';
 import { scanWorkspace } from '../scan.js';
 
 /** 部署记录状态（决策 30：queued/archived 是平台补的，其余直接是 Dokploy 构建记录的取值） */
@@ -356,7 +358,10 @@ export async function appDelete(slug: string, opts: { yes?: boolean }): Promise<
 const targetOf = (build?: boolean): AppEnvTarget => (build ? 'build' : 'runtime');
 const defaultEnvFile = (target: AppEnvTarget): string => (target === 'build' ? '.env.build' : '.env');
 
-export async function appEnvPull(slug: string, opts: { build?: boolean; out?: string; print?: boolean }): Promise<void> {
+export async function appEnvPull(
+  slug: string,
+  opts: { build?: boolean; out?: string; print?: boolean; force?: boolean },
+): Promise<void> {
   const api = Api.fromSaved();
   const target = targetOf(opts.build);
   const env = await api.request<AppEnv>('GET', `/api/apps/${slug}/env`);
@@ -365,10 +370,14 @@ export async function appEnvPull(slug: string, opts: { build?: boolean; out?: st
     process.stdout.write(content.endsWith('\n') || content === '' ? content : `${content}\n`);
     return;
   }
-  const out = opts.out ?? defaultEnvFile(target);
-  fs.writeFileSync(out, content, { mode: 0o600 });
-  const keys = content.split('\n').filter((l) => /^\s*(export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=/.test(l)).length;
-  console.log(`已写入 ${out}（${slug} 的${APP_ENV_TARGET_LABEL[target]} env，${keys} 个变量）——值受平台审计，请勿提交到代码仓库`);
+  // 同名文件不是 eat 写的就中止，不静默覆盖用户自己的 .env（决策 63）
+  const written = writeEnvFile({
+    file: opts.out ?? defaultEnvFile(target),
+    content,
+    command: `eat app env pull ${slug}${opts.build ? ' --build' : ''}`,
+    force: opts.force,
+  });
+  printWriteResult(written, `${slug} 的${APP_ENV_TARGET_LABEL[target]} env，${parseDotenv(content).size} 个变量`);
 }
 
 export async function appEnvPush(slug: string, opts: { build?: boolean; file?: string }): Promise<void> {
@@ -376,7 +385,8 @@ export async function appEnvPush(slug: string, opts: { build?: boolean; file?: s
   const target = targetOf(opts.build);
   const file = opts.file ?? defaultEnvFile(target);
   if (!fs.existsSync(file)) throw new Error(`文件不存在: ${file}（--file 指定要推送的 dotenv 文件）`);
-  const content = fs.readFileSync(file, 'utf8');
+  // pull 写的标记行不能回推到平台，否则 pull → push 来回一次就多积一层头
+  const content = stripEatHeader(fs.readFileSync(file, 'utf8'));
   const r = await api.request<AppEnvChange>('PUT', `/api/apps/${slug}/env`, { target, content });
   console.log(`已用 ${file} 整体覆盖 ${slug} 的${APP_ENV_TARGET_LABEL[target]} env（下次部署生效）`);
   const line = (label: string, keys: string[]) => keys.length && console.log(`  ${label}: ${keys.join(', ')}`);
