@@ -24,6 +24,7 @@
 | `EAT_HELP_RATE_LIMIT` | | 每用户每小时求助上限，默认 10 |
 | `EAT_MCP_GATEWAY_ALLOW_PRIVATE` | | 设为 `1` 允许 MCP 网关转发到内网 / 回环 / 保留地址。**默认关闭**——任何成员都能建 MCP 配置，开着等于让平台成为可被成员驱动的 SSRF 跳板（云 metadata、平台自己的内网服务都在射程内）。只有「能建 MCP 配置的人都可信」且确实要连内网 MCP 服务时才打开 |
 | `EAT_MCP_GATEWAY_CALL_RETENTION_DAYS` | | MCP 网关调用记录保留天数，默认 90；到期由服务进程每日清扫删除 |
+| `EAT_MCP_GATEWAY_UPSTREAM_TIMEOUT_MS` | | MCP 网关等上游**响应头**的上限（毫秒），默认 180000（3 分钟）。多数 MCP 服务是等结果出来才发响应头，所以这个值实际管的是单次 `tools/call` 能跑多久——**要比客户端自己的超时更宽松**，否则网关会先于客户端掐断。拿到响应头之后的流式传输不设限（SSE 是长连接）；超时会明确回 `504 MCP_GATEWAY_UPSTREAM_TIMEOUT` 并留下调用记录 |
 | `NODE_ENV` | | 镜像内已设为 `production`（生产模式下缺少 `EAT_KEK` 会拒绝启动） |
 | `TZ` | | 服务进程时区。`Dockerfile_cn` 镜像内已设为 `Asia/Shanghai`（北京时间），根目录 `Dockerfile` 未设即 UTC；只影响日志时间戳等本地时间输出，数据库时间列均带时区、不受影响。运行时传 `TZ` 可覆盖镜像默认值 |
 

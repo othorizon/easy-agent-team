@@ -1,14 +1,14 @@
 import { Body, Controller, Delete, Get, Param, Post, Query, Req, Res } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { IncomingMessage } from 'node:http';
+import { pipeline } from 'node:stream/promises';
 import { mcpGatewayCallQuerySchema, type McpGatewayCallQuery } from '@eat/shared';
 import { CurrentUser, Public, type AuthUser } from '../auth/auth.decorators';
 import { ZodValidationPipe } from '../common/zod.pipe';
+import { loadConfig } from '../config';
 import { McpSubscriptionsService } from '../mcp-configs/mcp-subscriptions.service';
 import { McpGatewayService, type GatewayIdentity } from './mcp-gateway.service';
-import { filterRequestHeaders, filterResponseHeaders, UpstreamRejected } from './upstream';
-
-/** 拿到上游响应头之前的等待上限；之后的流式传输不设限（SSE 本来就是长连接） */
-const UPSTREAM_HEADER_TIMEOUT_MS = 30_000;
+import { filterRequestHeaders, filterResponseHeaders, requestUpstream, UpstreamRejected } from './upstream';
 
 interface CallShape {
   method: string | null;
@@ -31,9 +31,36 @@ function describeCall(httpMethod: string, body: unknown): CallShape {
  * 要正确代理它得把地址重写并再开一条路由。这里选择**明确报错而不是半代理**——
  * 泄漏上游地址比不支持旧传输严重得多。
  */
-function looksLikeLegacyEndpointEvent(chunk: Uint8Array): boolean {
-  const head = Buffer.from(chunk.subarray(0, 2048)).toString('utf8');
+function looksLikeLegacyEndpointEvent(chunk: Buffer): boolean {
+  const head = chunk.subarray(0, 2048).toString('utf8');
   return /(^|\n)event:\s*endpoint\s*\r?\n/.test(head);
+}
+
+/** 取响应体的第一块后就地暂停，剩下的留给后面的 pipeline；流直接结束时返回 undefined */
+function readFirstChunk(res: IncomingMessage): Promise<Buffer | undefined> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      res.off('data', onData);
+      res.off('end', onEnd);
+      res.off('error', onError);
+    };
+    const onData = (chunk: Buffer) => {
+      res.pause();
+      cleanup();
+      resolve(chunk);
+    };
+    const onEnd = () => {
+      cleanup();
+      resolve(undefined);
+    };
+    const onError = (err: Error) => {
+      cleanup();
+      reject(err);
+    };
+    res.on('data', onData);
+    res.on('end', onEnd);
+    res.on('error', onError);
+  });
 }
 
 @Controller()
@@ -145,47 +172,65 @@ export class McpGatewayController {
       return;
     }
 
+    const timeoutMs = loadConfig().mcpGatewayUpstreamTimeoutMs;
     const controller = new AbortController();
-    // 客户端断开时别让上游连接挂着（SSE 下这尤其重要）
-    const onClose = () => controller.abort();
-    req.raw.on('close', onClose);
-    const headerTimer = setTimeout(() => controller.abort(), UPSTREAM_HEADER_TIMEOUT_MS);
+    let clientGone = false;
+    let timedOut = false;
+
+    /**
+     * 客户端还在不在，**只能看响应侧**：Node 16 起 `IncomingMessage` 的 `close`
+     * 在请求体读完时就触发、并把流标记成 destroyed，跟「客户端断开」根本是两回事
+     * （POST 走到这个方法时 `req.raw.destroyed` 早已是 true）。拿它当断开判据，
+     * 结果是任何一次上游超时都会被当成「客户端自己走了」而静默收场。
+     * 响应没写完就 close 的，才是真断开。
+     */
+    const onClientGone = () => {
+      if (reply.raw.writableFinished) return;
+      clientGone = true;
+      controller.abort();
+    };
+    reply.raw.on('close', onClientGone);
+    // 客户端断在流中途时，在途的那次 write 会在已销毁的流上报错；没人听 'error' 会直接掀掉进程
+    reply.raw.on('error', () => undefined);
+
+    // 只管到「拿到响应头」为止：之后的流式传输不设限（SSE 本来就是长连接）
+    const headerTimer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
 
     try {
-      const upstream = await fetch(target.url, {
+      const upstream = await requestUpstream(target.url, {
         method: httpMethod,
         headers: {
           ...filterRequestHeaders(req.headers as Record<string, string | string[] | undefined>),
           ...target.headers,
         },
         body: httpMethod === 'POST' ? JSON.stringify(body ?? {}) : undefined,
-        // 不跟随重定向：3xx 交回客户端就等于把上游真实地址交出去了
-        redirect: 'manual',
         signal: controller.signal,
       });
       clearTimeout(headerTimer);
+      const status = upstream.statusCode ?? 502;
 
-      if (upstream.status >= 300 && upstream.status < 400) {
+      if (status >= 300 && status < 400) {
+        // 3xx 交回客户端就等于把上游真实地址交出去了
+        upstream.destroy();
         await fail(502, 'MCP_GATEWAY_UPSTREAM_UNAVAILABLE', '这个服务的地址配置有误，请联系配置负责人');
         return;
       }
 
-      const reader = upstream.body?.getReader();
-      let firstChunk: Uint8Array | undefined;
-      if (reader && (upstream.headers.get('content-type') ?? '').includes('text/event-stream')) {
+      let firstChunk: Buffer | undefined;
+      if ((upstream.headers['content-type'] ?? '').includes('text/event-stream')) {
         // 先看一眼第一块再决定要不要落响应头，避免旧传输下吐出半截流
-        const first = await reader.read();
-        if (!first.done && first.value) {
-          if (looksLikeLegacyEndpointEvent(first.value)) {
-            controller.abort();
-            await fail(
-              502,
-              'MCP_GATEWAY_UPSTREAM_UNSUPPORTED',
-              '这个服务用的是已弃用的 SSE 传输方式，平台暂不支持代理，请联系配置负责人改用 Streamable HTTP',
-            );
-            return;
-          }
-          firstChunk = first.value;
+        firstChunk = await readFirstChunk(upstream);
+        if (firstChunk && looksLikeLegacyEndpointEvent(firstChunk)) {
+          upstream.destroy();
+          await fail(
+            502,
+            'MCP_GATEWAY_UPSTREAM_UNSUPPORTED',
+            '这个服务用的是已弃用的 SSE 传输方式，平台暂不支持代理，请联系配置负责人改用 Streamable HTTP',
+          );
+          return;
         }
       }
 
@@ -195,31 +240,36 @@ export class McpGatewayController {
         configId: identity.config.id,
         method: shape.method,
         toolName: shape.toolName,
-        status: upstream.status,
+        status,
         durationMs: Date.now() - startedAt,
       });
 
       // 从这里起接管原始响应：SSE 必须逐块吐出去，不能让框架缓冲或序列化
       reply.hijack();
-      reply.raw.writeHead(upstream.status, filterResponseHeaders(upstream.headers));
+      reply.raw.writeHead(status, filterResponseHeaders(upstream.headers));
       if (typeof reply.raw.flushHeaders === 'function') reply.raw.flushHeaders();
+      if (firstChunk) reply.raw.write(firstChunk);
 
-      if (!reader) {
-        reply.raw.end();
-        return;
+      try {
+        // pipeline 管背压、收尾与两端的错误传播；客户端中途断开在这里表现为 reject
+        await pipeline(upstream, reply.raw);
+      } catch {
+        // 响应头早就发出去了，没有「改回一个错误码」这个选项，只能就地掐断让客户端看到截断
+        if (!reply.raw.writableEnded) reply.raw.destroy();
       }
-      if (firstChunk) reply.raw.write(Buffer.from(firstChunk));
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) reply.raw.write(Buffer.from(value));
-      }
-      reply.raw.end();
     } catch (err) {
       clearTimeout(headerTimer);
       // 客户端自己断开不算故障
-      if (controller.signal.aborted && req.raw.destroyed) {
+      if (clientGone) {
         if (!reply.raw.writableEnded) reply.raw.end();
+        return;
+      }
+      if (timedOut) {
+        await fail(
+          504,
+          'MCP_GATEWAY_UPSTREAM_TIMEOUT',
+          `这个服务超过 ${Math.round(timeoutMs / 1000)} 秒没有响应，请稍后重试或联系配置负责人`,
+        );
         return;
       }
       const message =
@@ -227,7 +277,7 @@ export class McpGatewayController {
       await fail(502, 'MCP_GATEWAY_UPSTREAM_UNAVAILABLE', message);
     } finally {
       clearTimeout(headerTimer);
-      req.raw.off('close', onClose);
+      reply.raw.off('close', onClientGone);
     }
   }
 }

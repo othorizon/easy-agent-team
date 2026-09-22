@@ -17,8 +17,9 @@ import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import * as path from 'node:path';
 import { Pool } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
+import { loadConfig } from '../src/config';
 import * as schema from '../src/db/schema';
 import { assertSafeUpstream, isPrivateAddress } from '../src/mcp-gateway/upstream';
 
@@ -34,7 +35,9 @@ let upstreamUrl: string;
 
 /** 假上游的行为开关：每个用例按需切 */
 const upstreamMode = {
-  kind: 'json' as 'json' | 'sse' | 'legacy-sse' | 'unauthorized' | 'redirect',
+  kind: 'json' as 'json' | 'slow-json' | 'sse' | 'legacy-sse' | 'unauthorized' | 'redirect',
+  /** slow-json 下等多久才回，用来模拟跑几十秒的 tools/call */
+  delayMs: 0,
 };
 /** 最近一次上游收到的请求头，用来断言凭证注入与头部过滤 */
 let lastUpstreamHeaders: http.IncomingHttpHeaders = {};
@@ -65,6 +68,8 @@ async function callGateway(url: string, body: unknown = { jsonrpc: '2.0', id: 1,
 function startUpstream(): Promise<void> {
   upstream = http.createServer((req, res) => {
     lastUpstreamHeaders = req.headers;
+    // 网关超时后会把连接断掉，这边迟到的写入会报错——没人听就会掀掉测试进程
+    res.on('error', () => undefined);
     const finish = () => {
       if (upstreamMode.kind === 'unauthorized') {
         res.writeHead(401, {
@@ -84,6 +89,15 @@ function startUpstream(): Promise<void> {
         res.writeHead(200, { 'content-type': 'text/event-stream' });
         res.write('event: endpoint\ndata: /messages?sessionId=abc123\n\n');
         return; // 故意挂着，等网关断开
+      }
+      if (upstreamMode.kind === 'slow-json') {
+        const timer = setTimeout(() => {
+          if (res.destroyed) return;
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { ok: true, slow: true } }));
+        }, upstreamMode.delayMs);
+        res.on('close', () => clearTimeout(timer));
+        return;
       }
       if (upstreamMode.kind === 'sse') {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'mcp-session-id': 'sess-1' });
@@ -536,6 +550,65 @@ describe('凭证归属按传输方式收敛（决策 52）', () => {
       (c: { slug: string }) => c.slug === 'svc-switch',
     );
     expect(info.env).toEqual({});
+  });
+});
+
+describe('MCP 网关：长耗时调用（决策 58）', () => {
+  afterEach(() => {
+    delete process.env.EAT_MCP_GATEWAY_UPSTREAM_TIMEOUT_MS;
+    upstreamMode.kind = 'json';
+    upstreamMode.delayMs = 0;
+  });
+
+  it('上游慢慢回也照样把结果完整带回来', async () => {
+    const url = await setupSubscribedConfig('svc-slow');
+    process.env.EAT_MCP_GATEWAY_UPSTREAM_TIMEOUT_MS = '5000';
+    upstreamMode.kind = 'slow-json';
+    upstreamMode.delayMs = 1200;
+
+    const res = await callGateway(url, {
+      jsonrpc: '2.0',
+      id: 9,
+      method: 'tools/call',
+      params: { name: 'slow_tool', arguments: {} },
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ result: { ok: true, slow: true } });
+  });
+
+  it('真超时时给明确的 504 并留痕，而不是一个空的 200', async () => {
+    // 回归点：旧实现拿 `req.raw.destroyed` 当「客户端断开」的判据，而 Node 16 起
+    // 请求体读完就会把它置真，于是**每一次上游超时都被当成客户端自己走了**，
+    // 走 `reply.raw.end()` 发出一个没有 body 的 200——客户端拿不到任何 JSON-RPC
+    // 响应（表现就是「调用了但什么都没回来」），平台侧还连条记录都不留。
+    const url = await setupSubscribedConfig('svc-timeout');
+    process.env.EAT_MCP_GATEWAY_UPSTREAM_TIMEOUT_MS = '600';
+    upstreamMode.kind = 'slow-json';
+    upstreamMode.delayMs = 5000;
+
+    const res = await callGateway(url, {
+      jsonrpc: '2.0',
+      id: 10,
+      method: 'tools/call',
+      params: { name: 'too_slow', arguments: {} },
+    });
+    expect(res.status).toBe(504);
+    const body = (await res.json()) as { error: string; message: string };
+    expect(body.error).toBe('MCP_GATEWAY_UPSTREAM_TIMEOUT');
+    expect(body.message).toContain('没有响应');
+
+    const list = (await api('GET', '/api/mcp-gateway/calls?slug=svc-timeout', { token: adminToken })).body;
+    expect(list.items[0].toolName).toBe('too_slow');
+    expect(list.items[0].error).toContain('没有响应');
+  });
+
+  it('默认上限远宽于客户端自己的超时，网关不该是先放弃的那个', () => {
+    // 常见 MCP 客户端的单次调用超时是 60 秒，网关的默认值要明显宽于它
+    delete process.env.EAT_MCP_GATEWAY_UPSTREAM_TIMEOUT_MS;
+    expect(loadConfig().mcpGatewayUpstreamTimeoutMs).toBeGreaterThanOrEqual(180_000);
+    // 写歪的值不能变成「立刻超时」：NaN 交给 setTimeout 等于 0 毫秒
+    process.env.EAT_MCP_GATEWAY_UPSTREAM_TIMEOUT_MS = '不是数字';
+    expect(loadConfig().mcpGatewayUpstreamTimeoutMs).toBeGreaterThanOrEqual(180_000);
   });
 });
 
