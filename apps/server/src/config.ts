@@ -28,6 +28,20 @@ export interface AppConfig {
    */
   mcpGatewayUpstreamTimeoutMs: number;
   /**
+   * 网关到上游那条 TCP 连接的 keepalive 空闲探测间隔（毫秒，决策 62）。**0 = 关闭。**
+   *
+   * 一次 `tools/call` 动辄几十秒，期间连接上一个字节都不动。路上的 NAT / 防火墙 /
+   * 云网关会按自己的空闲表项超时把这种连接**静默丢掉**——不发 RST 也不发 FIN，
+   * 于是平台这端既不知道断了也等不到数据，最后以 `read ETIMEDOUT` 收场，对外是一个 502。
+   * 开了 keepalive 之后，空闲期每隔这么久就有一个探测包在这条连接上来回，
+   * 中间设备的空闲计时器被不断刷新，连接活到上游真正回话为止。
+   *
+   * 取值要明显小于路上最短的那个空闲回收时间（线上实测约 40 秒就被丢，故默认 15 秒）。
+   * 注意它只保得住**连接层**：如果掐连接的是应用层（某些边缘网关对「一直没有响应体」的流有独立上限），
+   * 那得靠上游在流上发心跳，keepalive 帮不上忙。
+   */
+  mcpGatewayUpstreamKeepAliveMs: number;
+  /**
    * 空闲 keep-alive 连接的保持时长（毫秒，决策 61）。**必须比前置反向代理的空闲连接回收时间更长。**
    *
    * Fastify 的默认值是 72 秒，而 Traefik（Dokploy 用的就是它）默认把到后端的空闲连接留 90 秒。
@@ -47,6 +61,12 @@ function positiveInt(raw: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+/** 同上，但允许 0——给「这个开关能关掉」的配置项用（写歪了仍然回落默认值，不会变成 0） */
+function nonNegativeInt(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
 export function loadConfig(): AppConfig {
   const kek = process.env.EAT_KEK ?? '';
   if (!kek && process.env.NODE_ENV === 'production') {
@@ -63,6 +83,8 @@ export function loadConfig(): AppConfig {
     mcpGatewayAllowPrivateUpstream: process.env.EAT_MCP_GATEWAY_ALLOW_PRIVATE === '1',
     mcpGatewayCallRetentionDays: positiveInt(process.env.EAT_MCP_GATEWAY_CALL_RETENTION_DAYS, 90),
     mcpGatewayUpstreamTimeoutMs: positiveInt(process.env.EAT_MCP_GATEWAY_UPSTREAM_TIMEOUT_MS, 180_000),
+    // 默认 15 秒：低于常见 NAT / 云网关的空闲回收时间（30~60 秒），也低于线上实测的那条约 40 秒的上限
+    mcpGatewayUpstreamKeepAliveMs: nonNegativeInt(process.env.EAT_MCP_GATEWAY_UPSTREAM_KEEPALIVE_MS, 15_000),
     // 默认 120 秒：高于 Traefik / Go 默认的 90 秒空闲回收，也高于 nginx、云厂商 LB 常见的 60 秒
     keepAliveTimeoutMs: positiveInt(process.env.EAT_KEEP_ALIVE_TIMEOUT_MS, 120_000),
   };

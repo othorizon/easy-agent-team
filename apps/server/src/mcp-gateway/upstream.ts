@@ -133,6 +133,24 @@ export function filterResponseHeaders(headers: Record<string, string | string[] 
 }
 
 /**
+ * 给上游连接开 TCP keepalive（决策 62）。**单独提出来是为了能单测**——
+ * 这东西的失败形式是「调用没报错、内核里什么都没发生」，只看代码永远看不出来。
+ *
+ * `setKeepAlive(true, delayMs)` 在 Linux 上对应 SO_KEEPALIVE + TCP_KEEPIDLE，
+ * 探测间隔与次数沿用系统默认。HTTPS 也照样有效：TLSSocket 会把它转交给底下那条 TCP 连接
+ * （`/proc/net/tcp` 的 timer 字段能看到 keepalive 定时器被挂上，实测已确认）。
+ *
+ * 传 0 就是不开：连接层的保活在某些路径上帮不上忙（见 config 里的说明），留个关掉的口子。
+ */
+export function applyUpstreamKeepAlive(
+  socket: { setKeepAlive?: (enable: boolean, initialDelay: number) => unknown },
+  delayMs: number,
+): void {
+  if (!(delayMs > 0)) return;
+  socket.setKeepAlive?.(true, delayMs);
+}
+
+/**
  * 发起上游请求，拿到响应头就返回，响应体交给调用方自己流式转发。
  *
  * **刻意不用 `fetch`**（决策 58）：Node 内置的 fetch 底下是 undici，自带
@@ -151,6 +169,8 @@ export function requestUpstream(
   // 有 body 就显式给长度：默认的 chunked 编码有些上游不认
   if (init.body !== undefined) headers['content-length'] = String(Buffer.byteLength(init.body));
 
+  const keepAliveMs = loadConfig().mcpGatewayUpstreamKeepAliveMs;
+
   return new Promise((resolve, reject) => {
     const req = transport.request(
       url,
@@ -158,6 +178,8 @@ export function requestUpstream(
       // 不跟随重定向是 node:http 的默认行为，正合此处所需：3xx 原样交回调用方去判
       (res) => resolve(res),
     );
+    // 等上游回话的那几十秒里连接上没有任何字节，不保活就会被路上的 NAT / 网关静默丢掉
+    req.on('socket', (socket) => applyUpstreamKeepAlive(socket, keepAliveMs));
     req.on('error', reject);
     if (init.body !== undefined) req.write(init.body);
     req.end();
