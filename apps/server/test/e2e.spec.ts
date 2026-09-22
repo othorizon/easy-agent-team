@@ -61,10 +61,15 @@ afterAll(async () => {
 });
 
 describe('认证', () => {
-  it('健康检查无需登录', async () => {
+  it('健康检查无需登录，并回出生效中的保活时长（决策 61）', async () => {
     const r = await api('GET', '/api/health');
     expect(r.status).toBe(200);
     expect(r.body.ok).toBe(true);
+    // `Keep-Alive` 是 hop-by-hop 头、HTTP/2 里干脆禁用，从外面 curl 看不到；
+    // 而它小于前置代理的空闲回收时间就是一串「间歇 502 且平台侧无记录」，
+    // 所以必须有一条从外部可验证的读数。
+    expect(typeof r.body.keepAliveTimeoutMs).toBe('number');
+    expect(r.body.keepAliveTimeoutMs).toBeGreaterThan(0);
   });
 
   it('密码错误返回 401', async () => {
