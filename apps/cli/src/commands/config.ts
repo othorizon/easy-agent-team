@@ -13,16 +13,44 @@ import {
 } from '../sync-config.js';
 import { defaultLinkStrategy, describeResolution } from './sync.js';
 import { clearSyncTarget } from '../update.js';
+import { describeServerUrl, forgetServerUrl, normalizeServerUrl, rememberServerUrl } from '../config.js';
 
 /**
- * eat config：eat sync 的落点配置（决策 56）。
+ * eat config：eat sync 的落点（决策 56）与平台地址（决策 59）。
  *
- * 只开放 sync.scope / sync.dir 两个键——这里要解决的是「裸跑 eat sync 落到哪」，
+ * 只开放这三个键——要解决的是「裸跑 eat sync 落到哪」「裸跑 eat login 连哪台」，
  * 不是给 CLI 开一个什么都能塞的通用配置面。
  */
 
-const SET_KEYS = ['sync.scope', 'sync.dir'] as const;
-const UNSET_KEYS = ['sync', 'sync.scope', 'sync.dir'] as const;
+const SET_KEYS = ['sync.scope', 'sync.dir', 'server'] as const;
+const UNSET_KEYS = ['sync', 'sync.scope', 'sync.dir', 'server'] as const;
+
+const SOURCE_LABEL = {
+  env: '环境变量 EAT_SERVER',
+  credentials: '已保存的登录凭证',
+  config: '用户配置 server',
+  default: '内置默认（没登录过也没配过）',
+} as const;
+
+/** 平台地址是每条联网命令的前提，任何一条 config 命令都先把它打出来 */
+function printServer(): void {
+  const { url, source } = describeServerUrl();
+  console.log(`当前平台地址：${url}  （来源：${SOURCE_LABEL[source]}）`);
+}
+
+/** 只认 http/https 的绝对地址：写歪了要当场拦下，不然是下一次登录才炸 */
+function parseServerUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    throw new Error(`server 需要是完整地址，例如 https://eat.example.com，收到 "${value}"`);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`server 只能是 http / https 地址，收到 "${value}"`);
+  }
+  return normalizeServerUrl(url.toString());
+}
 
 interface FileOpts {
   project?: boolean;
@@ -59,6 +87,8 @@ function printResolution(cwd: string, title = '裸跑 eat sync 的落点：'): v
 
 export function configList(): void {
   const cwd = process.cwd();
+  printServer();
+  console.log('');
   printResolution(cwd);
 
   const configs = loadConfigs(cwd);
@@ -68,10 +98,11 @@ export function configList(): void {
   }
   for (const c of configs) {
     const sync = c.config.sync;
-    const desc = sync?.scope
-      ? `sync.scope=${sync.scope}${sync.dir ? `, sync.dir=${sync.dir}` : ''}`
-      : '（无 sync 配置）';
-    console.log(`  ${c.location === 'project' ? '项目配置' : '用户配置'} ${c.file}: ${desc}`);
+    const items = [
+      sync?.scope ? `sync.scope=${sync.scope}${sync.dir ? `, sync.dir=${sync.dir}` : ''}` : null,
+      c.config.server ? `server=${c.config.server}` : null,
+    ].filter((i): i is string => i !== null);
+    console.log(`  ${c.location === 'project' ? '项目配置' : '用户配置'} ${c.file}: ${items.join('；') || '（空）'}`);
   }
   console.log('\n  项目配置优先于用户配置；环境变量 EAT_SYNC_SCOPE / EAT_SYNC_DIR 优先于两者，命令行参数优先于一切。');
 }
@@ -79,6 +110,10 @@ export function configList(): void {
 export function configGet(key: string): void {
   if (!(UNSET_KEYS as readonly string[]).includes(key)) {
     throw new Error(`未知配置项 ${key}，可用：${UNSET_KEYS.join(' / ')}`);
+  }
+  if (key === 'server') {
+    printServer();
+    return;
   }
   const cwd = process.cwd();
   for (const c of loadConfigs(cwd)) {
@@ -93,6 +128,15 @@ export function configGet(key: string): void {
 export function configSet(key: string, value: string, opts: FileOpts): void {
   if (!(SET_KEYS as readonly string[]).includes(key)) {
     throw new Error(`未知配置项 ${key}，可设置：${SET_KEYS.join(' / ')}`);
+  }
+  if (key === 'server') {
+    // 只写用户配置：一个人登录的是哪台平台与当前在哪个仓库无关
+    if (opts.project) throw new Error('server 只能写用户配置，不支持 --project');
+    const url = parseServerUrl(value);
+    rememberServerUrl(url);
+    console.log(`已记住平台地址 ${url} → ${userConfigFile()}`);
+    printServer();
+    return;
   }
   const cwd = process.cwd();
   let scope: SyncScope;
@@ -129,6 +173,11 @@ export function configSet(key: string, value: string, opts: FileOpts): void {
 export function configUnset(key: string, opts: FileOpts): void {
   if (!(UNSET_KEYS as readonly string[]).includes(key)) {
     throw new Error(`未知配置项 ${key}，可清除：${UNSET_KEYS.join(' / ')}`);
+  }
+  if (key === 'server') {
+    console.log(forgetServerUrl() ? `已清除记住的平台地址 → ${userConfigFile()}` : 'server 本来就没有设置，无需清除');
+    printServer();
+    return;
   }
   const cwd = process.cwd();
   const explicit = opts.project === true || opts.user === true;

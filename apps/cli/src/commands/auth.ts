@@ -5,6 +5,8 @@ import {
   clearPendingLogin,
   loadCredentials,
   loadPendingLogin,
+  rememberServerUrl,
+  rememberedServerUrl,
   resolveServerUrl,
   saveCredentials,
   savePendingLogin,
@@ -94,6 +96,8 @@ function printVerification(pending: PendingLogin): void {
 /** 领到 Token：写凭证、清掉待授权记录（deviceCode 用完即弃），再报身份 */
 function acceptToken(serverUrl: string, token: string, user: UserPublic): void {
   saveCredentials({ serverUrl, token, user });
+  // 地址单独记一份：凭证会随 logout / 过期消失，地址不该跟着丢（决策 59）
+  rememberServerUrl(serverUrl);
   clearPendingLogin();
   console.log('状态：approved（授权完成）');
   console.log(`登录成功：${user.name} <${user.email}>（${serverUrl}）`);
@@ -114,8 +118,10 @@ export async function login(opts: LoginOptions = {}): Promise<void> {
     const start = await api.request<DeviceStartResponse>('POST', '/api/auth/device/start');
     // 先落盘再提示：无论接下来是等待、超时还是被用户 Ctrl-C，这次授权都还能用
     // `eat login --status` 接着领，不必让用户重新走一遍浏览器。
+    // 地址取 api.resolvedUrl 而不是入参：平台在 http→https 跳转后面时，
+    // 存下会跳转的那个地址，登录能成功而之后每条命令都拿不到令牌（决策 59）。
     pending = {
-      serverUrl,
+      serverUrl: api.resolvedUrl,
       deviceCode: start.deviceCode,
       userCode: start.userCode,
       verificationUri: start.verificationUri,
@@ -153,7 +159,7 @@ export async function login(opts: LoginOptions = {}): Promise<void> {
     if (poll.status === 'approved') {
       console.log('');
       console.log('');
-      acceptToken(serverUrl, poll.token, poll.user);
+      acceptToken(pending.serverUrl, poll.token, poll.user);
       return;
     }
     if (poll.status === 'expired') {
@@ -210,7 +216,7 @@ export async function loginStatus(opts: Pick<LoginOptions, 'server'> = {}): Prom
     deviceCode: pending.deviceCode,
   });
   if (poll.status === 'approved') {
-    acceptToken(pending.serverUrl, poll.token, poll.user);
+    acceptToken(api.resolvedUrl, poll.token, poll.user);
     return;
   }
   if (poll.status === 'expired') {
@@ -230,12 +236,20 @@ export async function loginStatus(opts: Pick<LoginOptions, 'server'> = {}): Prom
 export async function whoami(): Promise<void> {
   const api = Api.fromSaved();
   const me = await api.request<UserPublic>('GET', '/api/auth/whoami');
-  console.log(`${me.name} <${me.email}>  角色: ${me.role}  平台: ${api.serverUrl}`);
+  // 报 resolvedUrl：地址被跳转修正过时，该打印真正在用的那一个
+  console.log(`${me.name} <${me.email}>  角色: ${me.role}  平台: ${api.resolvedUrl}`);
 }
 
 export function logout(): void {
   const cred = loadCredentials();
+  // 退出登录前把平台地址留下：它存在凭证文件里，删掉凭证等于把地址也删了，
+  // 下一次裸跑 eat login 会悄悄回落到 http://localhost:3000（决策 59）。
+  if (cred?.serverUrl) rememberServerUrl(cred.serverUrl);
   clearCredentials();
   clearPendingLogin();
   console.log(cred ? '已退出登录（本地凭证已删除；如需彻底作废 Token，请在控制台吊销）' : '当前未登录');
+  const remembered = rememberedServerUrl();
+  if (remembered) {
+    console.log(`平台地址仍记着 ${remembered}，下次 eat login 直接连它（换平台用 --server，清除用 eat config unset server）`);
+  }
 }
