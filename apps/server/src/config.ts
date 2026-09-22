@@ -20,7 +20,7 @@ export interface AppConfig {
   /** 网关调用记录保留天数（决策 51），到期由模块内的每日清扫删掉 */
   mcpGatewayCallRetentionDays: number;
   /**
-   * MCP 网关等上游**响应头**的上限（毫秒，决策 58）。默认 10 分钟。
+   * MCP 网关等上游**响应头**的上限（毫秒，决策 58）。默认 3 分钟。
    * `tools/call` 跑几十秒到几分钟是常态（而多数 MCP 服务是等结果出来才一次性发响应头），
    * 网关的这个上限必须比客户端自己的超时更宽松，否则网关会先于客户端掐断——
    * 该由客户端决定「等多久算太久」，不是由代理替它决定。
@@ -50,6 +50,6 @@ export function loadConfig(): AppConfig {
     cliDistPath: process.env.EAT_CLI_DIST ?? path.resolve(__dirname, '../../cli/dist/index.js'),
     mcpGatewayAllowPrivateUpstream: process.env.EAT_MCP_GATEWAY_ALLOW_PRIVATE === '1',
     mcpGatewayCallRetentionDays: positiveInt(process.env.EAT_MCP_GATEWAY_CALL_RETENTION_DAYS, 90),
-    mcpGatewayUpstreamTimeoutMs: positiveInt(process.env.EAT_MCP_GATEWAY_UPSTREAM_TIMEOUT_MS, 600_000),
+    mcpGatewayUpstreamTimeoutMs: positiveInt(process.env.EAT_MCP_GATEWAY_UPSTREAM_TIMEOUT_MS, 180_000),
   };
 }

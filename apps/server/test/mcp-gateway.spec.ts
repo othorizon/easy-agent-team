@@ -603,11 +603,12 @@ describe('MCP 网关：长耗时调用（决策 58）', () => {
   });
 
   it('默认上限远宽于客户端自己的超时，网关不该是先放弃的那个', () => {
+    // 常见 MCP 客户端的单次调用超时是 60 秒，网关的默认值要明显宽于它
     delete process.env.EAT_MCP_GATEWAY_UPSTREAM_TIMEOUT_MS;
-    expect(loadConfig().mcpGatewayUpstreamTimeoutMs).toBeGreaterThanOrEqual(300_000);
+    expect(loadConfig().mcpGatewayUpstreamTimeoutMs).toBeGreaterThanOrEqual(180_000);
     // 写歪的值不能变成「立刻超时」：NaN 交给 setTimeout 等于 0 毫秒
     process.env.EAT_MCP_GATEWAY_UPSTREAM_TIMEOUT_MS = '不是数字';
-    expect(loadConfig().mcpGatewayUpstreamTimeoutMs).toBeGreaterThanOrEqual(300_000);
+    expect(loadConfig().mcpGatewayUpstreamTimeoutMs).toBeGreaterThanOrEqual(180_000);
   });
 });
 

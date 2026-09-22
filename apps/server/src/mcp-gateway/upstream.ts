@@ -137,9 +137,9 @@ export function filterResponseHeaders(headers: Record<string, string | string[] 
  *
  * **刻意不用 `fetch`**（决策 58）：Node 内置的 fetch 底下是 undici，自带
  * `headersTimeout` / `bodyTimeout` 两个 5 分钟的硬上限，而它们既不能按请求配、
- * 也没法关掉。对一个代理，这两条意味着「跑超过 5 分钟的 tools/call 必挂」和
- * 「闲置超过 5 分钟的 SSE 通知流会被悄悄掐掉」，而且外面还配着一个看起来管用、
- * 实际被它们盖住的超时参数——参数写了不生效，比没有参数更糟。
+ * 也没法关掉。对一个代理，这两条意味着**上限配到 5 分钟以上等于没配**（被它们盖住，
+ * 参数写了不生效比没有参数更糟），以及**闲置超过 5 分钟的 SSE 通知流会被悄悄掐掉**
+ * ——后者跟上限配多少无关，照样发生。
  * `node:http` 默认没有任何超时，等多久完全由调用方的 AbortSignal 说了算。
  */
 export function requestUpstream(
