@@ -1,10 +1,12 @@
 import { lookup } from 'node:dns/promises';
+import * as http from 'node:http';
+import * as https from 'node:https';
 import { isIP } from 'node:net';
 import { loadConfig } from '../config';
 
 /**
- * 网关的上游侧纯函数：地址安全校验与请求/响应头白名单（决策 51）。
- * 单独一个文件是为了能直接单测——这里每一条判断错了都是一个安全洞。
+ * 网关的上游侧：地址安全校验、请求/响应头白名单（决策 51）与上游请求的发起（决策 58）。
+ * 单独一个文件是为了前三者能直接单测——这里每一条判断错了都是一个安全洞。
  */
 
 /** 网关拒绝转发时对外的统一说法：不提上游、不提 Dokploy 式细节（照决策 33） */
@@ -54,7 +56,7 @@ export function isPrivateAddress(ip: string): boolean {
  *
  * 已知局限（决策 51 记在案）：这里是「解析后校验、再按主机名发起请求」，
  * 理论上存在 DNS rebinding 的 TOCTOU 窗口。彻底堵住要把请求钉在已解析的 IP 上
- * （自定义 dispatcher + Host 头），对一个团队内部平台不成比例，先不做。
+ * （连 IP、另给 Host 头与 TLS servername），对一个团队内部平台不成比例，先不做。
  */
 export async function assertSafeUpstream(rawUrl: string): Promise<URL> {
   let url: URL;
@@ -120,10 +122,44 @@ export function filterRequestHeaders(incoming: Record<string, string | string[] 
  */
 const FORWARD_RESPONSE_HEADERS = new Set(['content-type', 'mcp-session-id', 'cache-control']);
 
-export function filterResponseHeaders(headers: Headers): Record<string, string> {
+export function filterResponseHeaders(headers: Record<string, string | string[] | undefined>): Record<string, string> {
   const out: Record<string, string> = {};
-  headers.forEach((value, key) => {
-    if (FORWARD_RESPONSE_HEADERS.has(key.toLowerCase())) out[key.toLowerCase()] = value;
-  });
+  for (const [key, value] of Object.entries(headers)) {
+    const k = key.toLowerCase();
+    if (!FORWARD_RESPONSE_HEADERS.has(k) || value === undefined) continue;
+    out[k] = Array.isArray(value) ? value.join(', ') : value;
+  }
   return out;
+}
+
+/**
+ * 发起上游请求，拿到响应头就返回，响应体交给调用方自己流式转发。
+ *
+ * **刻意不用 `fetch`**（决策 58）：Node 内置的 fetch 底下是 undici，自带
+ * `headersTimeout` / `bodyTimeout` 两个 5 分钟的硬上限，而它们既不能按请求配、
+ * 也没法关掉。对一个代理，这两条意味着「跑超过 5 分钟的 tools/call 必挂」和
+ * 「闲置超过 5 分钟的 SSE 通知流会被悄悄掐掉」，而且外面还配着一个看起来管用、
+ * 实际被它们盖住的超时参数——参数写了不生效，比没有参数更糟。
+ * `node:http` 默认没有任何超时，等多久完全由调用方的 AbortSignal 说了算。
+ */
+export function requestUpstream(
+  url: URL,
+  init: { method: string; headers: Record<string, string>; body?: string; signal: AbortSignal },
+): Promise<http.IncomingMessage> {
+  const transport = url.protocol === 'https:' ? https : http;
+  const headers: Record<string, string> = { ...init.headers };
+  // 有 body 就显式给长度：默认的 chunked 编码有些上游不认
+  if (init.body !== undefined) headers['content-length'] = String(Buffer.byteLength(init.body));
+
+  return new Promise((resolve, reject) => {
+    const req = transport.request(
+      url,
+      { method: init.method, headers, signal: init.signal },
+      // 不跟随重定向是 node:http 的默认行为，正合此处所需：3xx 原样交回调用方去判
+      (res) => resolve(res),
+    );
+    req.on('error', reject);
+    if (init.body !== undefined) req.write(init.body);
+    req.end();
+  });
 }
