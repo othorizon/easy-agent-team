@@ -13,6 +13,7 @@ import { Test } from '@nestjs/testing';
 import * as bcrypt from 'bcryptjs';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { readFileSync } from 'node:fs';
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import * as path from 'node:path';
@@ -21,7 +22,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
 import { loadConfig } from '../src/config';
 import * as schema from '../src/db/schema';
-import { assertSafeUpstream, isPrivateAddress } from '../src/mcp-gateway/upstream';
+import { applyUpstreamKeepAlive, assertSafeUpstream, isPrivateAddress } from '../src/mcp-gateway/upstream';
 
 let app: NestFastifyApplication;
 let platformUrl: string;
@@ -642,6 +643,84 @@ describe('MCP 网关：长耗时调用（决策 58）', () => {
     process.env.EAT_KEEP_ALIVE_TIMEOUT_MS = '200000';
     expect(loadConfig().keepAliveTimeoutMs).toBe(200_000);
     delete process.env.EAT_KEEP_ALIVE_TIMEOUT_MS;
+  });
+});
+
+/**
+ * 在 /proc/net/tcp 里找「连到某个端口」的那条连接，读它的定时器字段。
+ * timer=2 表示这条连接上挂着 keepalive 定时器，when 是距下次探测的 jiffies（HZ=100）。
+ * **只有 Linux 有这个文件**，所以用到它的用例在别的平台上跳过。
+ */
+function findKeepAliveTimer(remotePort: number): { timer: number; whenJiffies: number } | null {
+  const hex = remotePort.toString(16).toUpperCase().padStart(4, '0');
+  for (const line of readFileSync('/proc/net/tcp', 'utf8').split('\n').slice(1)) {
+    const f = line.trim().split(/\s+/);
+    // f[1] 本地地址、f[2] 对端地址、f[5] 是 `timer:when`
+    if (!f[2] || !f[2].endsWith(`:${hex}`)) continue;
+    const [timer, when] = f[5].split(':');
+    const parsed = { timer: parseInt(timer, 16), whenJiffies: parseInt(when, 16) };
+    if (parsed.timer === 2) return parsed;
+  }
+  return null;
+}
+
+describe('MCP 网关：上游连接的 TCP 保活（决策 62）', () => {
+  afterEach(() => {
+    delete process.env.EAT_MCP_GATEWAY_UPSTREAM_KEEPALIVE_MS;
+    upstreamMode.kind = 'json';
+    upstreamMode.delayMs = 0;
+  });
+
+  it('默认开着，且间隔明显短于常见的空闲回收时间', () => {
+    delete process.env.EAT_MCP_GATEWAY_UPSTREAM_KEEPALIVE_MS;
+    const def = loadConfig().mcpGatewayUpstreamKeepAliveMs;
+    expect(def).toBeGreaterThan(0);
+    // 线上实测约 40 秒就被中间设备丢掉，探测间隔必须明显小于它
+    expect(def).toBeLessThanOrEqual(30_000);
+    // 写歪的值回落默认，不能变成 0（那等于悄悄关掉保活）
+    process.env.EAT_MCP_GATEWAY_UPSTREAM_KEEPALIVE_MS = '不是数字';
+    expect(loadConfig().mcpGatewayUpstreamKeepAliveMs).toBe(def);
+    // 但显式写 0 就是要关掉
+    process.env.EAT_MCP_GATEWAY_UPSTREAM_KEEPALIVE_MS = '0';
+    expect(loadConfig().mcpGatewayUpstreamKeepAliveMs).toBe(0);
+  });
+
+  it('按毫秒开保活；配 0 就一个 socket 都不碰', () => {
+    const calls: Array<[boolean, number]> = [];
+    const socket = { setKeepAlive: (enable: boolean, delay: number) => calls.push([enable, delay]) };
+
+    applyUpstreamKeepAlive(socket, 15_000);
+    expect(calls).toEqual([[true, 15_000]]);
+
+    applyUpstreamKeepAlive(socket, 0);
+    expect(calls).toHaveLength(1);
+
+    // socket 上没有这个方法也不能把整次转发掀了
+    expect(() => applyUpstreamKeepAlive({}, 15_000)).not.toThrow();
+  });
+
+  it.skipIf(process.platform !== 'linux')('保活真的落到了内核，而不只是调了个不报错的方法', async () => {
+    // 这类改动最危险的失败形式是「调用没报错、内核里什么都没发生」。
+    // 所以不看代码路径，直接在转发过程中去 /proc/net/tcp 里查那条连接的定时器。
+    const url = await setupSubscribedConfig('svc-keepalive');
+    process.env.EAT_MCP_GATEWAY_UPSTREAM_KEEPALIVE_MS = '15000';
+    upstreamMode.kind = 'slow-json';
+    upstreamMode.delayMs = 1500;
+
+    const upstreamPort = (upstream.address() as AddressInfo).port;
+    const pending = callGateway(url, {
+      jsonrpc: '2.0',
+      id: 62,
+      method: 'tools/call',
+      params: { name: 'slow_tool', arguments: {} },
+    });
+    await new Promise((r) => setTimeout(r, 500));
+    const timer = findKeepAliveTimer(upstreamPort);
+    expect(await (await pending).json()).toMatchObject({ result: { ok: true } });
+
+    expect(timer).not.toBeNull();
+    // 15 秒的 TCP_KEEPIDLE，jiffies 按 HZ=100 算 ≈ 1500，给足余量
+    expect(timer!.whenJiffies).toBeGreaterThan(1_000);
   });
 });
 
