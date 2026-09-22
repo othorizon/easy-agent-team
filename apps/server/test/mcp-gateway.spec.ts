@@ -630,6 +630,19 @@ describe('MCP 网关：长耗时调用（决策 58）', () => {
     process.env.EAT_MCP_GATEWAY_UPSTREAM_TIMEOUT_MS = '不是数字';
     expect(loadConfig().mcpGatewayUpstreamTimeoutMs).toBeGreaterThanOrEqual(180_000);
   });
+
+  it('空闲连接活得比前置代理的回收时间久（决策 61）', () => {
+    // Fastify 默认 72 秒、Traefik 默认留 90 秒：错位出来的那个窗口里，
+    // 代理复用一条平台刚关掉的连接，带 body 的 POST 不会被重试，调用方直接拿到 502，
+    // 而平台连请求都没收到（调用记录里一行都没有）。默认值必须高于 90 秒。
+    delete process.env.EAT_KEEP_ALIVE_TIMEOUT_MS;
+    expect(loadConfig().keepAliveTimeoutMs).toBeGreaterThan(90_000);
+    process.env.EAT_KEEP_ALIVE_TIMEOUT_MS = '不是数字';
+    expect(loadConfig().keepAliveTimeoutMs).toBeGreaterThan(90_000);
+    process.env.EAT_KEEP_ALIVE_TIMEOUT_MS = '200000';
+    expect(loadConfig().keepAliveTimeoutMs).toBe(200_000);
+    delete process.env.EAT_KEEP_ALIVE_TIMEOUT_MS;
+  });
 });
 
 describe('MCP 网关：调用记录', () => {
