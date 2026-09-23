@@ -1,7 +1,7 @@
-import * as fs from 'node:fs';
 import type { AccessRequestInfo, EnvironmentInfo, PullValuesResponse, VariableMeta } from '@eat/shared';
 import { formatDateTime } from '@eat/shared';
 import { Api } from '../client.js';
+import { printWriteResult, writeEnvFile } from '../dotenv-file.js';
 
 type CatalogEntry = { environment: EnvironmentInfo; variables: VariableMeta[] };
 
@@ -38,7 +38,7 @@ function dotenvEscape(value: string): string {
 
 export async function envPull(
   envSlug: string,
-  opts: { keys?: string; out?: string; print?: boolean },
+  opts: { keys?: string; out?: string; print?: boolean; force?: boolean },
 ): Promise<void> {
   const api = Api.fromSaved();
   const keys = opts.keys ? opts.keys.split(',').map((k) => k.trim()).filter(Boolean) : undefined;
@@ -49,14 +49,14 @@ export async function envPull(
     if (opts.print) {
       for (const [k, v] of got) console.log(`${k}=${dotenvEscape(v)}`);
     } else {
-      const out = opts.out ?? '.env';
-      const lines = [
-        `# 由 eat env pull ${envSlug} 生成 — 值受平台审计，请勿提交到代码仓库`,
-        ...got.map(([k, v]) => `${k}=${dotenvEscape(v)}`),
-        '',
-      ];
-      fs.writeFileSync(out, lines.join('\n'), { mode: 0o600 });
-      console.log(`已写入 ${out}（${got.length} 个变量）`);
+      // 同名文件不是 eat 写的就中止，不静默覆盖用户自己的 .env（决策 63）
+      const written = writeEnvFile({
+        file: opts.out ?? '.env',
+        content: got.map(([k, v]) => `${k}=${dotenvEscape(v)}`).join('\n'),
+        command: `eat env pull ${envSlug}`,
+        force: opts.force,
+      });
+      printWriteResult(written, `${got.length} 个变量`);
     }
   }
   if (res.denied.length > 0) {

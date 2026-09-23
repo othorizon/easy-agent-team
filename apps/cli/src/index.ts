@@ -51,10 +51,11 @@ const env = program.command('env').description('环境变量：查清单、拉�
 env.command('list [environment]').description('列出可见的环境与变量（key + 备注 + 权限状态）').action(envList);
 env
   .command('pull <environment>')
-  .description('拉取有权限的变量值，默认写入 ./.env')
+  .description('拉取有权限的变量值，默认写入 ./.env（同名文件不是 eat 写的会中止，不覆盖）')
   .option('--keys <keys>', '仅拉取指定 Key（逗号分隔）')
   .option('--out <file>', '输出文件（默认 .env）')
   .option('--print', '打印到标准输出而不写文件')
+  .option('--force', '覆盖不是 eat 生成的同名文件（覆盖前自动备份为 <file>.bak-<时间戳>）')
   .action(envPull);
 env
   .command('request <environment> <keys...>')
@@ -229,10 +230,11 @@ app
 const appEnv = app.command('env').description('应用的 env：运行时（默认）与构建时（--build）两块，读写的是部署配置本身，下次部署生效');
 appEnv
   .command('pull <app>')
-  .description('拉取应用 env，默认写入 ./.env（--build 时 ./.env.build）')
+  .description('拉取应用 env，默认写入 ./.env（--build 时 ./.env.build）；同名文件不是 eat 写的会中止，不覆盖')
   .option('--build', '构建时 env（Dockerfile 里以 ARG 取用）而非运行时 env')
   .option('--out <file>', '输出文件')
   .option('--print', '打印到标准输出而不写文件')
+  .option('--force', '覆盖不是 eat 生成的同名文件（覆盖前自动备份为 <file>.bak-<时间戳>）')
   .action(appEnvPull);
 appEnv
   .command('push <app>')
