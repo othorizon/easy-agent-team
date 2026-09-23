@@ -189,7 +189,7 @@ export class McpToolsService {
       // ---------- 部署与日志 ----------
       case 'trigger_deploy': {
         const { app } = parse(appArg, args);
-        // 远程接入没有本地代码可扫，记录标成 remote（与控制台按钮同级，决策 55）
+        // 来源记为 remote，便于在部署记录里区分从哪触发（决策 55）
         return this.deploy.deploy(user, app, { source: 'remote' });
       }
       case 'get_deploy_status': {

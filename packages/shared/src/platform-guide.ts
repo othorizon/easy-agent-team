@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 20;
+export const PLATFORM_GUIDE_VERSION = 21;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -52,7 +52,7 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 
 **应用 env**：\`eat app env pull <slug>\` / \`eat app env push <slug> --file .env\`（MCP: \`get_app_env\` / \`set_app_env\`）读写应用的运行时 env；加 \`--build\`（MCP: \`target=build\`）是构建时变量（Dockerfile 里以 ARG 取用）。**推送是整体覆盖不是合并**：先 pull 再改再 push，否则没带上的变量会被删掉。pull 的落盘规则同环境变量那节：同名文件不是 eat 写的会中止，按提示用 \`--out\` / \`--print\`，别无脑 \`--force\`。值可能是密钥，只用于当前任务、不写进代码或对话。
 
-**部署**：\`eat deploy [slug]\`（MCP: \`trigger_deploy\`）。部署前 CLI 会自动做密钥扫描，报告不过会被拒绝——按报告修复后重试，**不要绕过检查**。从云端 HTTP MCP 端点触发时平台拿不到本地代码，那次部署做不了扫描、会被标成「未做密钥扫描」：手边有代码和终端就用 CLI 部署。
+**部署**：\`eat deploy [slug]\`（MCP: \`trigger_deploy\`）。构建源是应用绑定的 Git 仓库与分支，不是你本地的工作区——**要部署的改动先提交并推送**，否则部署出去的还是旧代码。应用运行要用的密钥放进应用 env（\`eat app env push\`），不要写进代码或提交进仓库。
 
 部署完是否成功、失败在哪，按这个顺序查，不要让用户自己去翻部署后台：
 
@@ -62,7 +62,7 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 
 日志读到的报错是排查依据，改完代码重新 \`eat deploy\` 即可；日志可能带出构建期注入的密钥，不要把整段日志贴进求助或提交里。
 
-部署状态与历史实时来自部署后台：\`status\` 取值是 \`queued\`(排队中) / \`running\`(构建中) / \`done\`(成功) / \`error\`(失败) / \`cancelled\`(已取消) / \`archived\`(构建记录已被清理)。\`eat app deployments <slug>\` 列出的是还保留着的最近 10 次构建——**其中可能有绕开平台、在部署后台直接触发的部署**（\`platform\` 为 null），也可能有从控制台按钮触发、没做密钥扫描的部署（\`platform.source=console\` 或 \`remote\`），排查问题时要把它们算进来；加 \`--all\` 看平台侧的完整历史。
+部署状态与历史实时来自部署后台：\`status\` 取值是 \`queued\`(排队中) / \`running\`(构建中) / \`done\`(成功) / \`error\`(失败) / \`cancelled\`(已取消) / \`archived\`(构建记录已被清理)。\`eat app deployments <slug>\` 列出的是还保留着的最近 10 次构建——**其中可能有绕开平台、在部署后台直接触发的部署**（\`platform\` 为 null），也可能有别人从控制台按钮或远程 MCP 触发的部署（\`platform.source=console\` 或 \`remote\`），排查问题时要把它们算进来；加 \`--all\` 看平台侧的完整历史。
 
 ### MCP 配置（连团队内部的 MCP 服务）
 

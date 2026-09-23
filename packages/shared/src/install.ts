@@ -136,6 +136,6 @@ claude mcp add --transport http eat ${publicUrl}/mcp --header "Authorization: Be
 - 兜底写法（\`eat\` 不在 PATH，或客户端不走 shell）：命令 \`node\`、参数 \`<CLI 路径>/eat.js mcp\`——
   类 Unix 是 \`~/.eat/bin/eat.js\`，Windows 是 \`%USERPROFILE%\\.eat\\bin\\eat.js\`（配置里请写展开后的绝对路径）。
 
-两条路的工具集一致，只有一处差别：本地 stdio 的 \`trigger_deploy\` 会先扫描本地代码再部署，HTTP 端点没有本地代码可扫，触发的部署会被标成「未做密钥扫描」。
+两条路的工具只差一个：HTTP 端点多一个 \`get_platform_guide\`（云端客户端没有 \`eat sync\`，平台使用指南只能靠它取回去），其余完全一致。
 `;
 }

@@ -38,9 +38,9 @@ eat 的定位由此确定：作为 AI 与人之间的协作层，让权限、信
 |:---:|:---:|:---:|
 | [![环境详情](docs/assets/screenshots/env-detail.png)](docs/assets/screenshots/env-detail.png) | [![求助详情](docs/assets/screenshots/help-detail.png)](docs/assets/screenshots/help-detail.png) | [![部署记录](docs/assets/screenshots/app-deployments.png)](docs/assets/screenshots/app-deployments.png) |
 
-| `eat sync` 把能力同步到本地 AI | `eat env` 申请与拉取 | `eat deploy` 的密钥扫描门禁 |
+| `eat sync` 把能力同步到本地 AI | `eat env` 申请与拉取 | `eat ask` 让 AI 找人求助 |
 |:---:|:---:|:---:|
-| [![eat sync](docs/assets/demos/onboard.gif)](docs/assets/demos/onboard.gif) | [![eat env](docs/assets/demos/permissions.gif)](docs/assets/demos/permissions.gif) | [![eat deploy](docs/assets/demos/deploy-gate.gif)](docs/assets/demos/deploy-gate.gif) |
+| [![eat sync](docs/assets/demos/onboard.gif)](docs/assets/demos/onboard.gif) | [![eat env](docs/assets/demos/permissions.gif)](docs/assets/demos/permissions.gif) | [![eat ask](docs/assets/demos/ask.gif)](docs/assets/demos/ask.gif) |
 
 > 点开可看大图。控制台每个页面与 CLI 关键流程的全集：[界面截图与录屏](docs/screenshots.md)。
 
@@ -170,10 +170,10 @@ flowchart TB
 | 部署授权 | 成员自建的应用首次部署需管理员授权一次，之后不再拦；被拒的尝试会在控制台标为「待授权」 |
 | 挂载已有应用 | 管理员可把 Dokploy 上既有的 application 挂载进平台（可从 Dokploy 搜索选择），构建配置仍在 Dokploy 侧维护，删除只解绑 |
 | 成员管理 | 应用成员制，日志、env 与部署权限收敛至应用成员，操作记入审计 |
-| 部署门禁 | `eat deploy` 先在本地执行密钥扫描（通用规则 + **平台密钥指纹匹配** + `.env` 误提交检查），报告随部署请求上送，未通过则不予部署；另可选配一条本地预检命令，非零退出即中止部署。控制台的「部署」按钮不做本地扫描，记录会标注「控制台」 |
-| 状态透传 | 部署记录与状态一律以 Dokploy 的构建记录为准，平台库仅存储 Dokploy 不具备的业务元数据（触发人、随附的扫描报告）；构建失败时将构建日志末尾写入错误信息，在平台内即可看到真实报错 |
-| 绕过可见 | 直接在 Dokploy 侧触发的部署同样列入部署历史，并标注「未经平台密钥扫描」，门禁被绕过的情况因此可见 |
-| 历史留存 | Dokploy 每个应用仅保留最近 10 次构建记录，平台侧元数据只增不删，`--all` 可回溯已被清理记录的触发人与随附报告 |
+| 部署入口 | `eat deploy` / MCP `trigger_deploy` / 控制台「部署」按钮三个入口门禁一致（应用成员 + 管理员授权），均按应用绑定的 Git 分支构建，记录标注从哪触发；`eat deploy` 可选配一条本地预检命令（`--check`），非零退出即中止部署。部署前不做本地密钥扫描 |
+| 状态透传 | 部署记录与状态一律以 Dokploy 的构建记录为准，平台库仅存储 Dokploy 不具备的业务元数据（触发人、触发入口）；构建失败时将构建日志末尾写入错误信息，在平台内即可看到真实报错 |
+| 绕过可见 | 直接在 Dokploy 侧触发的部署同样列入部署历史，并标注为绕过平台，成员与授权门禁被绕过的情况因此可见 |
+| 历史留存 | Dokploy 每个应用仅保留最近 10 次构建记录，平台侧元数据只增不删，`--all` 可回溯已被清理记录的触发人与触发入口 |
 | 日志读取 | 构建日志（用于排查部署失败）与容器运行日志（用于排查构建成功但服务异常），CLI 与控制台均可读取 |
 
 > 对接的 Dokploy 版本会影响部署记录的归属准确度，另有两条 Dokploy 自身的行为限制会影响使用预期，
@@ -186,7 +186,6 @@ flowchart TB
 | 信封加密 | 敏感值采用 AES-256-GCM 加密，KEK 由部署环境变量提供，不依赖外部 KMS |
 | 明文不外泄 | 密钥不会下发给无权限方，错误消息、日志与 webhook payload 同样不含明文（webhook 仅携带事件与链接） |
 | 审计日志 | 敏感值读取、授权变更、审批决策、部署与日志读取全程留存记录 |
-| 本地扫描 | CLI 端扫描可识别出与平台内密钥指纹匹配的字符串，避免密钥被提交进仓库 |
 
 ### 三端接入
 
@@ -222,7 +221,7 @@ eat login --server http://<平台地址>
 
 ## 环境变量配置
 
-配置项以 [.env.example](.env.example) 为准（复制为 `.env` 后填写；`.env` 不纳入版本库，会被平台的密钥扫描拦截，`.env.example` 除外）。三个必填项：
+配置项以 [.env.example](.env.example) 为准（复制为 `.env` 后填写；`.env` 已在 `.gitignore` 中，不纳入版本库）。三个必填项：
 
 | 变量 | 说明 |
 |---|---|
@@ -251,20 +250,20 @@ eat login --server http://<平台地址>
 ### 建议 v0.25.0 及以上
 
 平台触发部署时会将 `eat:<id>` 标记写入 Dokploy 构建记录的 `description`，读取时据此精确判定该构建记录对应
-哪一次平台部署——触发人与随附的密钥扫描报告均依赖这一对应关系。而 `application.deploy` 的 `title` /
+哪一次平台部署——触发人与触发入口均依赖这一对应关系。而 `application.deploy` 的 `title` /
 `description` 两个入参**自 v0.25.0 起才存在**：v0.24.0 及更早的版本仅接受 `applicationId`，多传的键会被静默
 丢弃，既不报错，也没有任何迹象提示版本过低。
 
 在更早的版本上平台仍可正常使用，但会自动降级为**按触发时间就近推断**归属，并在 CLI 与控制台中将该记录标注为
 「⚠ 归属按时间推断」。该降级存在实际代价：同一 Dokploy 应用被并发部署时（例如几乎同时有人在 Dokploy 控制台
-也触发了一次），归属可能出现错配，将未经平台密钥扫描的部署显示为已通过门禁的部署。**如需部署记录的归属可靠，
+也触发了一次），归属可能出现错配，将绕过平台、在 Dokploy 侧直接触发的部署显示为经平台触发的部署。**如需部署记录的归属可靠，
 请升级至 v0.25.0 以上。**
 
 ### 两条与版本无关的 Dokploy 行为
 
 - **每个应用仅保留最近 10 条构建记录**，超出部分连同构建日志文件一并删除，且该数值在 Dokploy 中为硬编码、
   不可配置。这是部署历史默认只有 10 条的原因；更早的部署可通过 `eat app deployments <app> --all`
-  （或控制台的「显示全部历史」）从平台侧元数据回溯，可查看触发人与随附报告，但构建日志已不存在。
+  （或控制台的「显示全部历史」）从平台侧元数据回溯，可查看触发人与触发入口，但构建日志已不存在。
 - **在 Dokploy 侧触发、且构建记录已被上述清理删除的部署，平台无法感知**——平台从未为其创建过元数据。
   因此「有多少次部署绕过了平台门禁」这一问题，仅在最近 10 次构建的窗口内可以准确回答。
 

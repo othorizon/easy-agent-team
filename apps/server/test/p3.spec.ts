@@ -1,6 +1,6 @@
 /**
  * P3 端到端测试：Dokploy 接入（mock）/ 应用的自助创建与挂载（决策 31）/ 成员 / 部署授权门禁 /
- * 部署记录（决策 30）/ 应用 env 推拉 / 构建与运行日志（决策 28）/ 密钥指纹清单
+ * 部署记录（决策 30）/ 应用 env 推拉 / 构建与运行日志（决策 28）
  */
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? 'postgres://dev@127.0.0.1:5433/eat_test';
 
@@ -108,14 +108,6 @@ async function api(
   });
   return { status: res.statusCode, body: res.body ? JSON.parse(res.body) : undefined };
 }
-
-const passingReport = () => ({
-  passed: true,
-  scannedFiles: 12,
-  findings: [],
-  cliVersion: '0.1.0',
-  ranAt: new Date().toISOString(),
-});
 
 const fullSettings = (extra: Record<string, unknown> = {}) => ({
   apiUrl: dokployUrl,
@@ -719,16 +711,16 @@ describe('应用：更新、成员与权限', () => {
 
 describe('部署授权门禁（决策 31）', () => {
   it('未授权的应用：成员部署被拒并留痕，Dokploy 没收到任何调用', async () => {
-    const r = await api('POST', '/api/apps/crm-tool/deploy', { token: memberToken, payload: { report: passingReport() } });
+    const r = await api('POST', '/api/apps/crm-tool/deploy', { token: memberToken, payload: {} });
     expect(r.status).toBe(403);
     expect(r.body.error).toBe('DEPLOY_NOT_APPROVED');
     expect(r.body.message).toContain('管理员');
     expect(deployCalls).toHaveLength(0);
     const info = (await api('GET', '/api/apps', { token: ownerToken })).body.find((a: { slug: string }) => a.slug === 'crm-tool');
     expect(info.approvalRequestedAt).not.toBeNull();
-    // 成员资格与报告仍先于授权检查：非成员、坏报告照旧各自的拒绝理由
-    expect((await api('POST', '/api/apps/crm-tool/deploy', { token: outsiderToken, payload: { report: passingReport() } })).status).toBe(403);
-    expect((await api('POST', '/api/apps/crm-tool/deploy', { token: outsiderToken, payload: { report: passingReport() } })).body.error).toBe('FORBIDDEN');
+    // 成员资格仍先于授权检查：非成员照旧回 FORBIDDEN
+    expect((await api('POST', '/api/apps/crm-tool/deploy', { token: outsiderToken, payload: {} })).status).toBe(403);
+    expect((await api('POST', '/api/apps/crm-tool/deploy', { token: outsiderToken, payload: {} })).body.error).toBe('FORBIDDEN');
   });
 
   it('管理员授权一次即永久有效；可撤销；仅管理员可操作', async () => {
@@ -741,7 +733,7 @@ describe('部署授权门禁（决策 31）', () => {
 
     const revoked = await api('DELETE', '/api/apps/crm-tool/approve', { token: adminToken });
     expect(revoked.body).toMatchObject({ deployApproved: false, approvedByName: null });
-    expect((await api('POST', '/api/apps/crm-tool/deploy', { token: memberToken, payload: { report: passingReport() } })).body.error).toBe('DEPLOY_NOT_APPROVED');
+    expect((await api('POST', '/api/apps/crm-tool/deploy', { token: memberToken, payload: {} })).body.error).toBe('DEPLOY_NOT_APPROVED');
     await api('POST', '/api/apps/crm-tool/approve', { token: adminToken });
   });
 });
@@ -755,27 +747,18 @@ describe('部署门禁与部署记录（决策 30）', () => {
     await pool.end();
   };
 
-  it('无报告 / 报告未通过 / 非成员，三种拒绝', async () => {
-    const noReport = await api('POST', '/api/apps/crm-tool/deploy', { token: memberToken, payload: {} });
-    expect(noReport.status).toBe(400);
-    expect(noReport.body.message).toContain('检查报告');
-    const failing = await api('POST', '/api/apps/crm-tool/deploy', {
-      token: memberToken,
-      payload: {
-        report: { ...passingReport(), passed: false, findings: [{ rule: 'generic', file: 'src/config.ts', line: 3, note: '疑似 AWS Key' }] },
-      },
-    });
-    expect(failing.status).toBe(400);
-    expect(failing.body.error).toBe('PRECHECK_FAILED');
-    const outsider = await api('POST', '/api/apps/crm-tool/deploy', { token: outsiderToken, payload: { report: passingReport() } });
+  it('非成员被拒，Dokploy 没收到任何调用', async () => {
+    const outsider = await api('POST', '/api/apps/crm-tool/deploy', { token: outsiderToken, payload: {} });
     expect(outsider.status).toBe(403);
+    expect(outsider.body.error).toBe('FORBIDDEN');
     expect(deployCalls).toHaveLength(0);
   });
 
   it('触发部署：Dokploy 收到带认领标记的调用，记录先是「排队中」', async () => {
     mockBuilds = [];
     mockQueue = [];
-    const r = await api('POST', '/api/apps/crm-tool/deploy', { token: memberToken, payload: { report: passingReport() } });
+    // 不带任何检查报告：部署前的本地密钥扫描已移除（决策 64）
+    const r = await api('POST', '/api/apps/crm-tool/deploy', { token: memberToken, payload: {} });
     expect(r.status).toBe(201);
     // 构建记录要等 Dokploy 的队列执行到才建出来，此刻只可能是排队中
     expect(r.body.status).toBe('queued');
@@ -783,6 +766,7 @@ describe('部署门禁与部署记录（决策 30）', () => {
     expect(r.body.origin).toBe('platform');
     expect(r.body.appSlug).toBe('crm-tool');
     expect(r.body.platform.source).toBe('cli');
+    expect(r.body.platform).not.toHaveProperty('report');
     metaId = r.body.platform.id;
 
     expect(deployCalls).toHaveLength(1);
@@ -792,10 +776,10 @@ describe('部署门禁与部署记录（决策 30）', () => {
     expect(deployCalls[0].title).toContain('组员');
   });
 
-  it('控制台触发（决策 31）：不带报告但要显式声明 source=console，记录标成未做密钥扫描', async () => {
+  it('控制台触发（决策 31）：显式声明 source=console，记录里标着来源', async () => {
     const r = await api('POST', '/api/apps/crm-tool/deploy', { token: ownerToken, payload: { source: 'console' } });
     expect(r.status).toBe(201);
-    expect(r.body.platform).toMatchObject({ source: 'console', report: null, triggeredByName: '应用主' });
+    expect(r.body.platform).toMatchObject({ source: 'console', triggeredByName: '应用主' });
     expect(deployCalls).toHaveLength(2);
     // 控制台触发照样过授权门禁与成员门禁
     expect((await api('POST', '/api/apps/crm-tool/deploy', { token: outsiderToken, payload: { source: 'console' } })).status).toBe(403);
@@ -831,7 +815,6 @@ describe('部署门禁与部署记录（决策 30）', () => {
     expect(mine.platform.id).toBe(metaId);
     expect(mine.platform.claim).toBe('tagged');
     expect(mine.platform.triggeredByName).toBe('组员');
-    expect(mine.platform.report.passed).toBe(true);
 
     const fromConsole = list.body.find((d: Record<string, never>) => d.deploymentId === 'build-console');
     expect(fromConsole.origin).toBe('external');
@@ -898,7 +881,7 @@ describe('部署门禁与部署记录（决策 30）', () => {
     await ageAllDeployments('2 hours');
     mockBuilds = [];
     mockQueue = [];
-    const r = await api('POST', '/api/apps/crm-tool/deploy', { token: ownerToken, payload: { report: passingReport() } });
+    const r = await api('POST', '/api/apps/crm-tool/deploy', { token: ownerToken, payload: {} });
     // 老版本 Dokploy（< v0.25.0）不认 title/description，建出来的记录没有标记
     mockBuilds = [{ deploymentId: 'build-untagged', title: 'Manual deployment', description: '', status: 'done', createdAt: iso(1000) }];
 
@@ -914,7 +897,7 @@ describe('部署门禁与部署记录（决策 30）', () => {
     // 再补一次「刚部署完就被清理」：认领过的元数据不能因为「刚触发不久」又被退回成排队中
     mockBuilds = [];
     mockQueue = [];
-    const fresh = await api('POST', '/api/apps/crm-tool/deploy', { token: ownerToken, payload: { report: passingReport() } });
+    const fresh = await api('POST', '/api/apps/crm-tool/deploy', { token: ownerToken, payload: {} });
     mockBuilds = [
       { deploymentId: 'build-fresh', title: 'eat · 应用主 · crm-tool', description: `eat:${fresh.body.platform.id}`, status: 'done', createdAt: iso() },
     ];
@@ -929,14 +912,14 @@ describe('部署门禁与部署记录（决策 30）', () => {
     const all = await api('GET', '/api/apps/crm-tool/deployments?all=1', { token: memberToken });
     expect(all.body.length).toBeGreaterThan(0);
     expect(all.body.every((d: Record<string, never>) => d.status === 'archived')).toBe(true);
-    // 「谁触发的、带了什么扫描报告」是平台的合规记录，不能跟着 Dokploy 的清理一起消失
+    // 「谁触发的、从哪触发的」是平台的合规记录，不能跟着 Dokploy 的清理一起消失
     const mine = all.body.find((d: { platform: { id: string } }) => d.platform.id === metaId);
     expect(mine.platform.triggeredByName).toBe('组员');
-    expect(mine.platform.report.passed).toBe(true);
+    expect(mine.platform.source).toBe('cli');
     expect(mine.deploymentId).toBe('build-mine');
-    // 控制台触发的那次也在，标着 console、没有报告
+    // 控制台触发的那次也在，标着 console
     const console = all.body.find((d: { platform: { source: string } }) => d.platform.source === 'console');
-    expect(console.platform.report).toBeNull();
+    expect(console.platform.triggeredByName).toBe('应用主');
     // 「最近一次部署」此时要说清是被清理了，而不是「还没部署过」——后者会误导人再部署一次
     const latest = await api('GET', '/api/apps/crm-tool/deployments/latest', { token: memberToken });
     expect(latest.status).toBe(404);
@@ -1083,33 +1066,5 @@ describe('删除应用（决策 31）', () => {
     const ok = await api('DELETE', '/api/apps/legacy', { token: adminToken });
     expect(ok.body).toEqual({ ok: true, dokployDeleted: false });
     expect(dokCalls).toHaveLength(0);
-  });
-});
-
-describe('密钥指纹清单', () => {
-  it('长值有指纹、短值排除、受限变量不泄露名称', async () => {
-    await api('POST', '/api/envs', { token: adminToken, payload: { slug: 'fp-env', name: '指纹测试', description: '' } });
-    await api('POST', '/api/envs/fp-env/variables', { token: adminToken, payload: { key: 'LONG_TOKEN', value: 'super-secret-token-value-123', description: '' } });
-    await api('POST', '/api/envs/fp-env/variables', { token: adminToken, payload: { key: 'SHORT', value: 'abc', description: '' } });
-    await api('POST', '/api/envs/fp-env/variables', {
-      token: adminToken,
-      payload: { key: 'HIDDEN_LONG', value: 'hidden-secret-value-456', description: '', visibleWithoutPermission: false },
-    });
-    // 非敏感变量明文存储，不是密钥，不进指纹清单
-    await api('POST', '/api/envs/fp-env/variables', {
-      token: adminToken,
-      payload: { key: 'PLAIN_LONG', value: 'plain-service-url-very-long', description: '', secret: false },
-    });
-    const r = await api('GET', '/api/secret-fingerprints', { token: outsiderToken });
-    expect(r.status).toBe(200);
-    const keys = r.body.map((f: { key: string }) => f.key);
-    expect(keys).toContain('LONG_TOKEN');
-    expect(keys).not.toContain('SHORT');
-    expect(keys).not.toContain('HIDDEN_LONG');
-    expect(keys).not.toContain('PLAIN_LONG');
-    expect(keys).toContain('(受限变量)');
-    const long = r.body.find((f: { key: string }) => f.key === 'LONG_TOKEN');
-    expect(long.fingerprint).toMatch(/^[0-9a-f]{64}$/);
-    expect(long.length).toBe('super-secret-token-value-123'.length);
   });
 });

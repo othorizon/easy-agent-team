@@ -29,18 +29,14 @@ README 里挑了一部分，这里是全部。所有画面来自同一份可复�
 
 `eat ask targets` 列出可求助的人与「可就此 Skill 求助」的作者，AI 依据能力描述自己选。
 
-### 部署门禁：本地扫描拦下密钥
-
-![eat deploy 前置检查](assets/demos/deploy-gate.gif)
-
-除了通用规则与 `.env` 误提交，还会把文件里的字符串与**平台下发过的密钥指纹**比对——
-这条命中的就是刚 `eat env pull` 下来的那个 token。
-
 ### 部署失败：真实报错就在平台里
 
 ![部署失败与构建日志](assets/demos/deploy-fail.gif)
 
 不用登部署后台翻日志，`eat app build-logs` 直接给到构建的原始输出。
+
+> 这两段部署录屏录于部署前密钥扫描移除（决策 64）之前：画面里 `eat deploy` 开头的「前置检查: 扫描 …」
+> 几行现在已经不再输出，其余输出不变。重录步骤见 [scripts/demo/README.md](../scripts/demo/README.md)。
 
 ### 修好上线
 
@@ -116,8 +112,8 @@ README 里挑了一部分，这里是全部。所有画面来自同一份可复�
 
 ![部署记录](assets/screenshots/app-deployments.png)
 
-三条记录分别是：直接在部署后台触发的（标「未经平台扫描」，门禁被绕过因此可见）、
-平台触发且构建成功的、平台触发但构建失败的。
+三条记录分别是：直接在部署后台触发的（标「Dokploy 侧」，门禁被绕过因此可见）、
+平台触发且构建成功的、平台触发但构建失败的。（截图拍于决策 64 之前，当时还有一列「检查」，现已移除。）
 
 ![构建日志](assets/screenshots/app-build-logs.png)
 

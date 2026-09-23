@@ -17,18 +17,14 @@ import type {
   DeploymentsQuery,
   DokployDeployment,
   LogsQuery,
-  PrecheckReport,
   RunLogsResult,
-  SecretFingerprint,
   TriggerDeployRequest,
 } from '@eat/shared';
-import { FINGERPRINT_MIN_LENGTH } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
-import { decryptSecret, sha256Hex } from '../common/crypto';
 import { SHORT_ID_MIN_LENGTH } from '../common/short-id';
 import { DB, type Db } from '../db/db.module';
-import { deployments, environments, envVariables, mcpGatewayTokens, users } from '../db/schema';
+import { deployments, users } from '../db/schema';
 import { AppsService, type AppRow } from './apps.service';
 import type { DokployClient, DokployQueueJob } from './dokploy.client';
 import { DokploySettingsService } from './dokploy-settings.service';
@@ -65,7 +61,7 @@ const FAILURE_LOG_CHARS = 800;
 /** 构建日志接口回带多少条最近构建供切换 */
 const RECENT_BUILDS = 20;
 
-/** 部署触发 / 部署记录 / 日志 / 密钥指纹清单。应用本身（配置、成员、授权、env）在 AppsService */
+/** 部署触发 / 部署记录 / 日志。应用本身（配置、成员、授权、env）在 AppsService */
 @Injectable()
 export class DeployService {
   private readonly logger = new Logger(DeployService.name);
@@ -85,7 +81,6 @@ export class DeployService {
       triggeredBy: row.triggeredBy,
       triggeredByName,
       source: row.source,
-      report: (row.report as DeploymentMeta['report']) ?? null,
       claim,
       triggeredAt: row.createdAt.toISOString(),
     };
@@ -99,31 +94,18 @@ export class DeployService {
   }
 
   /**
-   * 触发部署。三道门依次过：成员资格 → 检查报告（决策 #8：CLI 触发必须携带通过的报告；
-   * 控制台触发没有本地代码可扫，记录标成「未做密钥扫描」）→ 管理员授权（决策 31：用户自建的应用
-   * 首次部署要管理员放行一次；被拒时记下「有人试过」，控制台据此提示管理员）。
+   * 触发部署。两道门依次过：成员资格 → 管理员授权（决策 31：用户自建的应用首次部署要管理员放行一次；
+   * 被拒时记下「有人试过」，控制台据此提示管理员）。部署前的本地密钥扫描与检查报告已移除（决策 64），
+   * 三种来源（cli / console / remote）走的是同一套门禁。
    *
    * 部署记录本身归 Dokploy——这里只做两件事：往 Dokploy 的构建记录上打一个 `eat:<id>` 标记，
-   * 再把 Dokploy 没有的业务元数据（谁触发的、从哪触发的、带了什么检查报告）存进平台库。
+   * 再把 Dokploy 没有的业务元数据（谁触发的、从哪触发的）存进平台库。
    * 顺序刻意是「先触发、成功了才落库」：Dokploy 拒绝时不留下一条永远认领不到的孤儿元数据。
    */
   async deploy(user: AuthUser, slug: string, dto: TriggerDeployRequest): Promise<DeploymentInfo> {
     const app = await this.apps.getApp(slug);
     if (!(await this.apps.isMember(app, user))) {
       throw new ForbiddenException({ error: 'FORBIDDEN', message: '仅应用成员可部署（找 Owner 把你加入应用）' });
-    }
-    let report: PrecheckReport | null = null;
-    if (dto.source === 'cli') {
-      if (!dto.report) {
-        throw new BadRequestException({ error: 'VALIDATION_FAILED', message: 'CLI 触发部署必须携带本地检查报告（eat deploy 会自动生成）' });
-      }
-      if (!dto.report.passed) {
-        throw new BadRequestException({
-          error: 'PRECHECK_FAILED',
-          message: `前置检查未通过（${dto.report.findings.length} 个问题），修复后重试。绝不要通过删除检查报告来绕过`,
-        });
-      }
-      report = dto.report;
     }
     if (!app.deployApproved) {
       await this.apps.markApprovalRequested(app.id);
@@ -155,7 +137,6 @@ export class DeployService {
         appId: app.id,
         triggeredBy: user.id,
         source: dto.source,
-        report: report as unknown as Record<string, unknown> | null,
       })
       .returning();
     await this.audit.record({
@@ -370,7 +351,7 @@ export class DeployService {
       .sort((a, b) => a.at - b.at);
     for (const meta of [...metas].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())) {
       // 已经认领过一次的元数据不再参与推断：它此刻没配上构建记录只说明那条被 Dokploy 清理了，
-      // 让它去认领别人的构建就成了张冠李戴——把 Dokploy 侧触发的部署显示成经过平台扫描的部署
+      // 让它去认领别人的构建就成了张冠李戴——把 Dokploy 侧触发的部署显示成经平台触发的部署
       if (used.has(meta.id) || meta.dokployDeploymentId !== null || free.length === 0) continue;
       const at = meta.createdAt.getTime();
       // 时间窗两头都要卡：只往后找（构建记录不可能早于触发），也不能找得太远，
@@ -497,62 +478,5 @@ export class DeployService {
       meta: { containerId: target?.containerId ?? null, tail: query.tail },
     });
     return { appSlug: app.slug, container: target ?? null, logs, containers };
-  }
-
-  // ---------- 密钥指纹清单（CLI 扫描用） ----------
-
-  /**
-   * 所有环境变量值的 SHA-256 单向指纹（仅长度 ≥ FINGERPRINT_MIN_LENGTH 的值）。
-   * 无权限可见性为隐藏的变量不泄露 env/key 名。读取落审计。
-   */
-  async secretFingerprints(user: AuthUser): Promise<SecretFingerprint[]> {
-    const rows = await this.db
-      .select({ variable: envVariables, envSlug: environments.slug })
-      .from(envVariables)
-      .innerJoin(environments, eq(envVariables.environmentId, environments.id));
-    const out: SecretFingerprint[] = [];
-    for (const r of rows) {
-      // 非敏感变量明文存储，不是密钥，不进指纹清单
-      if (!r.variable.secret || !r.variable.valueEncrypted) continue;
-      let value: string;
-      try {
-        value = decryptSecret(r.variable.valueEncrypted);
-      } catch {
-        continue;
-      }
-      if (value.length < FINGERPRINT_MIN_LENGTH) continue;
-      const visible = r.variable.visibleWithoutPermission;
-      out.push({
-        fingerprint: sha256Hex(value),
-        length: value.length,
-        environment: visible ? r.envSlug : '(受限变量)',
-        key: visible ? r.variable.key : '(受限变量)',
-      });
-    }
-
-    // MCP 网关接入地址也是平台签发的密钥（决策 51）：它最可能的泄漏方式就是被写进
-    // 仓库里的 .mcp.json 然后提交上来，所以要让 CLI 的部署前扫描能认出它。
-    // token_hash 本来就是 sha256(明文)，与指纹口径一致，直接取列即可，不必解密。
-    const gatewayRows = await this.db
-      .select({ tokenHash: mcpGatewayTokens.tokenHash, prefix: mcpGatewayTokens.prefix })
-      .from(mcpGatewayTokens)
-      .where(isNull(mcpGatewayTokens.revokedAt));
-    for (const g of gatewayRows) {
-      out.push({
-        fingerprint: g.tokenHash,
-        // randomToken('eatg') = 'eatg_' + 48 位十六进制
-        length: 'eatg_'.length + 48,
-        environment: '(MCP 接入地址)',
-        key: g.prefix,
-      });
-    }
-
-    await this.audit.record({
-      actorId: user.id,
-      actorTokenId: user.tokenId,
-      action: 'fingerprints.read',
-      meta: { count: out.length },
-    });
-    return out;
   }
 }

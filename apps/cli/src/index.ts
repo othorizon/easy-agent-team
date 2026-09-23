@@ -18,7 +18,6 @@ import {
   buildLogs,
   deployRun,
   runLogs,
-  scanOnly,
 } from './commands/app.js';
 import { skillExport, skillList, skillPush, skillSubscribe, skillUnsubscribe } from './commands/skill.js';
 import { selfUpdate } from './commands/self-update.js';
@@ -153,16 +152,12 @@ db
   .action(dbRequest);
 db.command('list').description('我的数据库分配与凭证环境').action(dbList);
 
-program
-  .command('scan [dir]')
-  .description('本地密钥扫描（通用规则 + 平台密钥指纹 + .env 误提交），不部署')
-  .action(scanOnly);
 // deploy 留在顶层：最高频，且做成 `app deploy` 会与 `app <slug>` 形式的参数打架
 program
   .command('deploy [app]')
-  .description('部署应用：本地前置检查通过后触发部署（应用需先经管理员授权一次）')
-  .option('--dir <dir>', '代码目录（默认当前目录）')
+  .description('部署应用：按应用绑定的 Git 仓库与分支构建（改动需先推送；应用需先经管理员授权一次）')
   .option('--check <cmd>', '可选的本地预跑命令（如 "pnpm build"），非零退出则阻止部署')
+  .option('--dir <dir>', '--check 的执行目录（默认当前目录）')
   .action(deployRun);
 
 const app = program.command('app').description('应用：创建、配置、env、部署状态、日志');

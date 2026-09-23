@@ -225,10 +225,11 @@ describe('工具', () => {
     expect(names).toContain('list_env_variables');
     expect(names).toContain('trigger_deploy');
     expect(new Set(names).size).toBe(names.length);
-    // 远程版的部署工具不收 workdir（没有本地代码可扫）
+    // 部署工具只收 app：构建源是应用绑定的 Git 仓库，与调用方本地的代码无关（决策 64 起两种接入一致）
     const trigger = (await rpc('tools/list')).body.result.tools.find((t: { name: string }) => t.name === 'trigger_deploy');
-    expect(trigger.inputSchema.properties.workdir).toBeUndefined();
-    expect(trigger.description).toContain('未做密钥扫描');
+    expect(trigger.inputSchema.required).toEqual(['app']);
+    expect(Object.keys(trigger.inputSchema.properties)).toEqual(['app']);
+    expect(trigger.description).not.toContain('扫描');
   });
 
   it('get_platform_guide 返回内置指南正文', async () => {

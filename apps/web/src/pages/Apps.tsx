@@ -66,8 +66,8 @@ const BUILD_TYPE_OPTIONS: Array<{ label: string; value: AppBuildType }> = [
 ];
 
 /**
- * 一次部署是谁发起的（决策 30 / 31）。platform 为 null 就是「有人绕过平台、直接在 Dokploy 侧触发」；
- * source=console / remote 分别是控制台按钮与云端 MCP 触发的，同样没做本地密钥扫描——都要显眼地标出来。
+ * 一次部署是谁、从哪发起的（决策 30 / 31）。platform 为 null 就是「有人绕过平台、直接在 Dokploy 侧触发」，
+ * 没过平台的成员与授权门禁，要显眼地标出来；source=console / remote 只是入口不同，门禁与 CLI 一致（决策 64）。
  */
 function OriginCell({ d }: { d: DeploymentInfo }) {
   if (!d.platform) {
@@ -76,8 +76,8 @@ function OriginCell({ d }: { d: DeploymentInfo }) {
   return (
     <span className="flex flex-wrap items-center gap-1 text-muted-foreground" title={d.platform.claim === 'inferred' ? '归属按触发时间推断，未必准确' : undefined}>
       {d.platform.triggeredByName}
-      {d.platform.source === 'console' && <Badge variant="warning">控制台</Badge>}
-      {d.platform.source === 'remote' && <Badge variant="warning">远程 MCP</Badge>}
+      {d.platform.source === 'console' && <Badge variant="outline">控制台</Badge>}
+      {d.platform.source === 'remote' && <Badge variant="outline">远程 MCP</Badge>}
       {d.platform.claim === 'inferred' && ' ⚠'}
     </span>
   );
@@ -162,7 +162,7 @@ export function AppsPage() {
         description={
           <>
             应用对应 Dokploy 上的 application：填 Git 地址与构建方式即可自助创建，平台自动在 Dokploy 上建好应用并绑定 SSH key。
-            首次部署需管理员授权一次。命令行里 <InlineCode>eat deploy &lt;slug&gt;</InlineCode> 会先做本地密钥扫描再部署；控制台的「部署」按钮不做扫描，记录会标注。
+            首次部署需管理员授权一次，之后命令行 <InlineCode>eat deploy &lt;slug&gt;</InlineCode> 与详情里的「部署」按钮都能触发，均按绑定的 Git 分支构建。
           </>
         }
         actions={
@@ -433,7 +433,7 @@ function Overview({
         {app.isMember && (
           <Confirm
             title={`部署 ${app.slug}？`}
-            description="从控制台触发不做本地密钥扫描（eat deploy 才做），这次部署会在记录里标注「控制台」。Dokploy 将按当前分支重新构建并上线。"
+            description="Dokploy 将按当前分支重新构建并上线，这次部署会在记录里标注「控制台」。"
             confirmText="部署"
             destructive={false}
             onConfirm={() => deploy.mutate()}
@@ -649,7 +649,7 @@ function Deployments({ app }: { app: AppInfo }) {
       {deployments.isLoading ? (
         <TableSkeleton rows={2} />
       ) : (deployments.data ?? []).length === 0 ? (
-        <Empty text="暂无部署。概览里点「部署」，或在代码目录运行 eat deploy。" className="py-6" />
+        <Empty text={`暂无部署。概览里点「部署」，或运行 eat deploy ${app.slug}。`} className="py-6" />
       ) : (
         <Table className="min-w-[560px]">
           <TableHeader>
@@ -657,7 +657,6 @@ function Deployments({ app }: { app: AppInfo }) {
               <TableHead className="w-36">时间</TableHead>
               <TableHead className="w-20">状态</TableHead>
               <TableHead className="w-32">来源</TableHead>
-              <TableHead>检查</TableHead>
               <TableHead>备注</TableHead>
             </TableRow>
           </TableHeader>
@@ -669,14 +668,7 @@ function Deployments({ app }: { app: AppInfo }) {
                 <TableCell>
                   <OriginCell d={d} />
                 </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {d.platform?.report
-                    ? `扫描 ${d.platform.report.scannedFiles} 文件 / ${d.platform.report.findings.length} 问题`
-                    : d.platform
-                      ? '未做密钥扫描'
-                      : '未经平台扫描'}
-                </TableCell>
-                <TableCell className="max-w-48 truncate text-muted-foreground" title={d.error ?? undefined}>
+                <TableCell className="max-w-80 truncate text-muted-foreground" title={d.error ?? undefined}>
                   {d.error ?? '—'}
                 </TableCell>
               </TableRow>
@@ -686,7 +678,7 @@ function Deployments({ app }: { app: AppInfo }) {
       )}
       <p className="mt-2 text-xs text-muted-foreground">
         {allHistory
-          ? '「已归档」= Dokploy 那边的构建记录已被清理，只剩平台侧元数据（谁触发的、扫描报告）。'
+          ? '「已归档」= Dokploy 那边的构建记录已被清理，只剩平台侧元数据（谁触发的、从哪触发的）。'
           : 'Dokploy 每个应用只保留最近 10 次构建；更早的部署点「显示全部历史」查看。'}
       </p>
       {logsOf && <LogsDialog slug={app.slug} kind={logsOf} onClose={() => setLogsOf(null)} />}

@@ -498,17 +498,6 @@ describe('非敏感变量（明文存储；读值授权模型不变）', () => {
     });
     expect(back.body.value).toBe('https://svc.internal:8080');
   });
-
-  it('非敏感变量不进入密钥指纹清单', async () => {
-    await api('POST', '/api/envs/plain-env/variables', {
-      token: adminToken,
-      payload: { key: 'PLAIN_LONG', value: 'plain-but-long-value-1234567890', description: '', secret: false },
-    });
-    const r = await api('GET', '/api/secret-fingerprints', { token: adminToken });
-    const keys = r.body.map((f: { key: string }) => f.key);
-    expect(keys).not.toContain('PLAIN_LONG');
-    expect(keys).toContain('PLAIN_ENV_TOKEN');
-  });
 });
 
 describe('环境编辑与删除', () => {

@@ -71,30 +71,14 @@ export const CASTS = {
     ],
   },
 
-  /** 部署门禁：本地扫描认出与平台密钥指纹匹配的字符串，直接不让部署 */
-  'deploy-gate': {
-    title: '孙浩 — 差点把密钥推上去',
-    home: '/home/sunhao',
-    cwd: '/home/sunhao/work/crm-dashboard',
-    rows: 32,
-    setup: { loginAs: 'sunhao', run: ['eat sync', 'git reset -q', 'git checkout -- .', 'git clean -qfd'] },
-    steps: [
-      { cmd: 'eat env pull internal-api --keys INTERNAL_API_TOKEN' },
-      { cmd: 'git add -A && git status --short' },
-      { cmd: 'eat deploy crm-dashboard' },
-      { cmd: 'git rm -q --cached .env && echo .env >> .gitignore && rm .env' },
-      { cmd: 'eat scan' },
-    ],
-  },
-
   /** 部署失败：平台里直接看到构建的真实报错，不用登部署后台翻日志 */
   'deploy-fail': {
     title: '孙浩 — 构建挂了',
     home: '/home/sunhao',
     cwd: '/home/sunhao/work/crm-dashboard',
     rows: 44,
-    // 上一条 cast 在工作区里留了 .gitignore 与暂存区改动，先复位
-    setup: { run: ['git reset -q', 'git checkout -- .', 'git clean -qfd'] },
+    // 先把工作区复位；eat sync 是为了让画面里不冒出「团队 Skill 有变更」的更新提示
+    setup: { loginAs: 'sunhao', run: ['eat sync', 'git reset -q', 'git checkout -- .', 'git clean -qfd'] },
     steps: [
       { cmd: 'eat deploy crm-dashboard' },
       { cmd: 'eat app build-logs crm-dashboard --tail 10' },
