@@ -100,14 +100,26 @@ describe('buildUpdateNotice：提示什么、什么时候闭嘴', () => {
     expect(buildUpdateNotice({ latestCliVersion: '0.1.0' }, local, null)).toBeNull();
   });
 
-  it('已就该版本提示过则不再重复（按版本去重）', () => {
-    const state: UpdateState = { latestCliVersion: '0.2.0', notifiedCliVersion: '0.2.0' };
-    expect(buildUpdateNotice(state, local, null)).toBeNull();
+  // 决策 67：不按版本去重，更新之前每条命令都提示
+  it('同一版本反复提示，直到更新为止', () => {
+    const state: UpdateState = { latestCliVersion: '0.2.0' };
+    expect(buildUpdateNotice(state, local, null)?.cliVersion).toBe('0.2.0');
+    expect(buildUpdateNotice(state, local, null)?.cliVersion).toBe('0.2.0');
+    expect(buildUpdateNotice(state, '0.2.0', null)).toBeNull();
   });
 
-  it('出了更新的版本后重新提示', () => {
-    const state: UpdateState = { latestCliVersion: '0.3.0', notifiedCliVersion: '0.2.0' };
-    expect(buildUpdateNotice(state, local, null)?.cliVersion).toBe('0.3.0');
+  it('旧版本写下的「已提示」标记不再压住提示', () => {
+    // 老 CLI 的 state.json 里还留着 notifiedCliVersion / notifiedSkillVersion
+    const state = {
+      latestCliVersion: '0.2.0',
+      notifiedCliVersion: '0.2.0',
+      serverSkillVersion: 'aaaa',
+      syncedSkillVersion: 'bbbb',
+      notifiedSkillVersion: 'aaaa',
+    } as UpdateState;
+    const notice = buildUpdateNotice(state, local, null);
+    expect(notice?.cliVersion).toBe('0.2.0');
+    expect(notice?.skillVersion).toBe('aaaa');
   });
 
   it('本地 Skill 基线与服务端指纹不一致时提示 sync', () => {
@@ -143,15 +155,6 @@ describe('buildUpdateNotice：提示什么、什么时候闭嘴', () => {
     expect(buildUpdateNotice(state, local, null)).toBeNull();
   });
 
-  it('同一指纹只提示一次', () => {
-    const state: UpdateState = {
-      serverSkillVersion: 'aaaa',
-      syncedSkillVersion: 'bbbb',
-      notifiedSkillVersion: 'aaaa',
-    };
-    expect(buildUpdateNotice(state, local, null)).toBeNull();
-  });
-
   it('两类更新并存时合并成一条提示，并始终带关闭方式', () => {
     const state: UpdateState = {
       latestCliVersion: '0.2.0',
@@ -162,6 +165,7 @@ describe('buildUpdateNotice：提示什么、什么时候闭嘴', () => {
     expect(notice?.lines).toHaveLength(4);
     const text = notice?.lines.join('\n') ?? '';
     expect(text).toContain('不影响本次命令结果');
+    expect(text).toContain('每条 eat 命令都会附');
     expect(text).toContain('eat self-update');
     expect(text).toContain('eat sync');
     expect(text).toContain('EAT_NO_UPDATE_NOTIFIER=1');
@@ -197,25 +201,22 @@ describe('mergeServerVersions：把响应头合进状态', () => {
     expect(mergeServerVersions(state, url, '0.3.0', 'aaaa')?.latestCliVersion).toBe('0.3.0');
   });
 
-  it('保留 sync 基线与已提示标记，不被响应头覆盖', () => {
+  it('保留 sync 基线，不被响应头覆盖', () => {
     const state: UpdateState = {
       serverUrl: url,
       serverSkillVersion: 'aaaa',
       syncedSkillVersion: 'aaaa',
-      notifiedCliVersion: '0.2.0',
     };
     const next = mergeServerVersions(state, url, '0.2.0', 'bbbb');
     expect(next?.syncedSkillVersion).toBe('aaaa');
-    expect(next?.notifiedCliVersion).toBe('0.2.0');
   });
 
-  it('换平台时整体重置，旧平台的基线与提示标记一律作废', () => {
+  it('换平台时整体重置，旧平台的基线一律作废', () => {
     const state: UpdateState = {
       serverUrl: 'https://old.example.com',
       latestCliVersion: '0.9.0',
       serverSkillVersion: 'aaaa',
       syncedSkillVersion: 'aaaa',
-      notifiedCliVersion: '0.9.0',
     };
     expect(mergeServerVersions(state, url, '0.2.0', 'bbbb')).toEqual({
       serverUrl: url,

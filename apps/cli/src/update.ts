@@ -13,8 +13,10 @@ import { resolveSyncRoots } from './sync-config.js';
  * 面向 Agent 的三条约束（与面向人的 update-notifier 不同）：
  *   1. 提示只走 stderr，stdout 永远保持干净可解析——Agent 常把 stdout 当结构化输出解析；
  *      也因此不做 TTY 判断：Agent 调用时本就不是 TTY，按 TTY 静默等于对目标用户永不提示。
- *   2. 按版本去重：一个任务里可能连跑十几条 eat 命令，同一个目标版本只提示一次，
- *      避免持续污染 Agent 上下文、也避免它反复纠结要不要中断手上的活去更新。
+ *   2. 不去重：更新之前每条命令都提示（决策 67）。团队要的是所有人始终用最新版；
+ *      曾经按版本只提示一次，但去重标记记在本机共享的 state.json 里，谁先跑 eat 谁就把提示
+ *      「用掉」——人在终端里看过一眼，之后所有 Agent 会话都再也收不到。
+ *      唯一保留的闸门是「一个进程一次」：CLI 一条命令一次，MCP server 一个进程一次。
  *   3. 只提示不自动更新，且任何环节失败都静默——绝不改变命令的输出与退出码。
  */
 
@@ -31,9 +33,6 @@ export interface UpdateState {
   serverSkillVersion?: string;
   /** 本地上次 eat sync 实际落地的指纹 */
   syncedSkillVersion?: string;
-  /** 已经就该版本 / 该指纹提示过，不再重复 */
-  notifiedCliVersion?: string;
-  notifiedSkillVersion?: string;
   /** 上次 eat sync 实际落地的目录，用于落点漂移检测（决策 56） */
   lastSyncTarget?: string;
 }
@@ -107,7 +106,6 @@ export function markSkillsSynced(): void {
     const state = loadState();
     if (!state.serverSkillVersion) return;
     state.syncedSkillVersion = state.serverSkillVersion;
-    state.notifiedSkillVersion = undefined;
     saveState(state);
   } catch {
     // ignore
@@ -141,12 +139,18 @@ export function clearSyncTarget(): void {
   }
 }
 
-/** eat self-update 成功后调用：抑制「刚更新完又提示更新」 */
+/**
+ * 本进程视作「已安装」的 CLI 版本。self-update 覆盖产物后，正在跑的仍是旧代码（CLI_VERSION 是旧值），
+ * 不改这里的话，这条 self-update 命令收尾时会紧跟着提示「CLI 旧 → 新，请 eat self-update」。
+ */
+let installedCliVersion = CLI_VERSION;
+
+/** eat self-update 成功后调用：记下平台版本，并抑制本进程「刚更新完又提示更新」 */
 export function markCliUpdated(version: string): void {
+  if (isNewerVersion(version, installedCliVersion)) installedCliVersion = version;
   try {
     const state = loadState();
     state.latestCliVersion = version;
-    state.notifiedCliVersion = version;
     saveState(state);
   } catch {
     // ignore
@@ -193,7 +197,7 @@ export function localSkillVersion(dir: string = GLOBAL_SKILLS_DIR): string | nul
 
 export interface UpdateNotice {
   lines: string[];
-  /** 本次提示覆盖的版本 / 指纹，供调用方写入去重标记 */
+  /** 本次提示覆盖的版本 / 指纹 */
   cliVersion?: string;
   skillVersion?: string;
 }
@@ -212,14 +216,14 @@ export function buildUpdateNotice(
   const notice: UpdateNotice = { lines: [] };
 
   const latest = state.latestCliVersion;
-  if (latest && isNewerVersion(latest, localCliVersion) && state.notifiedCliVersion !== latest) {
+  if (latest && isNewerVersion(latest, localCliVersion)) {
     items.push(`CLI ${localCliVersion} → ${latest} —— 更新: eat self-update`);
     notice.cliVersion = latest;
   }
 
   const server = state.serverSkillVersion;
   const local = state.syncedSkillVersion ?? localSkills;
-  if (server && local !== null && local !== undefined && server !== local && state.notifiedSkillVersion !== server) {
+  if (server && local !== null && local !== undefined && server !== local) {
     // 带上落点：Agent 照着提示裸跑 eat sync 之前就能看出会装到哪（决策 56）
     items.push(`团队 Skill 有变更 —— 更新: eat sync${syncTarget ? `（落点：${syncTarget}）` : ''}`);
     notice.skillVersion = server;
@@ -227,7 +231,7 @@ export function buildUpdateNotice(
 
   if (items.length === 0) return null;
   notice.lines = [
-    '[eat] 有可用更新（不影响本次命令结果，可稍后处理）：',
+    '[eat] 有可用更新（不影响本次命令结果；更新之前每条 eat 命令都会附这段提示）：',
     ...items.map((i) => `      ${i}`),
     '      不再提示: 设置环境变量 EAT_NO_UPDATE_NOTIFIER=1',
   ];
@@ -245,6 +249,17 @@ function resolvedSyncTarget(): string | null {
 
 let flushed = false;
 
+function currentNotice(): UpdateNotice | null {
+  const state = loadState();
+  const target = resolvedSyncTarget();
+  return buildUpdateNotice(
+    state,
+    installedCliVersion,
+    state.syncedSkillVersion ? null : localSkillVersion(target ?? GLOBAL_SKILLS_DIR),
+    target,
+  );
+}
+
 /**
  * 命令收尾时输出提示（由 index.ts 挂在 process exit 上，覆盖正常结束与 process.exit 两条路径）。
  * 必须全同步：exit 回调里跑不了异步。
@@ -253,19 +268,8 @@ export function flushUpdateNotice(): void {
   if (flushed || notifierDisabled()) return;
   flushed = true;
   try {
-    const state = loadState();
-    const target = resolvedSyncTarget();
-    const notice = buildUpdateNotice(
-      state,
-      CLI_VERSION,
-      state.syncedSkillVersion ? null : localSkillVersion(target ?? GLOBAL_SKILLS_DIR),
-      target,
-    );
-    if (!notice) return;
-    console.error(notice.lines.join('\n'));
-    if (notice.cliVersion) state.notifiedCliVersion = notice.cliVersion;
-    if (notice.skillVersion) state.notifiedSkillVersion = notice.skillVersion;
-    saveState(state);
+    const notice = currentNotice();
+    if (notice) console.error(notice.lines.join('\n'));
   } catch {
     // ignore
   }
@@ -273,24 +277,15 @@ export function flushUpdateNotice(): void {
 
 /**
  * MCP 场景的提示（决策 26）：stdio server 的 stderr 通常只进客户端日志，Agent 看不见，
- * 所以改成挂在工具返回内容里。同样按版本去重，一个 server 生命周期内也只附一次。
+ * 所以改成挂在工具返回内容里。一个 server 进程只附一次（决策 67）：server 通常与客户端会话
+ * 同生共死，每个新会话都能看到一次；再往每次工具返回里塞同一段话不增加信息，只占上下文。
  */
 export function takeUpdateNoticeForMcp(): string | null {
   if (flushed || notifierDisabled()) return null;
   try {
-    const state = loadState();
-    const target = resolvedSyncTarget();
-    const notice = buildUpdateNotice(
-      state,
-      CLI_VERSION,
-      state.syncedSkillVersion ? null : localSkillVersion(target ?? GLOBAL_SKILLS_DIR),
-      target,
-    );
+    const notice = currentNotice();
     if (!notice) return null;
     flushed = true;
-    if (notice.cliVersion) state.notifiedCliVersion = notice.cliVersion;
-    if (notice.skillVersion) state.notifiedSkillVersion = notice.skillVersion;
-    saveState(state);
     return notice.lines.join('\n');
   } catch {
     return null;
@@ -300,4 +295,5 @@ export function takeUpdateNoticeForMcp(): string | null {
 /** 单测用：重置一次性输出的闸门 */
 export function resetNoticeGate(): void {
   flushed = false;
+  installedCliVersion = CLI_VERSION;
 }
