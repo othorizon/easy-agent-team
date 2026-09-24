@@ -150,12 +150,16 @@ function helpTools(mode: EatToolMode): EatToolDef[] {
     {
       name: 'reply_help_request',
       description:
-        '在求助中追问或补充信息（也用于替用户回复）。对已解决的求助回复会把它重新打开、回到待回复，对方会再收到通知——只是道谢或确认收到就不必再发。',
+        '在求助中追问或补充信息（也用于替用户回复）。对已解决的求助回复默认会把它重新打开、回到待回复——需要对方再处理时这正是想要的；只是道谢或补充说明、不需要对方处理时传 reopen=false，求助保持已解决（对方照常收到这条消息）。',
       inputSchema: {
         type: 'object',
         properties: {
           requestId: { type: 'string', description: '求助 ID' },
           content: { type: 'string', description: '追问或补充的内容' },
+          reopen: {
+            type: 'boolean',
+            description: '只对已解决的求助起作用：默认 true 重新打开；false = 只留言、保持已解决。未解决的求助忽略此参数',
+          },
         },
         required: ['requestId', 'content'],
       },

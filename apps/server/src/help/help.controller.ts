@@ -76,7 +76,7 @@ export class HelpController {
     @Body(new ZodValidationPipe(replyHelpRequestSchema)) body: ReplyHelpRequest,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.help.reply(user, id, body.content);
+    return this.help.reply(user, id, body.content, body.reopen);
   }
 
   @Post('help-requests/:id/resolve')

@@ -106,8 +106,9 @@ ask.command('list').description('我发起的与找我的求助').action(askList
 ask.command('show <id>').description('查看求助详情与对话（支持 ID 前缀）').action(askShow);
 ask
   .command('reply <id>')
-  .description('回复 / 追问（支持 ID 前缀）')
+  .description('回复 / 追问（支持 ID 前缀）；已解决的求助默认会被重新打开')
   .requiredOption('--message <message>', '内容')
+  .option('--no-reopen', '只对已解决的求助起作用：只留言（道谢 / 补充说明），求助保持已解决')
   .action(askReply);
 ask.command('resolve <id>').description('标记已解决（支持 ID 前缀）').action(askResolve);
 ask.command('delete <id>').description('删除求助（支持 ID 前缀；仅求助者/管理员，已沉淀为经验的不可删）').action(askDelete);

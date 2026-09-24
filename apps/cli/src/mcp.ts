@@ -149,6 +149,8 @@ export async function startMcpServer(): Promise<void> {
           return jsonResult(
             await api.request('POST', `/api/help-requests/${args.requestId as string}/reply`, {
               content: args.content,
+              // 不传则交给服务端默认（重新打开）
+              ...(args.reopen !== undefined ? { reopen: args.reopen } : {}),
             }),
           );
         }

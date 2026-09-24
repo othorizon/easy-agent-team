@@ -99,6 +99,12 @@ export type HelpRequestDetail = z.infer<typeof helpRequestDetailSchema>;
 
 export const replyHelpRequestSchema = z.object({
   content: z.string().min(1).max(10000),
+  /**
+   * 只对已解决的求助起作用（决策 66）：默认 true = 这条回复需要对方再处理，把求助重新打开；
+   * false = 道谢 / 纯补充，留言并照常通知对方，但求助保持已解决。
+   * 未解决的求助照常按谁回复改状态（被求助者 → answered，其他人 → open），这个参数不起作用。
+   */
+  reopen: z.boolean().default(true),
 });
 export type ReplyHelpRequest = z.infer<typeof replyHelpRequestSchema>;
 

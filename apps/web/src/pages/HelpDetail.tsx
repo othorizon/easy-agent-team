@@ -13,6 +13,7 @@ import { PageLoading } from '../components/page-loading';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
+import { Checkbox } from '../components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { Switch } from '../components/ui/switch';
@@ -35,7 +36,7 @@ export function HelpDetailPage() {
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['help', id] });
 
   const reply = useMutation({
-    mutationFn: (content: string) => api('POST', `/api/help-requests/${id}/reply`, { content }),
+    mutationFn: (v: { content: string; reopen: boolean }) => api('POST', `/api/help-requests/${id}/reply`, v),
     // 回复会改状态（已解决的也会被重新打开），清单里的状态与待回复角标一起刷新
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['help-mine'] });
@@ -84,7 +85,8 @@ export function HelpDetailPage() {
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '沉淀失败'),
   });
 
-  const replyForm = useForm<{ content: string }>({ defaultValues: { content: '' } });
+  // reopen 只在已解决时有意义（决策 66），默认勾选：忘了取消只是多一次打扰，默认不勾则追问会悄悄消失
+  const replyForm = useForm<{ content: string; reopen: boolean }>({ defaultValues: { content: '', reopen: true } });
 
   if (!detail.data) return <PageLoading />;
   const r = detail.data;
@@ -213,19 +215,37 @@ export function HelpDetailPage() {
               <form
                 className="mt-1 flex flex-col gap-2 border-t pt-4"
                 onSubmit={replyForm.handleSubmit((v) => {
-                  reply.mutate(v.content);
+                  reply.mutate(v);
                   replyForm.reset();
                 })}
               >
-                {r.status === 'resolved' && (
-                  <p className="text-xs text-muted-foreground">这条求助已解决；发送新回复会把它重新打开，回到待回复。</p>
-                )}
                 <Textarea
                   rows={3}
                   placeholder="回复 / 追问…"
                   aria-invalid={!!replyForm.formState.errors.content}
                   {...replyForm.register('content', { required: true })}
                 />
+                {r.status === 'resolved' && (
+                  <label className="flex cursor-pointer items-start gap-2 text-sm">
+                    <Controller
+                      name="reopen"
+                      control={replyForm.control}
+                      render={({ field }) => (
+                        <Checkbox
+                          checked={field.value}
+                          onCheckedChange={(v) => field.onChange(v === true)}
+                          className="mt-0.5"
+                        />
+                      )}
+                    />
+                    <span>
+                      发送后重新打开这条求助
+                      <span className="block text-xs text-muted-foreground">
+                        对方需要再处理时保留勾选；只是道谢或补充说明就取消，求助保持已解决
+                      </span>
+                    </span>
+                  </label>
+                )}
                 <Button type="submit" loading={reply.isPending} className="w-fit">
                   <Send />
                   发送

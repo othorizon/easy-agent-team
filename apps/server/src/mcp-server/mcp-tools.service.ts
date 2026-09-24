@@ -134,8 +134,11 @@ export class McpToolsService {
         return requestId ? this.help.detail(user, requestId) : this.help.listMine(user);
       }
       case 'reply_help_request': {
-        const { requestId, content } = parse(requestIdArg.extend({ content: z.string().min(1).max(10000) }), args);
-        return this.help.reply(user, requestId, content);
+        const { requestId, content, reopen } = parse(
+          requestIdArg.extend({ content: z.string().min(1).max(10000), reopen: z.boolean().default(true) }),
+          args,
+        );
+        return this.help.reply(user, requestId, content, reopen);
       }
       case 'delete_help_request': {
         const { requestId } = parse(requestIdArg, args);

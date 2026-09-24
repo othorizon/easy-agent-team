@@ -201,7 +201,7 @@ export class HelpService {
     };
   }
 
-  async reply(user: AuthUser, rawId: string, content: string): Promise<HelpRequestDetail> {
+  async reply(user: AuthUser, rawId: string, content: string, reopen = true): Promise<HelpRequestDetail> {
     const row = await this.getRow(rawId, user);
     const id = row.id;
     this.assertVisible(row, user);
@@ -210,19 +210,20 @@ export class HelpService {
     }
     await this.db.insert(helpMessages).values({ requestId: id, senderId: user.id, content });
     // 状态机：被求助者回复 → answered；求助者（或管理员）追问 → open。
-    // 已解决的求助同样按这条走：有了新回复就说明事情没完，自动回到待回复（决策 65）
-    const nextStatus: HelpStatus = user.id === row.helperId ? 'answered' : 'open';
-    const reopened = row.status === 'resolved';
+    // 已解决的求助默认同样按这条走：有了新回复就说明事情没完，回到待回复（决策 65）；
+    // 发送者声明 reopen=false（道谢 / 纯补充）时只留言、保持已解决（决策 66）
+    const wasResolved = row.status === 'resolved';
+    const nextStatus: HelpStatus | null = wasResolved && !reopen ? null : user.id === row.helperId ? 'answered' : 'open';
     await this.db
       .update(helpRequests)
-      .set({ status: nextStatus, updatedAt: sql`now()` })
+      .set({ ...(nextStatus ? { status: nextStatus } : {}), updatedAt: sql`now()` })
       .where(eq(helpRequests.id, id));
     await this.audit.record({
       actorId: user.id,
       action: 'help.replied',
       targetType: 'help_request',
       targetId: id,
-      ...(reopened ? { meta: { reopened: true } } : {}),
+      ...(wasResolved ? { meta: reopen ? { reopened: true } : { keptResolved: true } } : {}),
     });
 
     const other = user.id === row.requesterId ? row.helperId : row.requesterId;
