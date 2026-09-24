@@ -72,6 +72,21 @@ function writeSkill(dir: string, skill: SyncSkill): void {
   }
 }
 
+/**
+ * 删掉路径本身（软链或普通文件），不跟随软链；不存在时静默。
+ * 删软链别用 fs.rmSync：Node 23 ~ 24.13.0 / 25.0 ~ 25.3 的 C++ 实现按跟随软链后的类型判断
+ * （nodejs/node#61040），指向目录的软链 / junction 报「Path is a directory」，悬空软链被当成
+ * 不存在而静默留下。unlink 在 Windows 上同样能删目录软链与 junction：libuv 以不跟随的方式打开，
+ * 且可删的范围与 lstat 报 isSymbolicLink() 的范围一致，不需要 rmdir 兜底。
+ */
+export function unlinkIfExists(p: string): void {
+  try {
+    fs.unlinkSync(p);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+}
+
 export type LinkStrategy = 'symlink' | 'copy';
 
 /**
@@ -115,7 +130,7 @@ export function ensureLink(
 
   if (strategy === 'copy') {
     if (st?.isSymbolicLink()) {
-      fs.rmSync(linkPath, { force: true }); // 换平台/换策略后残留的软链
+      unlinkIfExists(linkPath); // 换平台/换策略后残留的软链
     } else if (st) {
       const existing = readMeta(linkPath);
       if (!existing && !force) return 'conflict';
@@ -138,7 +153,7 @@ export function ensureLink(
 
   if (st?.isSymbolicLink()) {
     if (path.resolve(path.dirname(linkPath), fs.readlinkSync(linkPath)) === dir) return 'ok';
-    fs.rmSync(linkPath, { force: true });
+    unlinkIfExists(linkPath);
   } else if (st) {
     if (!readMeta(linkPath) && !force) return 'conflict';
     fs.rmSync(linkPath, { recursive: true, force: true });
@@ -293,7 +308,7 @@ export async function sync(opts: SyncOpts): Promise<void> {
       if (entry.isSymbolicLink()) {
         // 指向 target 内但源已被清理的悬空链接（相对链接先解析回绝对路径）
         const to = path.resolve(linkRoot, fs.readlinkSync(p));
-        if (to.startsWith(target + path.sep) && !fs.existsSync(to)) fs.rmSync(p, { force: true });
+        if (to.startsWith(target + path.sep) && !fs.existsSync(to)) unlinkIfExists(p);
       } else if (entry.isDirectory()) {
         // Windows 副本、以及历史版本直接落地在 .claude 的受管目录：不在同步范围则一并清理
         const meta = readMeta(p);

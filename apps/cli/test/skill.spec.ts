@@ -102,6 +102,18 @@ describe('writeSkillExport：写出内容', () => {
     expect(fs.statSync(path.join(dir, 'scripts/run.sh')).mode & 0o111).not.toBe(0);
   });
 
+  it('--force 覆盖时遇到悬空软链：删掉链接本身，不顺着它在目录外新建文件', () => {
+    const dir = path.join(root, 'dangling');
+    const outside = path.join(root, 'created-outside.txt');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.symlinkSync(outside, path.join(dir, 'SKILL.md'));
+
+    writeSkillExport(dir, skill(), true);
+    expect(fs.lstatSync(path.join(dir, 'SKILL.md')).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8')).toContain('正文');
+    expect(fs.existsSync(outside)).toBe(false);
+  });
+
   it('目标路径是文件时明确报错', () => {
     const file = path.join(root, 'a-file');
     fs.writeFileSync(file, 'x');
