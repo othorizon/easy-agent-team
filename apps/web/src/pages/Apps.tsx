@@ -663,7 +663,7 @@ function Deployments({ app }: { app: AppInfo }) {
           <TableBody>
             {(deployments.data ?? []).map((d) => (
               <TableRow key={d.deploymentId ?? d.platform?.id}>
-                <TableCell className="text-muted-foreground">{formatDateTime(d.createdAt)}</TableCell>
+                <TableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(d.createdAt)}</TableCell>
                 <TableCell>{STATUS_BADGE[d.status]}</TableCell>
                 <TableCell>
                   <OriginCell d={d} />
