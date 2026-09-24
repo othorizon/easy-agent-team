@@ -15,7 +15,7 @@ import {
   type SyncSkill,
 } from '@eat/shared';
 import { Api } from '../client.js';
-import { safeJoin } from './sync.js';
+import { safeJoin, unlinkIfExists } from './sync.js';
 
 const IGNORED = new Set(['node_modules', '.git', '.eat-meta.json']);
 
@@ -264,7 +264,7 @@ export interface ExportableSkill {
  * 也可能带着旧的权限位（mode 只在创建时生效，原地覆盖恢复不了可执行位）。
  */
 function writeFile(target: string, content: string | Buffer, executable: boolean): void {
-  fs.rmSync(target, { force: true });
+  unlinkIfExists(target);
   fs.writeFileSync(target, content, { mode: executable ? 0o755 : 0o644 });
 }
 
