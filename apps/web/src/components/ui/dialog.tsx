@@ -32,7 +32,9 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          'fixed top-[50%] left-[50%] z-50 grid w-[calc(100%-2rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4',
+          // 单列显式写成 minmax(0,1fr)：隐式的 auto 列会被子元素的最小内容宽度撑开（比如带 min-w 的表格），
+          // 把整个弹窗撑出屏幕；限住之后宽表格在自己的横向滚动容器里滚
+          'fixed top-[50%] left-[50%] z-50 grid w-[calc(100%-2rem)] max-w-lg grid-cols-[minmax(0,1fr)] translate-x-[-50%] translate-y-[-50%] gap-4',
           'max-h-[calc(100dvh-3rem)] overflow-y-auto rounded-xl border bg-card p-5 shadow-lg sm:p-6',
           'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
           'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95',

@@ -225,10 +225,41 @@ describe('工具', () => {
     expect(names).toContain('list_env_variables');
     expect(names).toContain('trigger_deploy');
     expect(new Set(names).size).toBe(names.length);
-    // 远程版的部署工具不收 workdir（没有本地代码可扫）
+    // 部署工具只收 app：构建源是应用绑定的 Git 仓库，与调用方本地的代码无关（决策 64 起两种接入一致）
     const trigger = (await rpc('tools/list')).body.result.tools.find((t: { name: string }) => t.name === 'trigger_deploy');
-    expect(trigger.inputSchema.properties.workdir).toBeUndefined();
-    expect(trigger.description).toContain('未做密钥扫描');
+    expect(trigger.inputSchema.required).toEqual(['app']);
+    expect(Object.keys(trigger.inputSchema.properties)).toEqual(['app']);
+    expect(trigger.description).not.toContain('扫描');
+  });
+
+  it('reply_help_request 透传 reopen（决策 66）：已解决的求助带 reopen=false 保持已解决，缺省则重新打开', async () => {
+    const tool = (await rpc('tools/list')).body.result.tools.find((t: { name: string }) => t.name === 'reply_help_request');
+    expect(tool.inputSchema.properties.reopen.type).toBe('boolean');
+    expect(tool.inputSchema.required).not.toContain('reopen');
+
+    // 管理员登记为可求助的人，成员（API Key 的主人）向他求助，答复后确认解决
+    await app.inject({
+      method: 'PUT',
+      url: '/api/helpers/me',
+      payload: { description: '平台问题' },
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    const adminId = (await api('GET', '/api/helpers', { token: memberToken })).body.helpers[0].userId;
+    const created = await api('POST', '/api/help-requests', {
+      token: memberToken,
+      payload: { title: 'MCP 回复测试', description: '看 reopen 是否透传', tried: '无', helperUserId: adminId },
+    });
+    await api('POST', `/api/help-requests/${created.body.id}/reply`, { token: adminToken, payload: { content: '这样做即可' } });
+    await api('POST', `/api/help-requests/${created.body.id}/resolve`, { token: memberToken });
+
+    const thanks = toolJson(
+      (await rpc('tools/call', { name: 'reply_help_request', arguments: { requestId: created.body.id, content: '谢谢', reopen: false } })).body,
+    );
+    expect(thanks.status).toBe('resolved');
+    const again = toolJson(
+      (await rpc('tools/call', { name: 'reply_help_request', arguments: { requestId: created.body.id, content: '又遇到了' } })).body,
+    );
+    expect(again.status).toBe('open');
   });
 
   it('get_platform_guide 返回内置指南正文', async () => {

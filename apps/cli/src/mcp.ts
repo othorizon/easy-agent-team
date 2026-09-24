@@ -5,11 +5,9 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import * as path from 'node:path';
 import { buildEatTools, CLI_VERSION, resolveDbInstance, STATIC_CONTAINER_PORT } from '@eat/shared';
-import type { AppInfo, DbInstanceInfo, SecretFingerprint } from '@eat/shared';
+import type { AppInfo, DbInstanceInfo } from '@eat/shared';
 import { Api, ApiError, setClientTag } from './client.js';
-import { scanWorkspace } from './scan.js';
 import { takeUpdateNoticeForMcp } from './update.js';
 
 /** 工具定义在 packages/shared（决策 55：CLI stdio 与平台 HTTP 端点共用一份，避免描述漂移） */
@@ -151,6 +149,8 @@ export async function startMcpServer(): Promise<void> {
           return jsonResult(
             await api.request('POST', `/api/help-requests/${args.requestId as string}/reply`, {
               content: args.content,
+              // 不传则交给服务端默认（重新打开）
+              ...(args.reopen !== undefined ? { reopen: args.reopen } : {}),
             }),
           );
         }
@@ -203,32 +203,7 @@ export async function startMcpServer(): Promise<void> {
           );
         }
         case 'trigger_deploy': {
-          const workdir = path.resolve(args.workdir as string);
-          const fingerprints = await api.request<SecretFingerprint[]>('GET', '/api/secret-fingerprints');
-          const { scannedFiles, findings } = scanWorkspace(workdir, fingerprints);
-          const report = {
-            passed: findings.length === 0,
-            scannedFiles,
-            findings,
-            cliVersion: CLI_VERSION,
-            ranAt: new Date().toISOString(),
-          };
-          if (!report.passed) {
-            return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: JSON.stringify(
-                    { error: 'PRECHECK_FAILED', message: '本地密钥扫描未通过，已阻止部署。修复 findings 后重试', report },
-                    null,
-                    2,
-                  ),
-                },
-              ],
-              isError: true,
-            };
-          }
-          return jsonResult(await api.request('POST', `/api/apps/${args.app as string}/deploy`, { report }));
+          return jsonResult(await api.request('POST', `/api/apps/${args.app as string}/deploy`, { source: 'cli' }));
         }
         case 'get_deploy_status': {
           if (!args.app) return errorResult(new Error('需要 app 参数（部署记录按应用查询）'));

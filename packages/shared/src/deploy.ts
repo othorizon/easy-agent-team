@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { slugSchema } from './common.js';
 
 /**
- * 部署托管（Dokploy 挂载）与 CLI 端前置检查的契约。
+ * 部署托管（Dokploy 挂载）的契约。
  *
  * 平台实体叫「应用（App）」，与 Dokploy 的 application 一一对应（决策 31）：
  * 用户自助创建应用时平台在 Dokploy 上建出 application 并绑好 Git 源 / SSH key / 构建方式；
@@ -319,42 +319,19 @@ export const appEnvChangeSchema = z.object({
 });
 export type AppEnvChange = z.infer<typeof appEnvChangeSchema>;
 
-// ---------- CLI 端前置检查报告 ----------
-
-export const precheckFindingSchema = z.object({
-  /** generic=通用密钥模式 / fingerprint=平台密钥指纹命中 / dotenv=.env 误提交 */
-  rule: z.enum(['generic', 'fingerprint', 'dotenv']),
-  file: z.string(),
-  line: z.number().optional(),
-  note: z.string(),
-});
-export type PrecheckFinding = z.infer<typeof precheckFindingSchema>;
-
-export const precheckReportSchema = z.object({
-  passed: z.boolean(),
-  scannedFiles: z.number(),
-  findings: z.array(precheckFindingSchema).max(200),
-  /** 本地预跑命令（--check）的结果，可选 */
-  localCheck: z.object({ command: z.string(), passed: z.boolean() }).optional(),
-  cliVersion: z.string(),
-  ranAt: z.iso.datetime(),
-});
-export type PrecheckReport = z.infer<typeof precheckReportSchema>;
-
 // ---------- 部署 ----------
 
 /**
- * 部署来源。cli = `eat deploy` / 本地 stdio MCP 的 `trigger_deploy`，必须携带通过的本地检查报告（决策 #8）；
- * console = 控制台的「部署」按钮；remote = 平台 HTTP MCP 端点上的 `trigger_deploy`（决策 55，云端 AI 客户端）。
- * 后两者都没有本地代码可扫，记录会明确标成「未做密钥扫描」（决策 31）。
+ * 部署来源（只说明从哪触发，三者门禁一致：成员资格 + 管理员授权）。
+ * cli = `eat deploy` / 本地 stdio MCP 的 `trigger_deploy`；console = 控制台的「部署」按钮；
+ * remote = 平台 HTTP MCP 端点上的 `trigger_deploy`（决策 55，云端 AI 客户端）。
+ * 部署前的本地密钥扫描已移除（决策 64），不再有「带没带检查报告」之分。
  */
 export const deploySourceSchema = z.enum(['cli', 'console', 'remote']);
 export type DeploySource = z.infer<typeof deploySourceSchema>;
 
 export const triggerDeploySchema = z.object({
   source: deploySourceSchema.default('cli'),
-  /** CLI 端检查报告：source=cli 时必须携带且 passed=true（决策 #8：防顺手绕过） */
-  report: precheckReportSchema.optional(),
 });
 export type TriggerDeployRequest = z.infer<typeof triggerDeploySchema>;
 
@@ -389,8 +366,6 @@ export const deploymentMetaSchema = z.object({
   triggeredBy: z.string(),
   triggeredByName: z.string(),
   source: deploySourceSchema,
-  /** source=console 时为 null：没做密钥扫描 */
-  report: precheckReportSchema.nullable(),
   claim: z.enum(['tagged', 'inferred', 'none']),
   /** 平台侧触发时间；Dokploy 构建记录自己的时间在外层 createdAt */
   triggeredAt: z.string(),
@@ -399,7 +374,7 @@ export type DeploymentMeta = z.infer<typeof deploymentMetaSchema>;
 
 /**
  * 一条部署记录：主体是 Dokploy 的构建记录，platform 是平台能补上的元数据。
- * platform 为 null 即「直接在 Dokploy 侧触发、没经过平台的密钥扫描门禁」。
+ * platform 为 null 即「直接在 Dokploy 侧触发、没经过平台（成员资格与部署授权都没过问）」。
  */
 export const deploymentInfoSchema = z.object({
   appSlug: z.string(),
@@ -489,17 +464,3 @@ export const logsQuerySchema = z.object({
   containerId: z.string().max(200).optional(),
 });
 export type LogsQuery = z.infer<typeof logsQuerySchema>;
-
-// ---------- 密钥指纹清单（CLI 扫描用） ----------
-
-export const secretFingerprintSchema = z.object({
-  /** 变量值的 SHA-256 hex */
-  fingerprint: z.string(),
-  length: z.number(),
-  environment: z.string(),
-  key: z.string(),
-});
-export type SecretFingerprint = z.infer<typeof secretFingerprintSchema>;
-
-/** 只对长度达到该值的密钥生成指纹（防离线字典猜测短值） */
-export const FINGERPRINT_MIN_LENGTH = 12;

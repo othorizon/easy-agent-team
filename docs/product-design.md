@@ -75,7 +75,7 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 
 **普通开发成员（开发者 C）**
 - 我的 AI 想调用公司内部服务，先 `eat env list` 看到有个 `INTERNAL_API_TOKEN`，备注写着用途；拉取值时提示无权限，AI 直接发起申请，Owner 批准后我重新拉取即可。
-- 我写了个内部小工具，`eat deploy` 一下，平台先跑前置检查再调 Dokploy 部署，不用自己碰服务器。
+- 我写了个内部小工具，代码推上去后 `eat deploy` 一下，平台就调 Dokploy 按仓库构建上线，不用自己碰服务器。
 
 **乐于助人的资深同事（D）**
 - 我把自己登记进「可求助列表」，描述写「熟悉支付对账、内部 ERP 系统」，并配了飞书 webhook。别人的 AI 遇到相关问题会找到我，我手机上直接收到提醒。
@@ -152,7 +152,7 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 
 - **存储**：Skill 内容存 PostgreSQL——`skill_version.content` 存 SKILL.md 正文，附属文件存 `files` jsonb（`[{path, content, encoding}]`，文本直存、二进制 base64）。限制：单文件 ≤ 256KB、整包 ≤ 1MB，超限拒收。不引入对象存储 / git 后端（单体 + 单库的部署形态下，Postgres 是唯一持久层，且 skill 体量小、版本化查询需求强）。
 - **脚本**：skill 目录里的辅助脚本（`scripts/*.sh`、`*.py` 等）作为普通附属文件存储分发，**服务端永远不执行**。执行发生在使用者本地（`eat sync` 落地到 `~/.agents/skills/<slug>/`（软链/复制到 `~/.claude/skills/`）并恢复可执行位，可执行位在 Windows 上无意义），以使用者本人的权限运行——信任级别等同于安装团队内部 npm 包。
-- **安全防线**：① Owner + 版本历史 + 审计保证出处可追溯；② `eat skill push` 上传时服务端做密钥扫描（复用部署前置检查规则），防止密钥被硬编码进脚本分发；③ 附属文件路径校验，禁止 `../` 与绝对路径，落地只能写入 skill 自身目录；④ `eat sync` 对包含可执行脚本的 skill 在首次安装/变更时明确提示。管理员预审开关留作 P2 可选。
+- **安全防线**：① Owner + 版本历史 + 审计保证出处可追溯；② `eat skill push` 上传时服务端做密钥扫描（只拦高置信度的平台 Token、AWS Access Key 与私钥头），防止密钥被硬编码进脚本分发；③ 附属文件路径校验，禁止 `../` 与绝对路径，落地只能写入 skill 自身目录；④ `eat sync` 对包含可执行脚本的 skill 在首次安装/变更时明确提示。管理员预审开关留作 P2 可选。
 
 ### 3.2.5 MCP 配置分发
 
@@ -210,7 +210,7 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 - **凭证解析走配置 Owner 的授权，不是调用者的**：网关模式下「订阅被批准」本身就是授权，成员不需要（通常也不该有）对应环境变量的读取权限——否则他 `eat env pull` 就能把凭证拿走，网关等于白做。按配置粒度缓存并记一条 `mcp_gateway.credentials_resolved`，不按次写 `secret.read`（那会把审计表冲掉）；
 - **失效靠两条机制叠加**，而不是「在每个改权限的地方记得吊销」：授权至少能从六条路径消失（退订、驳回、移除订阅者、管理员改模板内容、用户改选模板、配置删除/用户禁用），逐个加吊销代码早晚漏一条，漏的那条就是永久有效的后门 URL。所以：① 每次请求**实时复算**授权，不通过就地标记吊销；② 每次签发都是**新建 + 吊销该 (user, config) 上所有旧 token**，「取消后重新获取即换新地址、旧地址永久作废」由此自动成立，连模板那几条路径都不用碰；
 - **token 可逆存储**（信封加密，同 KEK）：成员每次 `eat sync`、每次打开控制台都要能拿回同一条地址，只存哈希会变成「每次同步换一个地址」，已配好的客户端全废、多台机器也用不了。查询仍走 `token_hash` 唯一索引；
-- **地址等同于密钥**：已纳入平台密钥指纹清单，CLI 部署前扫描能拦住被提交进仓库的 `.mcp.json`；控制台可一键重新生成（旧地址立即作废）；
+- **地址等同于密钥**：不要提交进仓库（部署前的本地密钥扫描已由决策 64 移除，平台不再替你拦被提交的 `.mcp.json`）；泄漏了就在控制台一键重新生成（旧地址立即作废）；
 - **stdio 不走网关**（强制 `gateway_enabled=false`）：它是用户机器上的本地进程，没有可代理的端点，要藏凭证得由平台托管进程执行，是另一个量级的工程，本期不做；
 - **直连**仍保留（http 可关掉开关）：上游在成员内网、或不愿把平台放进调用链路时用，渲染行为与网关引入前一致。
 - **长耗时调用期间连接不能静默**（§10 决策 62）：`tools/call` 等结果的那几十秒里，连接上一个字节都不动，路上的 NAT / 防火墙 / 云网关会按自己的空闲表项超时把它**静默丢掉**（不发 RST 也不发 FIN），平台这端最后以 `read ETIMEDOUT` 收场、对外是一个 502。网关到上游的连接因此默认开 TCP keepalive，15 秒探测一次（`EAT_MCP_GATEWAY_UPSTREAM_KEEPALIVE_MS`，写 0 关闭）。它只保得住连接层；上游若能在 SSE 流上发心跳（与客户端带不带 `progressToken` 无关），那才是更彻底的一层。
@@ -325,19 +325,21 @@ stateDiagram-v2
     open --> answered : 被求助者回复
     answered --> open : 求助者追问
     answered --> resolved : 求助者确认解决 / 被求助者关闭
+    resolved --> open : 求助者追问（决策 65；reopen=false 时不变，决策 66）
+    resolved --> answered : 被求助者补充（同上）
     open --> closed : 无人认领超时 / 主动撤销
     resolved --> [*]
     closed --> [*]
 ```
 
 - 每个请求有**请求 ID** + 标题 + 问题描述 + 可选上下文（代码片段、报错信息——由 AI 组织，注意提示不要携带密钥）；
-- 支持**多轮对话**：请求下是一串消息，双方都可追加；
+- 支持**多轮对话**：请求下是一串消息，双方都可追加；**已解决的求助收到新回复默认重新打开**（决策 65）——求助者追问回到 `open`、被求助者补充回到 `answered`，重新出现在「待回复」里并照常通知对方；发送者可声明这条不需要对方处理（`reopen=false`：控制台取消勾选「发送后重新打开」、CLI `eat ask reply --no-reopen`、MCP `reply_help_request` 的 `reopen` 参数），只留言并通知、求助保持已解决（决策 66）；只有 `closed` 不能再回复；
 - 创建与每次回复都会：落库 + 推送对方的 webhook + 站内通知；
 - **可见性：默认仅求助者、被求助者与管理员可见**（管理员可见用于日常管理与合规审查；对其他普通成员不可见）；
 - AI 侧通过 `get_help_request(id)` 读取最新回复；CLI 也可 `eat ask show <id>`；
 - **删除求助**：求助者本人或管理员可删除求助（连带对话记录，不可恢复），控制台 / `eat ask delete` / MCP `delete_help_request` 均可操作；**已沉淀为经验的求助不可删除**（经验库引用该求助）。
-- **删除单条回复**（决策 41）：`DELETE /api/help-requests/:id/messages/:messageId`，回复者本人或管理员可删，控制台对话区每条自己写的消息旁有删除入口。删完按剩余消息回推状态——最后一条来自被求助者就是 `answered`，否则回 `open`（一条不剩也回 `open`）；`resolved` / `closed` 是人工拍板的终态，不因删消息回退。求助已沉淀为经验也照删不误（经验是独立的 Skill 内容，不引用消息行）。
-- **控制台清单的两个维度**（决策 43）：**方向**（找我的 / 我发起的）走页签，**进展**（待回复 / 全部）走状态筛选，两个页签共用同一个筛选值、**默认「待回复」**。「待回复」= 对话还等着某一方回应（`open` + `answered`），与之相对的 `resolved` / `closed` 是不再需要任何人回应的终态。两个维度同步到 URL 的 `?tab=` / `?status=`（等于默认值的不写进去），纯前端过滤，CLI / MCP 不受影响。
+- **删除单条回复**（决策 41）：`DELETE /api/help-requests/:id/messages/:messageId`，回复者本人或管理员可删，控制台对话区每条自己写的消息旁有删除入口。删完按剩余消息回推状态——最后一条来自被求助者就是 `answered`，否则回 `open`（一条不剩也回 `open`）；`resolved` / `closed` 是人工拍板的结论，删消息不改它（`resolved` 只会因为新回复重新打开，决策 65）。求助已沉淀为经验也照删不误（经验是独立的 Skill 内容，不引用消息行）。
+- **控制台清单的两个维度**（决策 43）：**方向**（找我的 / 我发起的）走页签，**进展**（待回复 / 全部）走状态筛选，两个页签共用同一个筛选值、**默认「待回复」**。「待回复」= 对话还等着某一方回应（`open` + `answered`），与之相对的 `resolved` / `closed` 是暂时不需要任何人回应的（`resolved` 一有新回复就回到待回复，决策 65）。两个维度同步到 URL 的 `?tab=` / `?status=`（等于默认值的不写进去），纯前端过滤，CLI / MCP 不受影响。
 
 ### 3.5.4 防骚扰
 
@@ -406,24 +408,18 @@ sequenceDiagram
 - 控制台应用详情弹窗里，Git 仓库地址若是 GitHub 的（scp 式 SSH / `ssh://` / https / 直接贴的网页地址都认），地址后面带一个「GitHub」链接、新页签打开仓库页面；其他 Git 服务的地址原样显示、不出链接（决策 46）；
 - 应用 env：运行时 env 与构建时 Build Args 两块，直接读写 Dokploy 上的配置（`eat app env pull|push [--build]`、MCP `get_app_env` / `set_app_env`、控制台详情页）。推送是整体覆盖目标区块（另一块与 buildSecrets 原样保留），只回 key 级差异不回值；值可能是密钥，仅应用成员可读写且落审计；pull 落盘时按决策 63 的规则保护同名文件，push 前剥掉 eat 写的标记行；
 - **部署授权**：成员自建的应用 `deployApproved=false`，首次部署（任何入口）被拒并回 `DEPLOY_NOT_APPROVED`、记下「有人试过」，管理员在控制台授权一次后永久有效（可撤销）；管理员自己建的与挂载的应用创建即视为已授权；
-- 部署操作：触发部署（CLI/MCP 携带本地密钥扫描报告；**控制台的「部署」按钮没有本地代码可扫，触发时显式声明 `source=console`，记录标成「未做密钥扫描」**，与 Dokploy 侧直接触发的部署同等显眼）、查看部署状态与日志（映射 Dokploy API 能力）；
-- **部署记录与状态一律以 Dokploy 为准（决策 30）**：平台库只存 Dokploy 没有的业务元数据（谁触发的、带了什么检查报告），靠触发时写进 Dokploy 构建记录 `description` 的 `eat:<id>` 标记精确认领；**在 Dokploy 侧直接触发的部署也会被列出来并标注「未经平台密钥扫描」**，绕过门禁这件事因此变得可见；Dokploy 每个应用只保留最近 10 条构建记录，更早的历史用 `--all` 从平台元数据看；
+- 部署操作：触发部署（CLI `eat deploy` / MCP `trigger_deploy` / 控制台「部署」按钮，三个入口门禁一致——成员资格 + 管理员部署授权；记录里的 `source` 只说明从哪触发：`cli` / `console` / `remote`）、查看部署状态与日志（映射 Dokploy API 能力）；
+- **部署记录与状态一律以 Dokploy 为准（决策 30）**：平台库只存 Dokploy 没有的业务元数据（谁触发的、从哪触发的），靠触发时写进 Dokploy 构建记录 `description` 的 `eat:<id>` 标记精确认领；**在 Dokploy 侧直接触发的部署也会被列出来并标注「绕过平台」**，绕过成员与授权门禁这件事因此变得可见；Dokploy 每个应用只保留最近 10 条构建记录，更早的历史用 `--all` 从平台元数据看；
 - CLI/MCP：`eat deploy` / `trigger_deploy` 触发；`eat app status` / `get_deploy_status` 看结果（失败时 error 里已带构建日志末尾的真实报错）；`eat app build-logs` / `get_build_logs` 看构建日志，`eat app run-logs` / `get_run_logs` 看容器运行日志——AI 据此自查失败原因，不必跳去 Dokploy 控制台（决策 28）。
 
 ### 3.7.2 代码前置检查（Pre-deploy Checks）
 
-部署前的强制闸门，检查通过才调用 Dokploy API：
+**部署前不做密钥扫描（决策 64 移除，此前见决策 #8）。** 三个入口（CLI / 控制台 / 远程 MCP）走同一套门禁：成员资格 + 管理员部署授权（决策 31），部署 API 不要求、也不接收检查报告。
 
-**执行位置（已拍板，决策 #8）：检查在 CLI 发起端本地执行，平台不拉代码、不跑构建、不依赖 Docker runner。** 部署者本地本来就有代码与构建环境，检查零基础设施成本。
-
-- **密钥泄漏扫描（CLI 本地，`eat deploy` 内置强制执行）**，三层：
-  1. 通用模式：私钥块、AWS Key、平台 Token 形态、JWT 等经典特征（与 `eat skill push` 共享规则库）；
-  2. **平台密钥指纹匹配**（独有能力）：CLI 从平台拉取密钥指纹清单——所有环境变量值的 SHA-256 单向指纹（仅对长度/熵足够的值生成，防离线字典猜测；清单读取落审计），对工作区文件的候选 token 同法比对——命中即证明真实下发的密钥被硬编码进了代码；
-  3. 误提交检测：仓库中不允许出现含值的 `.env` 文件；
-- **构建检查外包给 Dokploy**：Dokploy 部署本身即构建（Dockerfile/Nixpacks），构建失败=部署失败，平台轮询状态并把构建日志透传给 AI；`eat deploy --check "<命令>"` 提供可选的本地预跑；
-- **防绕过**：部署 API 要求请求携带 CLI 检查报告（结论 + 规则版本），缺省拒绝——团队内部信任模型下，把"绕过"从顺手变成显式行为即可；控制台按钮触发是唯一的例外，它必须显式声明 `source=console`，记录明确标成「未做密钥扫描」（决策 31）；
-- 检查报告落 `precheck_result`，部署记录关联；**失败报告面向 AI 可读**——AI 拿到原因自行修复后重试部署；
-- **不做**：平台侧 runner（拉代码+容器构建）——将来出现强管控需求再评估；CI 回调模式降为可选扩展；依赖漏洞审计、大文件、Dockerfile 规范检查有真实需求再加。
+- **构建检查外包给 Dokploy**：Dokploy 部署本身即构建（Dockerfile / 静态托管），构建源是应用绑定的 Git 仓库与分支，构建失败 = 部署失败，平台把构建日志透传给 AI；
+- `eat deploy --check "<命令>"` 提供可选的本地预跑（`--dir` 指定执行目录）：纯本地门禁，非零退出即不触发部署，结果不上送平台；
+- 应用运行要用的密钥放进应用 env（`eat app env push`），平台指南里写明不要写进代码或提交进仓库；Skill 推送时服务端仍有一道高置信度扫描（§3.2.4），与部署无关；
+- **不做**：平台侧 runner（拉代码 + 容器构建）——将来出现强管控需求再评估；CI 回调模式降为可选扩展；依赖漏洞审计、大文件、Dockerfile 规范检查有真实需求再加。
 
 ## 3.8 CLI 与 MCP 能力总览
 
@@ -454,7 +450,7 @@ CLI 与本机 MCP Server 同一个产物分发（平台自托管下载：类 Uni
 | `eat app create <slug> --repo <url> --build dockerfile\|static [...]` | 自助创建应用：平台在 Dokploy 上建 application 并绑 Git 源 / SSH key / 构建方式（`--branch`、`--dockerfile`、`--context`、`--port`、`--publish-dir`、`--spa`、`--description`）（决策 31）；管理员配了域名后缀时自动分配 `<slug>.<后缀>` 并打印访问地址（决策 32） |
 | `eat app update <app> [...]` / `eat app delete <app> --yes` | 改配置（托管应用同步写回 Dokploy，下次部署生效）/ 删除（托管的连 Dokploy 一起删，挂载的只解绑） |
 | `eat app env pull / push <app> [--build] [--out\|--file <f>] [--print] [--force]` | 读写应用在 Dokploy 上的 env：默认运行时，`--build` 为构建时 Build Args；push 整体覆盖、只回 key 级差异（决策 31）；pull 的落盘规则同 `eat env pull`（决策 63） |
-| `eat deploy [app]` | 触发部署（前置检查内置；应用需先经管理员授权一次）；触发成功即进入 Dokploy 队列，随后轮询到构建结果 |
+| `eat deploy [app] [--check <cmd>] [--dir <dir>]` | 触发部署（按应用绑定的 Git 分支构建，改动需先推送；应用需先经管理员授权一次；`--check` 为可选的本地预跑）；触发成功即进入 Dokploy 队列，随后轮询到构建结果 |
 | `eat app list / show / status / deployments` | 应用清单（成员与授权状态）、配置详情、最近一次部署状态（`--deployment <id>` 查指定那次，Dokploy 构建 id 与平台元数据 id 都认、支持 8 位前缀）、部署历史（`--all` 看平台完整历史，决策 30） |
 | `eat app build-logs / run-logs <app>` | 构建日志 / 容器运行日志（`--tail`、`--list`、`--deployment`/`--container`）（决策 28） |
 | `eat self-update` | 把 CLI 更新到平台当前分发的版本（重拉 `/install/eat.js` 覆盖本地产物，跨平台同一条命令）（决策 26） |
@@ -475,7 +471,7 @@ CLI 与本机 MCP Server 同一个产物分发（平台自托管下载：类 Uni
 | `get_help_request` / `reply_help_request` / `delete_help_request` | 读取回复、追问、删除误发起的求助 |
 | `list_apps` / `create_app` / `update_app` | 应用清单（含 isMember / deployApproved / canDeploy 与自动分配的 domain / url）/ 自助创建（`port` 声明容器端口）/ 改配置（决策 31、32） |
 | `get_app_env` / `set_app_env` | 读写应用 env（`target=runtime\|build`），set 为整体覆盖、只回 key 级差异（决策 31） |
-| `trigger_deploy` / `get_deploy_status` | 触发部署 / 查最近一次（或指定那次）的状态与失败原因；必须带 `app`，`history` + `all` 可列完整历史（决策 30）；应用未授权时回 `DEPLOY_NOT_APPROVED`。stdio 版收 `workdir` 并先做本地密钥扫描；**HTTP 端点没有本地代码可扫，触发的部署记为 `source=remote`「未做密钥扫描」**（与控制台按钮同级，决策 55） |
+| `trigger_deploy` / `get_deploy_status` | 触发部署 / 查最近一次（或指定那次）的状态与失败原因；必须带 `app`，`history` + `all` 可列完整历史（决策 30）；应用未授权时回 `DEPLOY_NOT_APPROVED`。两种接入的入参一致（只收 `app`，决策 64 起 stdio 版不再收 `workdir`），HTTP 端点触发的部署记为 `source=remote`（决策 55） |
 | `get_build_logs` / `get_run_logs` | 构建日志 / 容器运行日志（决策 28） |
 
 💡 设计说明：平台内置一个「平台使用指南」基础 Skill（`eat-platform-guide`，§10 决策 11），教 AI 正确的行为序列（先搜经验 → 再求助；先 list → 再 pull → 无权限则申请），这比在每个工具描述里堆规则更有效。实现为**内置虚拟 Skill**：内容随平台代码维护（`packages/shared/src/platform-guide.ts`，改内容须递增版本号），`sync-bundle` 对所有登录用户始终注入首位（`relation=builtin`），不落数据库、不可退订，slug 为保留名不可被 push 占用；登录后首次 `eat sync` 即落地，之后随平台升级自动更新。安装到登录之间的窗口由免鉴权的 `/install/AGENT.md` 兜底。
@@ -547,7 +543,6 @@ erDiagram
     HELP_REQUEST ||--o| EXPERIENCE : distilled_to
     EXPERIENCE ||--|| SKILL : materializes_as
     APP ||--o{ DEPLOYMENT : deploys
-    DEPLOYMENT ||--o{ PRECHECK_RESULT : gated_by
 ```
 
 ### 5.2 核心表（字段级摘要）
@@ -586,7 +581,7 @@ erDiagram
 **experience**：id, help_request_id, skill_id(沉淀生成的 skill), public(bool), granted_to_requester(bool), granted_to_helper(bool), created_by(=helper), updated_at
 
 **app**：id, slug, name, repo_url, branch, build_type(static|dockerfile|null=挂载), dockerfile, docker_context_path, publish_directory, static_spa, port(容器端口), domain(自动分配的域名，null=未分配), domain_https, dokploy_domain_id, dokploy_application_id, description, owner_id, managed(bool), deploy_approved(bool), approved_by, approved_at, approval_requested_at —— **app_member**：app_id, user_id
-**deployment**：id, app_id, triggered_by, source(cli|console|remote；remote = 云端 HTTP MCP 触发，决策 55), dokploy_deployment_id, report(jsonb, 检查报告；console / remote 触发为 null), created_at（状态一律实时读 Dokploy，决策 30）
+**deployment**：id, app_id, triggered_by, source(cli|console|remote；remote = 云端 HTTP MCP 触发，决策 55), dokploy_deployment_id, claim(tagged|inferred), report(jsonb，**已停用**：决策 64 之前的检查报告，存量保留、不再读写), created_at（状态一律实时读 Dokploy，决策 30）
 **dokploy_setting**：id, api_url, api_token_encrypted, enabled, project_id, environment_id, ssh_key_id（自助建应用的落点，决策 31）, domain_suffix, domain_https（自动分配域名，决策 32）
 
 **ai_setting**：id, api_base_url, api_key_encrypted, model, enabled（单行系统配置，OpenAI 接口范式）
@@ -622,7 +617,7 @@ sequenceDiagram
 
 ### 6.2 部署流程
 
-`eat deploy` → CLI 在发起端本地执行前置检查（密钥扫描含平台指纹匹配 + 可选 `--check` 预跑，平台不拉代码，见决策 #8）→ 全部通过后携带检查报告调用平台 API → 平台依次校验成员资格、检查报告、**管理员部署授权**（未授权回 `DEPLOY_NOT_APPROVED` 并记下「有人试过」，决策 31）→ 调 Dokploy API 触发部署并落业务元数据 → 轮询状态回传。任一本地检查失败则终止，AI 可读检查报告自行修复后重试。控制台「部署」按钮走同一接口但 `source=console`、不带报告，记录标成「未做密钥扫描」。
+`eat deploy` →（可选 `--check` 本地预跑，非零退出即终止）→ 调用平台 API → 平台依次校验成员资格、**管理员部署授权**（未授权回 `DEPLOY_NOT_APPROVED` 并记下「有人试过」，决策 31）→ 调 Dokploy API 触发部署（按应用绑定的 Git 分支构建，平台不拉代码）并落业务元数据 → 轮询状态回传。控制台「部署」按钮与远程 MCP 走同一接口，只是 `source` 记为 `console` / `remote`。部署前不做密钥扫描（决策 64）。
 
 ---
 
@@ -701,7 +696,7 @@ easy-agent-team/
 3. **存储**：变量值、数据库管理凭证、Dokploy Token、webhook secret、平台 AI 的 api_key 全部加密落库；
 4. **审计**：敏感读取/授权变更/部署操作全量审计，控制台可按资源、按人检索；
 5. **提示注入面**：求助内容、helper 描述、经验正文都会被 AI 读取——控制台展示时提示"此内容会被 AI 读取"，MCP 返回中以数据段包裹并注明来源，不作为指令执行（写进平台基础 Skill 的安全准则）；
-6. **防泄漏闭环**：部署前置检查内置密钥扫描，扫描规则联动平台内登记的变量值指纹（对值做不可逆指纹匹配，不存明文规则）。
+6. **防泄漏**：密钥只经 env 下发（`eat env pull` / 应用 env），平台指南要求不写进代码、不提交进仓库；Skill 推送时服务端拦高置信度的密钥形态（§3.2.4）。部署前的本地密钥扫描与平台指纹匹配已移除（决策 64）。
 
 ---
 
@@ -733,7 +728,7 @@ easy-agent-team/
 ### P3 —— 部署托管
 
 - Dokploy 接入、应用（自助创建 / 管理员挂载）/ 成员、部署授权、应用 env、部署触发与日志（构建检查由 Dokploy 构建承担）
-- CLI 端前置检查（密钥扫描 + 平台指纹匹配 + .env 误提交），部署 API 携带报告
+- ~~CLI 端前置检查（密钥扫描 + 平台指纹匹配 + .env 误提交），部署 API 携带报告~~——已由决策 64 移除
 - MCP 应用与部署工具
 
 ---
@@ -751,7 +746,7 @@ easy-agent-team/
 | 5 | 本地已有 skill 的纳管 | **支持**。`eat skill push` 上传纳管，随 P0 交付（§3.2.3） |
 | 6 | 平台开发框架 | **NestJS（Fastify）单体 + React/Vite/AntD SPA + pnpm monorepo**，队列用 pg-boss，ORM 首选 Drizzle（§7.2–7.4） |
 | 7 | 存储 | **全量 PostgreSQL，不引入对象存储**。Skill 附属文件限单文件 256KB / 整包 1MB，超限拒收并引导外部引用（§3.2.4）；将来出现真实大文件需求再评估 OSS |
-| 8 | 部署前置检查的执行位置 | **CLI 发起端本地执行**（密钥扫描含平台指纹匹配），构建检查外包给 Dokploy 构建，部署 API 要求携带检查报告防顺手绕过；平台侧 runner（拉代码+Docker 构建）不做（§3.7.2） |
+| 8 | 部署前置检查的执行位置 | **CLI 发起端本地执行**（密钥扫描含平台指纹匹配），构建检查外包给 Dokploy 构建，部署 API 要求携带检查报告防顺手绕过；平台侧 runner（拉代码+Docker 构建）不做（§3.7.2）。**密钥扫描与检查报告已由决策 64 撤销**；「构建外包给 Dokploy、平台侧 runner 不做」仍成立 |
 | 9 | CLI 分发渠道 | **不发 npm registry，平台自托管下载**：镜像内置 CLI 单文件，`curl <平台>/install.sh \| sh` 安装；产物保持 tsup 单文件 JS（Node ≥ 18），bun 单二进制不做（目标用户都有 Node）（§7.5） |
 | 10 | 成员上手方式 | 控制台提供**安装页**（人机双视角）：给人看的分步说明 + 给 AI Agent 的一键复制安装指令（同一份文案也在 `GET /install/AGENT.md` 公开提供，`packages/shared` 单一来源）（§3.1） |
 | 11 | 平台使用指南 Skill 的携带方式 | **内置虚拟 Skill**（方案 A）：内容随平台代码维护、版本号常量控制更新，`sync-bundle` 对所有用户始终注入，不落库、不可退订、slug 保留；获取需登录（`eat sync`），登录前由免鉴权 `/install/AGENT.md` 兜底（§3.8） |
@@ -807,3 +802,6 @@ easy-agent-team/
 | 61 | 空闲 keep-alive 连接必须活得比前置反向代理久 | **现象：同一个网关地址，交互式测试工具一路正常，而 AI Agent（TencentCloud Octop，走 langchain_mcp_adapters + httpx）高概率 502，且平台侧连一条调用记录都没有。** 「没有记录」就是关键线索——请求根本没到平台。根因是两个默认值错位：Fastify 的 `keepAliveTimeout` 是 **72 秒**（实测：平台对空闲连接在 73.0 秒关闭，响应头里明写 `Keep-Alive: timeout=72`），而 Dokploy 用的 Traefik（Go 的 `http.Transport`）默认把到后端的空闲连接留 **90 秒**。中间这 18 秒就是一个窗口：代理以为连接还活着、后端其实已经发过 FIN，拿去复用就撞上关闭；而 **Go 不会重试带 body 的 POST**（没有 `GetBody` 就不重试），于是代理只能对外回 502。为什么只有 Agent 中招：它**每次工具调用都新建一次会话**，两次调用之间隔着模型思考的时间——用户日志里相邻两次工具活动正好差 **76 秒**，不偏不倚落在窗口里；而人连着点的测试工具从不空闲那么久，永远撞不上。这也解释了「不稳定但高概率」：撞不撞得上取决于这次请求落在代理连接池里的哪条连接、以及距上次请求多久。**改法是后端比代理更能等**：`keepAliveTimeout` 默认提到 120 秒（>90 秒的 Traefik / Go 默认，也 >nginx 与多数云 LB 常见的 60 秒），由 `EAT_KEEP_ALIVE_TIMEOUT_MS` 可配；同时把 `headersTimeout` 设为它 +5 秒——那是同一个竞态的另一半（连接在请求头发到一半时被回收，同样以 502 落到调用方身上）。**不能反过来把代理的空闲时间调小**：那要改 Dokploy 托管的 Traefik，属于平台管不到的地方，而且换一个部署环境（nginx、云 LB）这条又得重调一次——让后端比所有常见代理都能等，才是一次改对所有环境。**生效值必须能从外面读到**：`Keep-Alive` 是 hop-by-hop 响应头、HTTP/2 里根本不允许存在，各级反代也会照规范摘掉——最初写进 runbook 的「`curl -i` 看 `Keep-Alive: timeout=`」在用户那套 HTTP/2 + 反代的部署上永远看不到东西，等于没有验证手段。所以 `GET /api/health` 回包加 `keepAliveTimeoutMs`，取的是**运行中 HTTP server 的实际值**而不是配置读数（要验证的是「配了有没有生效」）。排查口诀记进 `docs/deployment.md`：**间歇 502 且平台侧无记录 → `curl -s /api/health` 看 `keepAliveTimeoutMs`，它必须大于代理侧的空闲回收时间。**只动服务端启动参数，协议、CLI、指南都不受影响，版本号不动。 |
 | 62 | MCP 网关到上游的连接开 TCP keepalive；根因认到「静默的长连接会被路上的设备悄悄丢掉」 | **现象接着决策 61 那条：上游要 45 秒才出结果的 `tools/call`，经网关调用时在 AI Agent（Octop，走 langchain_mcp_adapters）里高概率 502，而 Apifox 这类测试工具一路正常。** 与决策 61 的分水岭是**平台侧这次有记录**——决策 60 补的那条日志直接给出了答案：`网关转发失败 MCP_GATEWAY_UPSTREAM_UNAVAILABLE slug=… method=tools/call tool=query_project 耗时=39538ms 原因=ETIMEDOUT: read ETIMEDOUT`。**这也顺带纠正了一次误判：决策 61 修的 keep-alive 错位是真缺陷（实测 73.0 秒关闭、`timeout=72`），但它不是这次 502 的成因**——那条的特征是平台侧一行记录都没有，而这条有。`read ETIMEDOUT` 是 socket 层的读超时：连接既没收到 RST 也没收到 FIN，**包进了黑洞**，这是中间设备（NAT / 防火墙 / 云网关）按空闲表项超时**静默丢弃**连接的典型指纹；也不是网关自己的超时配置（那条会回 `504 MCP_GATEWAY_UPSTREAM_TIMEOUT` 并写明等了多少毫秒，见决策 58）。为什么流会空闲：上游（anytocontext）本来每 5 秒发一条 `notifications/progress`，但那要求客户端带 `_meta.progressToken`——**规范里是可选字段，langchain 这类封装默认不带**，于是同一个工具，带 token 的客户端一路有通知、不带的 SSE 流整整 45 秒一个字节都不发；Apifox 没事是因为走的是另一条网络路径。**平台侧的改法**：`requestUpstream` 在 `req.on('socket')` 上开 TCP keepalive，默认 15 秒探测一次（`EAT_MCP_GATEWAY_UPSTREAM_KEEPALIVE_MS`，**显式写 0 才关闭**，写歪回落默认），空闲期有探测包来回，中间设备的空闲计时器就被不断刷新。**边界要写清楚**：keepalive 只保得住**连接层**，掐连接的若是应用层（某些边缘网关对「一直没有响应体」的流有独立上限）就完全无效——真正的解药在上游，即**不管客户端带不带 progressToken，都在 SSE 流上发心跳**（`: ping` 注释行，规范要求客户端忽略，不需要任何 token、不产生事件）；两边一起做才覆盖得全。**验证方式是这条的重点**：`setKeepAlive` 最危险的失败形式是「调用不报错、内核里什么都没发生」（HTTPS 尤其可疑——TLSSocket 的 `_handle` 是 TLSWrap，不是 TCP 句柄），所以用例不看代码路径，而是在转发过程中去读 `/proc/net/tcp` 的 timer 字段（`2` = 这条连接上挂着 keepalive 定时器）断言它真落到了内核，非 Linux 平台跳过。实测：https 不设时 timer=0，设了之后 timer=2 且距下次探测 ≈15 秒。只动服务端，协议、CLI、指南都不受影响，版本号不动。 |
 | 63 | `env pull` / `app env pull` 只覆盖「eat 自己写的」文件，撞上别人的文件直接中止 | **两条 pull 命令此前都是无条件 `fs.writeFileSync`，本地已有的 `.env` 被静默覆盖。** 这比一般的覆盖危险得多：`.env` 按惯例在 `.gitignore` 里，**覆盖即不可恢复**，git 救不回来；`eat env pull` 写的还只是「你有权限的那部分 key」，所以哪怕两边都是平台的变量，覆盖也是净损失；而这两条命令主要由 AI 代跑（内置指南就是这么教的），AI 不会先 `ls` 看一眼。参照两家做法：**vercel `env pull`** 把 `# Created by Vercel CLI\n` 写进文件头，覆盖前只读这么长的字节比对——头一致就直接覆盖，不一致才交互确认（默认 No）、非交互环境回 `action_required` 并给出 `--yes` / 换文件名两条出路，写完打印 key 级 delta，并把 `.env*` 加进 `.gitignore`；**cloudflare `wrangler types`** 更硬：生成物带 `Generated by Wrangler` 标记，目标文件不含标记就直接 `A non-Wrangler … already exists, please rename and try again.` 退出，没有 prompt 也没有 `--force`。两家共用的那条规律才是关键：**判据是「这文件是不是我写的」，不是「文件在不在」**——只看在不在，只能得到「每次都问」（噪音，用的人只会固定加 `--yes`，同决策 56）或「每次都覆盖」（事故）。本项目取 **wrangler 的判据 + vercel 的 delta + 一层备份兜底**：① 落盘首行固定 `# Generated by eat — <命令> @ <时间>`（ASCII 前缀作判据，`app env pull` 此前完全不写头，所以连「谁写的」都判断不了），第二行是给人看的提示；② 文件不存在→写；命中标记→覆盖并报 key 级变化（复用 `diffDotenv()`，**只有 key 没有值**）；不是 eat 写的→**不写、退出码 1**，报错里给三条可执行出路（`--out <别处>` / `--print` / `--force`）；③ **刻意不做交互确认**——决策 26/54 已定「不做 TTY 判断」，prompt 在 AI 那里要么挂起要么被自动 yes 掉；④ **`--force` 一定先备份**成 `<file>.bak-<时间戳>`：AI 拿到报错很可能直接加 `--force`，而 `.env` 不在 git 里，备份是最后一道；**命中标记的正常覆盖不备份**，否则每次 pull 生一个 bak，既是噪音又把密钥复制得到处都是。⑤ **默认落点仍是 `.env`**（不照 vercel 换 `.env.local`）：Node `--env-file`、docker compose、README、内置指南、演示脚本全按 `.env` 写，有了标记判据后残余风险只剩「第一次撞上手写文件会失败一次」，而那正是期望行为。⑥ 顺带修掉的既有缺陷：`writeFileSync` 的 `{ mode: 0o600 }` **只在创建时生效**，覆盖一个原来 0644 的 `.env` 不会收紧权限（改为写临时文件 + rename + 显式 `chmod`，Windows 上 chmod 失败忽略，决策 24）；`--out` 指向不存在的子目录会 ENOENT（改为自动建目录）；写完用 `git check-ignore` 查目标文件有没有被忽略，没有就**警告一行但不自动改用户的 `.gitignore`**（vercel 会自动加，但去改别人仓库里受版本控制的文件是另一类惊喜）；`app env push` 推送前**剥掉 eat 的标记行**，否则 pull → push 来回一次就在平台侧多积一层头。**刻意不做 `--merge`**（只更新平台下发的 key、保留其余行）：注释 / 顺序 / 引号 / 重复 key 的保留语义一开做就没有边界，而且与 `app env push` 的「整体覆盖」语义打架，一个命令合并一个命令覆盖，用的人迟早搞反方向。只动 CLI（新增 `apps/cli/src/dotenv-file.ts` 两条命令共用），服务端与 MCP 返回值不受影响（后者本就不落盘）。演示录屏 `permissions` 段里 `cat .env` 的画面会多出标记头那两行，重录时按 `scripts/demo/README.md` 走即可（本次未重录）。CLI 升 0.5.21、指南升 20。 |
+| 64 | 移除部署前的本地密钥扫描 | **`eat deploy` 与本地 stdio MCP 的 `trigger_deploy` 部署前不再扫描本地工作区，部署 API 不再要求、也不再接收检查报告（撤销决策 #8 的扫描部分）。** 应维护者要求移除。扫描本身也有两个结构性问题：① **扫的不是被部署的东西**——构建源是应用绑定的 Git 仓库与分支（决策 31），扫描遍历的却是本地工作区的文件系统：没提交的、被 `.gitignore` 忽略的文件照扫，最典型的是 `eat env pull` 默认写在当前目录的 `.env`（决策 63），它既命中「含值的 .env」规则、值本身又命中平台指纹，平台推荐的用法会被自家的部署命令拦下；而真正会被构建的远端分支（本地没拉下来的提交）反倒不在视野里；② **门禁只拦 CLI 一条路**——控制台按钮（决策 31）、远程 MCP（决策 55）、Dokploy 侧直接触发本来就不扫。**移除清单**：CLI 的 `apps/cli/src/scan.ts` 与 `eat scan` 命令；`eat deploy` 的扫描步骤（`--check` 本地预跑保留，改为纯本地门禁、结果不上送；`--dir` 只剩「`--check` 的执行目录」一个含义）；`GET /api/secret-fingerprints` 与 `DeployService.secretFingerprints()`（连同 `fingerprints.read` 审计）；契约里的 `precheckReportSchema` / `precheckFindingSchema` / `secretFingerprintSchema` / `FINGERPRINT_MIN_LENGTH`、`triggerDeploySchema.report`、`DeploymentMeta.report`；服务端「CLI 触发必须带报告」的校验与 `PRECHECK_FAILED`；MCP `trigger_deploy` 本地 / 远程两版合一（只收 `app`，不再有 `workdir`）；控制台部署记录的「检查」列与「未做密钥扫描」文案，`console` / `remote` 来源徽标从警告色降为中性（三种入口门禁已一致，只剩「从哪触发」这层信息）。**保留**：`source` 字段（`cli` / `console` / `remote`）；Dokploy 侧直接触发的部署照旧标「绕过平台」（它绕过的是成员资格与部署授权）；Skill 推送时服务端那道高置信度扫描（§3.2.4，与部署无关）。**数据**：`deployment.report` 列保留、不再读写——存量行是线上的历史记录，删列即删数据，真要清理另开迁移。**破坏性**：旧 CLI 的 `eat deploy` 会先请求已删除的指纹接口而 404，`eat self-update` 即可（照决策 30 / 31 不留兼容层；旧 CLI 在那之前请求 `GET /api/apps` 时已能带出新版本提示，决策 26）。演示录屏 `deploy-gate`（专门演示扫描拦截）连同 GIF 删除，README 该位置换成 `ask.gif`；`deploy-fail` / `deploy-ok` 两段录屏与 `app-deployments.png` 截图拍于移除之前，画面里还有扫描输出与「检查」列，本次未重录（`docs/screenshots.md` 已注明）。CLI 升 0.5.22、指南升 21。 |
+| 65 | 已解决的求助收到新回复自动重新打开 | **此前 `resolved` 之后再回复只追加消息、状态纹丝不动**（`reply()` 里写死了「resolved 后追加消息不再改状态」），于是解决之后冒出的新问题、被求助者事后发现的更正，全都挂在一条显示「已解决」的求助底下：它从「待回复」筛选（决策 43）里消失、角标不计，对方收到了通知点进来也只看到一个绿色的「已解决」，很容易当成已了结的旧事。现在**有新回复就按普通回复的规则改状态**：被求助者回复 → `answered`，求助者（或管理员）回复 → `open`，与 `open` / `answered` 之间的来回是同一条规则，没有给 `resolved` 另开分支；`closed`（求助者撤销）仍不能回复。**只有新回复会重新打开**：删除回复（决策 41）照旧不改 `resolved`——删消息是撤回，不是新的进展。**代价与对策**：解决之后发一句「谢谢」也会把求助重新打开、再通知对方一次，所以 MCP `reply_help_request` 的描述与内置指南都写明「已解决的求助再回复会被重新打开，解决之后别再发客套话」，`eat ask reply` 回显当前状态（否则调用方以为它还是已解决）；控制台在已解决的求助回复框上方提示「发送新回复会把它重新打开」，发送后清单与待回复角标一并刷新。重新打开的求助要再确认解决才能沉淀为经验（沉淀本就要求 `resolved`）；已沉淀过的求助同样会被重新打开，经验本身不受影响。审计仍记 `help.replied`，重新打开的那次带 `meta.reopened=true`。CLI 升 0.5.23、指南升 22。 |
+| 66 | 回复可声明「不需要对方处理」，已解决的求助保持已解决 | **决策 65 的「有新回复就重新打开」是按「有没有消息」推断，分不清这条消息要不要对方回应**：解决之后一句「谢谢」、被求助者一句「顺带一提」，都会把求助重新打开、让对方再确认一次解决。回复接口加可选的 `reopen`（默认 `true`），**只对已解决的求助起作用**：`false` = 只留言、照常通知对方（消息是新内容），但状态不动；未解决的求助照常按谁回复改状态，参数被忽略。入口三处一致：控制台在已解决的求助回复框下放一个**默认勾选**的「发送后重新打开这条求助」（发送后复位为勾选）、CLI `eat ask reply --no-reopen`、MCP `reply_help_request` 的 `reopen` 参数（stdio 与 HTTP 两边都透传，不传交给服务端默认），内置指南与工具描述写明「只是道谢或补充说明就带 `reopen=false`」。**默认值刻意取 `true`**：两个方向的失败代价不对称——忘了取消勾选只是多一次打扰、再点一次「已解决」即可；默认不打开的话，一旦忘了勾，就回到决策 65 之前「追问悄悄消失」的老问题，而很多求助者没有配飞书 webhook（推送只发给登记过的人），状态与角标是他们看到新回复的唯一途径。**刻意没做的两种**：按正文识别客套话（「谢谢，但还有个问题」会被误判）；只让求助者的回复触发重新打开（Zendesk 的默认做法，但被求助者发现答案有误、补一条更正时状态停在已解决，收不到推送的求助者就看不到这条更正）。审计 `help.replied` 在已解决的求助上分别带 `meta.reopened=true` / `meta.keptResolved=true`。「已解决超过 N 天改为新开追问求助」（`resolved_at` + `followUpOf`）另议，等真出现老求助被拿来问新问题时再做。CLI 升 0.5.24、指南升 23。 |

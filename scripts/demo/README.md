@@ -49,7 +49,7 @@ git clone http://127.0.0.1:8088/crm-dashboard.git /home/sunhao/work/crm-dashboar
 printf 'eat(){ node %s/apps/cli/dist/index.js "$@"; }\n' "$PWD" # 或把 eat 放进 PATH
 
 # 5. 录屏 → GIF（有先后依赖，按这个顺序）
-node scripts/demo/record-cli.mjs onboard permissions ask deploy-gate deploy-fail deploy-ok
+node scripts/demo/record-cli.mjs onboard permissions ask deploy-fail deploy-ok
 NODE_PATH=$(npm root -g) node scripts/demo/render-cast.mjs
 
 # 6. 截图（放在最后，这时应用已经有真实的部署历史了）

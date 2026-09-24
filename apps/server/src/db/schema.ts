@@ -640,11 +640,11 @@ export const appMembers = pgTable(
 
 /**
  * 部署元数据（决策 30）。部署记录本身与其状态**一律以 Dokploy 的构建记录为准**，这张表只存
- * Dokploy 那边没有的业务信息：谁触发的、从哪触发的、带了什么 CLI 前置检查报告（决策 #8）。
+ * Dokploy 那边没有的业务信息：谁触发的、从哪触发的。
  * 刻意不存 status / error——那些实时读 Dokploy，在库里存一份必然过期（旧实现就卡在这上面）。
  *
  * 行只增不删：Dokploy 每个应用只保留最近 10 条构建记录（removeLastTenDeployments，硬编码不可配），
- * 超出的连构建日志一起删掉；而「谁在什么时候带着什么扫描报告部署了生产」是平台的合规记录，
+ * 超出的连构建日志一起删掉；而「谁在什么时候从哪部署了生产」是平台的合规记录，
  * 不能跟着一起消失，所以元数据留着，列表里显示为 archived。
  */
 export const deployments = pgTable(
@@ -658,10 +658,7 @@ export const deployments = pgTable(
     triggeredBy: uuid('triggered_by')
       .notNull()
       .references(() => users.id),
-    /**
-     * cli = eat deploy / 本地 stdio MCP（带扫描报告）；console = 控制台按钮；
-     * remote = 平台 HTTP MCP 端点（决策 55）。后两者都没有本地代码可扫（决策 31）。
-     */
+    /** cli = eat deploy / 本地 stdio MCP；console = 控制台按钮；remote = 平台 HTTP MCP 端点（决策 55） */
     source: text('source', { enum: ['cli', 'console', 'remote'] })
       .notNull()
       .default('cli'),
@@ -676,6 +673,11 @@ export const deployments = pgTable(
      * 之后再读只能靠回写的 id 认，没有这一列就分不清「当初精确认过」和「一直是猜的」。
      */
     claim: text('claim', { enum: ['tagged', 'inferred'] }),
+    /**
+     * 已停用：部署前的本地密钥扫描报告（决策 64 移除扫描后不再写入、也不再读出）。
+     * 列刻意保留——存量行里是线上真实的历史记录，删列会连数据一起删掉；不要从这里删掉它，
+     * 否则下次 db:generate 会生成一条 DROP COLUMN。
+     */
     report: jsonb('report').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

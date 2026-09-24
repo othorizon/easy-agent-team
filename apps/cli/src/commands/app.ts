@@ -4,7 +4,6 @@ import * as path from 'node:path';
 import {
   APP_BUILD_TYPE_LABEL,
   APP_ENV_TARGET_LABEL,
-  CLI_VERSION,
   LOG_TAIL_DEFAULT,
   STATIC_CONTAINER_PORT,
   appBuildTypeSchema,
@@ -20,14 +19,11 @@ import type {
   BuildLogsResult,
   CreateAppRequest,
   DeploymentInfo,
-  PrecheckReport,
   RunLogsResult,
-  SecretFingerprint,
   UpdateAppRequest,
 } from '@eat/shared';
 import { Api } from '../client.js';
 import { printWriteResult, stripEatHeader, writeEnvFile } from '../dotenv-file.js';
-import { scanWorkspace } from '../scan.js';
 
 /** 部署记录状态（决策 30：queued/archived 是平台补的，其余直接是 Dokploy 构建记录的取值） */
 const STATUS_LABEL: Record<string, string> = {
@@ -61,37 +57,6 @@ async function resolveApp(api: Api, slug?: string): Promise<AppInfo> {
   );
 }
 
-/** 本地前置检查：密钥扫描（强制）+ 可选预跑命令 */
-async function runPrecheck(api: Api, dir: string, checkCmd?: string): Promise<PrecheckReport> {
-  console.log(`前置检查: 扫描 ${dir} ...`);
-  const fingerprints = await api.request<SecretFingerprint[]>('GET', '/api/secret-fingerprints');
-  const { scannedFiles, findings } = scanWorkspace(dir, fingerprints);
-  console.log(`  已扫描 ${scannedFiles} 个文件，${findings.length} 个问题`);
-  if (scannedFiles === 0) {
-    console.warn('  ⚠ 没扫到任何文件，确认目录指向应用代码（部署时用 --dir 指定），否则密钥检查等于没做');
-  }
-  for (const f of findings) {
-    console.error(`  ✗ [${f.rule}] ${f.file}${f.line ? `:${f.line}` : ''} — ${f.note}`);
-  }
-
-  let localCheck: PrecheckReport['localCheck'];
-  if (checkCmd && findings.length === 0) {
-    console.log(`本地预跑: ${checkCmd}`);
-    const res = spawnSync(checkCmd, { shell: true, cwd: dir, stdio: 'inherit' });
-    localCheck = { command: checkCmd, passed: res.status === 0 };
-    if (res.status !== 0) console.error(`  ✗ 预跑命令退出码 ${res.status}`);
-  }
-
-  return {
-    passed: findings.length === 0 && (localCheck?.passed ?? true),
-    scannedFiles,
-    findings,
-    localCheck,
-    cliVersion: CLI_VERSION,
-    ranAt: new Date().toISOString(),
-  };
-}
-
 export async function deployRun(slug: string | undefined, opts: { dir?: string; check?: string }): Promise<void> {
   const api = Api.fromSaved();
   const app = await resolveApp(api, slug);
@@ -105,15 +70,18 @@ export async function deployRun(slug: string | undefined, opts: { dir?: string; 
     process.exitCode = 1;
     return;
   }
-  const dir = path.resolve(opts.dir ?? process.cwd());
-  const report = await runPrecheck(api, dir, opts.check);
-  if (!report.passed) {
-    console.error('\n前置检查未通过，已阻止部署。修复以上问题后重试（密钥应通过 eat env pull 在运行时读取）。');
-    process.exitCode = 1;
-    return;
+  // 可选的本地预跑（如 pnpm build）：纯本地门禁，结果不上送平台
+  if (opts.check) {
+    console.log(`本地预跑: ${opts.check}`);
+    const res = spawnSync(opts.check, { shell: true, cwd: path.resolve(opts.dir ?? process.cwd()), stdio: 'inherit' });
+    if (res.status !== 0) {
+      console.error(`\n预跑命令退出码 ${res.status}，已阻止部署。`);
+      process.exitCode = 1;
+      return;
+    }
   }
-  console.log(`检查通过，触发部署 ${app.slug} ...`);
-  let dep = await api.request<DeploymentInfo>('POST', `/api/apps/${app.slug}/deploy`, { report });
+  console.log(`触发部署 ${app.slug} ...`);
+  let dep = await api.request<DeploymentInfo>('POST', `/api/apps/${app.slug}/deploy`, { source: 'cli' });
   // 触发失败服务端直接报错，走不到这里；这里拿到的必然是「已排进 Dokploy 队列」
   const metaId = dep.platform?.id;
   // 短轮询等待结果：按平台元数据 id 查，服务端会把它跟 Dokploy 的构建记录对上（决策 30）
@@ -138,14 +106,11 @@ export async function deployRun(slug: string | undefined, opts: { dir?: string; 
   }
 }
 
-/** 一行里说清这次部署是谁发起的、有没有过平台的密钥扫描门禁（决策 30 / 31） */
+/** 一行里说清这次部署是谁、从哪发起的（决策 30 / 31） */
 function originNote(dep: DeploymentInfo): string {
-  if (!dep.platform) return '绕过平台直接触发 ⚠ 未经密钥扫描';
-  const SOURCE_NOTE: Record<string, string> = {
-    console: '控制台 ⚠ 未做密钥扫描',
-    remote: '远程 MCP ⚠ 未做密钥扫描',
-  };
-  const who = `${dep.platform.triggeredByName}（${SOURCE_NOTE[dep.platform.source] ?? 'eat 平台'}）`;
+  if (!dep.platform) return '⚠ 绕过平台、在部署后台直接触发';
+  const SOURCE_NOTE: Record<string, string> = { cli: 'CLI', console: '控制台', remote: '远程 MCP' };
+  const who = `${dep.platform.triggeredByName}（${SOURCE_NOTE[dep.platform.source] ?? dep.platform.source}）`;
   return dep.platform.claim === 'inferred' ? `${who} ⚠ 归属按时间推断，未必准确` : who;
 }
 
@@ -154,8 +119,6 @@ function printDeployment(dep: DeploymentInfo): void {
   const id = dep.deploymentId ?? dep.platform?.id ?? '-';
   console.log(`[${STATUS_LABEL[dep.status] ?? dep.status}] ${dep.appSlug}（${id}，${when(dep.createdAt)}）`);
   console.log(`来源: ${originNote(dep)}`);
-  const report = dep.platform?.report;
-  if (report) console.log(`检查: 扫描 ${report.scannedFiles} 个文件 / ${report.findings.length} 个问题`);
   if (dep.status === 'archived') {
     console.log('说明: 这次的构建记录已被清理（每个应用只保留最近 10 次），只剩平台侧元数据');
   }
@@ -186,7 +149,7 @@ export async function appDeployments(slug: string, opts: { all?: boolean }): Pro
   }
   console.log(
     opts.all
-      ? '\n已归档 = 构建记录已被清理，只剩平台侧元数据（谁触发的、扫描报告）'
+      ? '\n已归档 = 构建记录已被清理，只剩平台侧元数据（谁触发的、从哪触发的）'
       : `\n共 ${rows.length} 条。每个应用只保留最近 10 次构建记录；看平台完整历史用: eat app deployments ${slug} --all`,
   );
 }
@@ -463,12 +426,4 @@ export async function runLogs(slug: string, opts: { tail?: string; container?: s
   console.log(`--- 运行日志（最后 ${tail} 行）---`);
   console.log(res.logs.trimEnd() || '(日志为空)');
   if (res.containers.length > 1) console.log(`\n其它副本: eat app run-logs ${slug} --list`);
-}
-
-export async function scanOnly(dirArg: string | undefined): Promise<void> {
-  const api = Api.fromSaved();
-  const dir = path.resolve(dirArg ?? process.cwd());
-  const report = await runPrecheck(api, dir);
-  if (!report.passed) process.exitCode = 1;
-  else console.log('通过：未发现密钥泄漏问题');
 }

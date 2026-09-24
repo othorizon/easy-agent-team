@@ -16,7 +16,7 @@ import { ZodValidationPipe } from '../common/zod.pipe';
 import { DeployService } from './deploy.service';
 import { DokploySettingsService } from './dokploy-settings.service';
 
-/** Dokploy 接入配置（管理员）+ 部署触发 / 部署记录 / 日志 / 密钥指纹清单 */
+/** Dokploy 接入配置（管理员）+ 部署触发 / 部署记录 / 日志 */
 @Controller('api')
 export class DeployController {
   constructor(
@@ -105,12 +105,5 @@ export class DeployController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.deploy.runLogs(user, slug, query);
-  }
-
-  // ---------- 密钥指纹清单（CLI 扫描用） ----------
-
-  @Get('secret-fingerprints')
-  fingerprints(@CurrentUser() user: AuthUser) {
-    return this.deploy.secretFingerprints(user);
   }
 }

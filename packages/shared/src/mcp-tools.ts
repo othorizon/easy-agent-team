@@ -8,11 +8,11 @@ import { LOG_TAIL_DEFAULT, LOG_TAIL_MAX, STATIC_CONTAINER_PORT } from './deploy.
  * - `remote`：平台自己的 Streamable HTTP 端点 `POST <平台>/mcp`（决策 55），
  *   给云端 AI 服务用，鉴权走请求头里的 API Key。
  *
- * 两者差异只有两处，都是「有没有本地代码」决定的：
- * - `trigger_deploy`：本地版扫描 workdir 后才允许部署；远程版没有本地代码可扫，
- *   记录会标成「未做密钥扫描」（与控制台按钮同级）。
+ * 两者的差异都由「客户端有没有 `eat sync`」决定：
  * - `get_platform_guide`：只有远程版有——本地客户端的平台指南由 `eat sync` 落成 Skill，
- *   云端客户端没有这条路，只能靠工具把指南取回去。
+ *   云端客户端没有这条路，只能靠工具把指南取回去；
+ * - `search_experiences` 的描述里「怎么看全文」按两边各给一种说法。
+ * （`trigger_deploy` 曾因本地版要先扫描 workdir 而分成两版，部署前扫描移除后两边一致，决策 64。）
  */
 export type EatToolMode = 'local' | 'remote';
 
@@ -149,12 +149,17 @@ function helpTools(mode: EatToolMode): EatToolDef[] {
     },
     {
       name: 'reply_help_request',
-      description: '在求助中追问或补充信息（也用于替用户回复）。',
+      description:
+        '在求助中追问或补充信息（也用于替用户回复）。对已解决的求助回复默认会把它重新打开、回到待回复——需要对方再处理时这正是想要的；只是道谢或补充说明、不需要对方处理时传 reopen=false，求助保持已解决（对方照常收到这条消息）。',
       inputSchema: {
         type: 'object',
         properties: {
           requestId: { type: 'string', description: '求助 ID' },
           content: { type: 'string', description: '追问或补充的内容' },
+          reopen: {
+            type: 'boolean',
+            description: '只对已解决的求助起作用：默认 true 重新打开；false = 只留言、保持已解决。未解决的求助忽略此参数',
+          },
         },
         required: ['requestId', 'content'],
       },
@@ -298,41 +303,24 @@ function appTools(): EatToolDef[] {
   ];
 }
 
-function deployTools(mode: EatToolMode): EatToolDef[] {
-  const triggerDeploy: EatToolDef =
-    mode === 'local'
-      ? {
-          name: 'trigger_deploy',
-          description:
-            '部署应用。会先在 workdir 本地执行密钥扫描（通用规则 + 平台密钥指纹 + .env 误提交），发现问题则返回 findings 并拒绝部署——此时修复问题后重试，绝不要试图绕过检查。应用未经管理员授权时返回 DEPLOY_NOT_APPROVED：告诉用户找管理员在控制台「应用」页授权一次，不要反复重试。成功触发后用 get_deploy_status 跟踪结果。',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              app: { type: 'string', description: '应用 slug（list_apps 查看）' },
-              workdir: { type: 'string', description: '应用代码目录的绝对路径' },
-            },
-            required: ['app', 'workdir'],
-          },
-        }
-      : {
-          name: 'trigger_deploy',
-          description:
-            '部署应用（构建源是应用绑定的 Git 仓库，与你本地无关）。**你是远程接入的，平台拿不到本地代码，这次部署不会做密钥扫描**，记录会标成「未做密钥扫描」，与控制台上的部署按钮同级：触发前请先确认仓库里没有提交密钥。有终端环境时改用 eat CLI 部署更安全（它会先扫描再触发）。应用未经管理员授权时返回 DEPLOY_NOT_APPROVED：告诉用户找管理员在控制台「应用」页授权一次，不要反复重试。成功触发后用 get_deploy_status 跟踪结果。',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              app: { type: 'string', description: '应用 slug（list_apps 查看）' },
-            },
-            required: ['app'],
-          },
-        };
-
+function deployTools(): EatToolDef[] {
   return [
-    triggerDeploy,
+    {
+      name: 'trigger_deploy',
+      description:
+        '部署应用（构建源是应用绑定的 Git 仓库，与你本地的工作区无关：要部署的改动得先提交并推送到应用绑定的分支）。应用未经管理员授权时返回 DEPLOY_NOT_APPROVED：告诉用户找管理员在控制台「应用」页授权一次，不要反复重试。成功触发后用 get_deploy_status 跟踪结果。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          app: { type: 'string', description: '应用 slug（list_apps 查看）' },
+        },
+        required: ['app'],
+      },
+    },
     {
       name: 'get_deploy_status',
       description:
-        '查询部署状态。status 取值 queued=排队中 / running=构建中 / done=成功 / error=失败 / cancelled=已取消 / archived=构建记录已被清理。status=error 时 error 字段已带上构建日志末尾的真实报错——据此改代码后重新 trigger_deploy；要看完整日志用 get_build_logs。platform 为 null 表示这次是绕过平台直接触发的、没经过密钥扫描门禁；platform.source=console / remote 表示从控制台按钮或远程 MCP 触发、同样没做扫描。必须传 app；再传 deploymentId 看指定那次。',
+        '查询部署状态。status 取值 queued=排队中 / running=构建中 / done=成功 / error=失败 / cancelled=已取消 / archived=构建记录已被清理。status=error 时 error 字段已带上构建日志末尾的真实报错——据此改代码后重新 trigger_deploy；要看完整日志用 get_build_logs。platform 为 null 表示这次是绕过平台、直接在部署后台触发的；platform.source 说明从哪触发（cli=eat CLI 或本地 MCP / console=控制台按钮 / remote=远程 MCP）。必须传 app；再传 deploymentId 看指定那次。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -390,6 +378,6 @@ export function buildEatTools(mode: EatToolMode): EatToolDef[] {
     ...helpTools(mode),
     ...dbTools(),
     ...appTools(),
-    ...deployTools(mode),
+    ...deployTools(),
   ];
 }
