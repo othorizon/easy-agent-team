@@ -149,7 +149,8 @@ function helpTools(mode: EatToolMode): EatToolDef[] {
     },
     {
       name: 'reply_help_request',
-      description: '在求助中追问或补充信息（也用于替用户回复）。',
+      description:
+        '在求助中追问或补充信息（也用于替用户回复）。对已解决的求助回复会把它重新打开、回到待回复，对方会再收到通知——只是道谢或确认收到就不必再发。',
       inputSchema: {
         type: 'object',
         properties: {

@@ -209,16 +209,21 @@ export class HelpService {
       throw new ConflictException({ error: 'CONFLICT', message: '求助已关闭，无法回复' });
     }
     await this.db.insert(helpMessages).values({ requestId: id, senderId: user.id, content });
-    // 状态机：helper 回复 → answered；requester 追问 → open（resolved 后追加消息不再改状态）
-    let nextStatus: HelpStatus | null = null;
-    if (row.status !== 'resolved') {
-      nextStatus = user.id === row.helperId ? 'answered' : 'open';
-    }
+    // 状态机：被求助者回复 → answered；求助者（或管理员）追问 → open。
+    // 已解决的求助同样按这条走：有了新回复就说明事情没完，自动回到待回复（决策 65）
+    const nextStatus: HelpStatus = user.id === row.helperId ? 'answered' : 'open';
+    const reopened = row.status === 'resolved';
     await this.db
       .update(helpRequests)
-      .set({ ...(nextStatus ? { status: nextStatus } : {}), updatedAt: sql`now()` })
+      .set({ status: nextStatus, updatedAt: sql`now()` })
       .where(eq(helpRequests.id, id));
-    await this.audit.record({ actorId: user.id, action: 'help.replied', targetType: 'help_request', targetId: id });
+    await this.audit.record({
+      actorId: user.id,
+      action: 'help.replied',
+      targetType: 'help_request',
+      targetId: id,
+      ...(reopened ? { meta: { reopened: true } } : {}),
+    });
 
     const other = user.id === row.requesterId ? row.helperId : row.requesterId;
     this.notifyUser(
@@ -233,7 +238,7 @@ export class HelpService {
   /**
    * 删除一条回复：本人或管理员（与「删除求助」一致的本人 / 管理员口径）。
    * 状态按剩余消息回推——删掉被求助者的唯一回复后不该还挂着「已回复」；
-   * resolved / closed 是人工拍板的终态，不因删消息回退。
+   * resolved / closed 是人工拍板的结论，删消息不改它（resolved 只会因为新回复重新打开，见 reply）。
    */
   async removeMessage(user: AuthUser, rawId: string, messageId: string): Promise<HelpRequestDetail> {
     const row = await this.getRow(rawId, user);

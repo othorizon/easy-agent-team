@@ -82,8 +82,9 @@ export async function askShow(id: string): Promise<void> {
 
 export async function askReply(id: string, opts: { message: string }): Promise<void> {
   const api = Api.fromSaved();
-  await api.request('POST', `/api/help-requests/${id}/reply`, { content: opts.message });
-  console.log('已回复');
+  const r = await api.request<HelpRequestDetail>('POST', `/api/help-requests/${id}/reply`, { content: opts.message });
+  // 状态要说出来：已解决的求助一回复就会被重新打开（决策 65），不打印的话调用方以为它还是已解决
+  console.log(`已回复（当前状态：${STATUS_LABEL[r.status] ?? r.status}）`);
 }
 
 export async function askResolve(id: string): Promise<void> {

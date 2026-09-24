@@ -223,6 +223,28 @@ describe('求助流程', () => {
     expect(done.body.status).toBe('resolved');
   });
 
+  it('已解决后有新回复就自动重新打开（决策 65）：求助者追问 → open，被求助者补充 → answered', async () => {
+    const hitsBefore = webhookHits.length;
+    const q = await api('POST', `/api/help-requests/${requestId}/reply`, {
+      token: requesterToken,
+      payload: { content: '又遇到一笔对不上的，也是状态差异' },
+    });
+    expect(q.body.status).toBe('open');
+    // 重新打开的求助回到被求助者的「待回复」里，也照常通知到对方
+    const inbox = await api('GET', '/api/help-requests/inbox', { token: helperToken });
+    expect(inbox.body.find((r: { id: string }) => r.id === requestId).status).toBe('open');
+    await waitFor(() => webhookHits.length > hitsBefore);
+
+    // 重新确认后，被求助者再补一句同样会把它打开，只是落到 answered（等求助者确认）
+    expect((await api('POST', `/api/help-requests/${requestId}/resolve`, { token: requesterToken })).body.status).toBe('resolved');
+    const a = await api('POST', `/api/help-requests/${requestId}/reply`, {
+      token: helperToken,
+      payload: { content: '补充：流水号对不上时找财务导原始对账单' },
+    });
+    expect(a.body.status).toBe('answered');
+    expect((await api('POST', `/api/help-requests/${requestId}/resolve`, { token: requesterToken })).body.status).toBe('resolved');
+  });
+
   it('短 ID 走写路径：回复挂到正确的求助上', async () => {
     const before = (await api('GET', `/api/help-requests/${requestId}`, { token: requesterToken })).body.messages.length;
     const r = await api('POST', `/api/help-requests/${requestId.slice(0, 8)}/reply`, {
@@ -232,6 +254,9 @@ describe('求助流程', () => {
     expect(r.status).toBe(201);
     expect(r.body.id).toBe(requestId);
     expect(r.body.messages).toHaveLength(before + 1);
+    // 这条求助已解决，新回复把它重新打开了；后面的沉淀用例要求已解决，这里确认回去
+    expect(r.body.status).toBe('answered');
+    await api('POST', `/api/help-requests/${requestId}/resolve`, { token: requesterToken });
   });
 
   it('skill 作者求助入口：allowHelp 的 skill 可被求助并路由给作者', async () => {

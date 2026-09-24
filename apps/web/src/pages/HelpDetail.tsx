@@ -36,7 +36,12 @@ export function HelpDetailPage() {
 
   const reply = useMutation({
     mutationFn: (content: string) => api('POST', `/api/help-requests/${id}/reply`, { content }),
-    onSuccess: invalidate,
+    // 回复会改状态（已解决的也会被重新打开），清单里的状态与待回复角标一起刷新
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['help-mine'] });
+      void queryClient.invalidateQueries({ queryKey: ['help-inbox'] });
+      invalidate();
+    },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '回复失败'),
   });
   const resolve = useMutation({
@@ -212,6 +217,9 @@ export function HelpDetailPage() {
                   replyForm.reset();
                 })}
               >
+                {r.status === 'resolved' && (
+                  <p className="text-xs text-muted-foreground">这条求助已解决；发送新回复会把它重新打开，回到待回复。</p>
+                )}
                 <Textarea
                   rows={3}
                   placeholder="回复 / 追问…"

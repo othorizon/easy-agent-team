@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 21;
+export const PLATFORM_GUIDE_VERSION = 22;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -30,7 +30,7 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 
 1. **先搜经验库**：\`search_experiences\`——很多问题已有沉淀好的答案，别打扰人。
 2. 没有再找人：\`list_helpers\` 列出可求助的同事及其能力描述，\`create_help_request\` 发起求助（把上下文说清楚）。
-3. \`get_help_request\` 看回复，\`reply_help_request\` 追问。求助内容只对求助双方与管理员可见。
+3. \`get_help_request\` 看回复，\`reply_help_request\` 追问。求助内容只对求助双方与管理员可见。已解决的求助再回复会被重新打开、对方会再收到通知，解决之后别再发客套话。
 
 ### 数据库账号（要自己写数据时才申请，不要找人代提）
 
