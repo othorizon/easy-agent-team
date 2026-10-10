@@ -11,7 +11,8 @@ async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     // 空闲连接活得比前置代理久，否则代理复用一条平台刚关掉的连接就是一个 502（决策 61）
-    new FastifyAdapter({ keepAliveTimeout: config.keepAliveTimeoutMs }),
+    // trustProxy：部署在反向代理后面时打开，审计里记的 IP 才是真实来源而不是代理的地址
+    new FastifyAdapter({ keepAliveTimeout: config.keepAliveTimeoutMs, trustProxy: process.env.EAT_TRUST_PROXY === '1' }),
     { logger: ['log', 'warn', 'error'] },
   );
   app.enableShutdownHooks();
