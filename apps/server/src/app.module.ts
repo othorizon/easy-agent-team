@@ -8,6 +8,7 @@ import { AppExceptionFilter } from './common/http-exception.filter';
 import { registerTolerantJsonParser } from './common/json-body';
 import { DbModule } from './db/db.module';
 import { DbsModule } from './dbs/dbs.module';
+import { DemoModule } from './demo/demo.module';
 import { DeployModule } from './deploy/deploy.module';
 import { EnvsModule } from './envs/envs.module';
 import { HealthController } from './health.controller';
@@ -39,6 +40,7 @@ import { UsersModule } from './users/users.module';
     McpServerModule,
     DbsModule,
     DeployModule,
+    DemoModule,
   ],
   controllers: [HealthController],
   providers: [
