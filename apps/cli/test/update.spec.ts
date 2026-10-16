@@ -162,7 +162,7 @@ describe('buildUpdateNotice：提示什么、什么时候闭嘴', () => {
       syncedSkillVersion: 'bbbb',
     };
     const notice = buildUpdateNotice(state, local, null);
-    expect(notice?.lines).toHaveLength(4);
+    expect(notice?.lines).toHaveLength(5);
     const text = notice?.lines.join('\n') ?? '';
     expect(text).toContain('不影响本次命令结果');
     expect(text).toContain('每条 eat 命令都会附');

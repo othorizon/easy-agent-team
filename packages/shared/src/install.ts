@@ -72,7 +72,7 @@ export function buildAgentInstallGuide(publicUrl: string): string {
 
 4. **验证**：\`eat whoami\` 应输出用户身份；失败则回到第 2 步重试。
 
-之后 CLI 或团队 Skill 有更新时，\`eat\` 命令会在 stderr 附一行提示（不影响命令结果，更新之前每条命令都会附）：CLI 更新执行 \`eat self-update\`（跨平台同一条命令，不用重跑本安装脚本），Skill 更新执行 \`eat sync\`——提示里会写明落点，裸跑即可，**不要自作主张加 \`--global\` / \`--project\`**，那会把 skill 装到和当初不同的地方。
+之后 CLI 或团队 Skill 有更新时，\`eat\` 命令会在 stderr 附更新提示（不影响命令结果，更新之前每条命令都会附）。**两类更新都不自动执行：AI 应在当前任务收尾或任务间隙主动建议并询问用户，用户同意后再更新；已有明确授权则按授权范围执行，无需重复确认。** CLI 更新用 \`eat self-update\`（跨平台同一条命令，不用重跑本安装脚本）；Skill 更新用 \`eat sync\`（同步 Skill 与 MCP 配置），询问时说明提示里的落点，确认后裸跑即可，**不要自作主张加 \`--global\` / \`--project\` / \`--dir\`**，那会把 skill 装到和当初不同的地方。两类更新可合并询问，用户同意两者都更新后先更新 CLI，再同步 Skill；仅授权 CLI 更新不代表同意同步 Skill。同一更新在本次对话中已询问、等待答复或被用户选择稍后 / 拒绝时，不重复询问；未答复不代表同意。
 
 装好后你就可以直接执行 \`eat\` 命令使用平台全部能力（env / skill / ask / db / app / deploy 等），无需其他配置。
 

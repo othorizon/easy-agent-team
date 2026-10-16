@@ -118,7 +118,7 @@ flowchart TB
 | 本地同步 | `eat sync` 将实际文件写入 `~/.agents/skills/`，并逐个软链至 `~/.claude/skills/`（Windows 下改为复制实文件） |
 | 安装范围 | 默认安装至全局，也可仅安装至当前项目（`./.agents/skills/` + 相对软链）或指定的自定义目录 |
 | 内置平台指南 | 为每个成员自动注入 `eat-platform-guide` Skill 并置于首位，使本地 AI 了解平台能力与正确用法 |
-| 更新提示 | 服务端通过响应头下发 CLI 版本与用户级 Skill 指纹，CLI / MCP 侧提示存在新版本；`eat self-update` 一条命令完成升级 |
+| 更新提示 | 服务端通过响应头下发 CLI 版本与用户级 Skill 指纹，CLI / MCP 侧提示存在新版本；平台提示词要求 AI 在合适时机主动建议并询问，用户同意后执行 `eat self-update` / `eat sync` |
 
 ### MCP 配置分发
 

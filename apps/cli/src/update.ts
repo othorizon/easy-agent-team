@@ -17,7 +17,8 @@ import { resolveSyncRoots } from './sync-config.js';
  *      曾经按版本只提示一次，但去重标记记在本机共享的 state.json 里，谁先跑 eat 谁就把提示
  *      「用掉」——人在终端里看过一眼，之后所有 Agent 会话都再也收不到。
  *      唯一保留的闸门是「一个进程一次」：CLI 一条命令一次，MCP server 一个进程一次。
- *   3. 只提示不自动更新，且任何环节失败都静默——绝不改变命令的输出与退出码。
+ *   3. 只提示不自动更新：提示要求 AI 在合适时机主动建议并询问，用户同意后再执行。
+ *      任何环节失败都静默——绝不改变命令的输出与退出码。
  */
 
 const STATE_FILE = path.join(os.homedir(), '.eat', 'state.json');
@@ -233,6 +234,7 @@ export function buildUpdateNotice(
   notice.lines = [
     '[eat] 有可用更新（不影响本次命令结果；更新之前每条 eat 命令都会附这段提示）：',
     ...items.map((i) => `      ${i}`),
+    '      AI：请在任务收尾或任务间隙主动建议并询问用户，用户同意后再按授权范围更新；已有明确授权无需重复确认。同一更新在本次对话中已询问或用户选择稍后 / 拒绝时，不要重复询问；未答复不代表同意。',
     '      不再提示: 设置环境变量 EAT_NO_UPDATE_NOTIFIER=1',
   ];
   return notice;

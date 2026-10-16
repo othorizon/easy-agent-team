@@ -91,5 +91,5 @@ export async function selfUpdate(opts: SelfUpdateOpts): Promise<void> {
   if (latest) markCliUpdated(latest);
   console.log(`✅ eat CLI 已更新${latest ? `：${CLI_VERSION} → ${latest}` : ''}`);
   console.log(`   产物位置: ${target}`);
-  console.log('   下一步建议: eat sync（同步团队 Skill 的最新版本）');
+  console.log('   下一步建议: 询问用户是否需要 eat sync（同步团队 Skill 与 MCP 配置；已有明确授权无需重复确认）');
 }

@@ -39,6 +39,7 @@ export const EAT_MCP_INSTRUCTIONS = `easy-agent-team（eat）是这个团队的 
 先调用 get_platform_guide 读一次平台使用指南（里面是完整能力清单与行为规范），再开始干活。几条最要紧的：
 - 需要内部服务的配置 / 密钥 / 连接串：先 list_env_variables 认路，再 get_env_values 取值；返回 PERMISSION_REQUIRED 就用 request_access 申请，不要重试、不要猜值、不要向用户索要。
 - 遇到搞不定的内部问题：先 search_experiences 搜团队经验，搜不到再 list_helpers + create_help_request 找真人。
+- 看到 eat CLI 或团队 Skill 更新提示：在任务收尾或任务间隙主动建议并询问用户，用户同意后才按授权范围更新；已有明确授权无需重复确认，同一更新在本次对话中已询问或被选择稍后 / 拒绝时不要重复询问。
 - 取到的值可能是密钥：只用于当前任务，不要写进代码、日志或对话。`;
 
 function envTools(): EatToolDef[] {
