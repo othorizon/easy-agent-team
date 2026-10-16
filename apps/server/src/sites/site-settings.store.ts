@@ -16,7 +16,7 @@ export class SiteSettingsStore {
   }
   async required() {
     const row = await this.row();
-    if (!row) throw new ServiceUnavailableException('请管理员先在系统设置中配置静态网站');
+    if (!row) throw new ServiceUnavailableException('请管理员先在系统设置中配置页面');
     return row;
   }
   async capability(): Promise<SiteCapabilityInfo> {
@@ -28,7 +28,7 @@ export class SiteSettingsStore {
     if (r.status !== 'enabled')
       throw new ServiceUnavailableException({
         error: 'SITES_DISABLED',
-        message: '静态网站尚未启用，请管理员在系统设置中检查并启用',
+        message: '页面尚未启用，请管理员在系统设置中检查并启用',
       });
     return r;
   }
@@ -73,14 +73,14 @@ export class SiteSettingsStore {
   async save(dto: UpdateSiteSettings) {
     const platform = new URL(dto.platformUrl || loadConfig().publicUrl).hostname.toLowerCase();
     if (platform === dto.domain || platform.endsWith(`.${dto.domain}`))
-      throw new ConflictException('站点域名后缀不能覆盖 EAT 控制台域名');
+      throw new ConflictException('页面域名后缀不能覆盖 EAT 控制台域名');
     await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(1950536501)`);
       const [r] = await tx.select().from(siteSettings).where(eq(siteSettings.id, 1)).for('update');
       if (r && (setupBusy(r.status) || r.status === 'enabled' || r.routeConfigured))
-        throw new ConflictException('请先停用静态网站，再修改配置');
+        throw new ConflictException('请先停用页面，再修改配置');
       if (r && r.domain !== dto.domain && (await tx.select({ id: sites.id }).from(sites).limit(1)).length)
-        throw new ConflictException('已有网站，不能修改域名后缀；历史版本和评论链接需要保留');
+        throw new ConflictException('已有页面，不能修改域名后缀；历史版本和评论链接需要保留');
       if (
         r &&
         (r.ossBucket !== dto.ossBucket || r.ossRegion !== dto.ossRegion) &&

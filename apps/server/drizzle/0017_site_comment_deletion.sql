@@ -1,0 +1,1 @@
+ALTER TABLE "site_comment" ADD COLUMN "deleted_at" timestamp with time zone;

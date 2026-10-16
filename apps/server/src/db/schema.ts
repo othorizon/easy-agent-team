@@ -25,7 +25,7 @@ export const users = pgTable('user', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-/** 静态站点：访问策略属于站点，所有历史发布共用；文件快照保持不可变。 */
+/** 页面：访问策略属于页面，所有历史发布共用；文件快照保持不可变。 */
 export const sites = pgTable('site', {
   id: uuid('id').primaryKey().defaultRandom(),
   slug: text('slug').notNull().unique(),
@@ -118,6 +118,7 @@ export const siteComments = pgTable('site_comment', {
   authorId: uuid('author_id').notNull().references(() => users.id),
   content: text('content').notNull(),
   mentions: jsonb('mentions').$type<string[]>().notNull().default([]),
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('site_comment_thread_idx').on(t.threadId)]);
 

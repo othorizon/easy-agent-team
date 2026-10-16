@@ -94,7 +94,7 @@ export function SiteSettingsCard() {
       reset(formValues(data));
       cache.setQueryData(['site-settings'], data);
       refresh();
-      toast.success('静态网站配置已保存');
+      toast.success('页面配置已保存');
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -114,7 +114,7 @@ export function SiteSettingsCard() {
     <Card id="static-sites">
       <CardContent className="space-y-5 pt-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-semibold">静态网站发布</h2>
+          <h2 className="font-semibold">页面发布</h2>
           <Badge variant={r?.enabled ? 'default' : 'secondary'}>{statuses[r?.status ?? 'disabled']}</Badge>
         </div>
         <p className="text-sm text-muted-foreground">
@@ -144,11 +144,11 @@ export function SiteSettingsCard() {
               EAT 控制台 HTTPS 地址
               <Input {...register('platformUrl')} placeholder="https://eat.example.com" required />
               <span className="text-xs text-muted-foreground">
-                用于网站登录和评论，默认填写当前控制台地址，无需修改环境变量。
+                用于页面登录和评论，默认填写当前控制台地址，无需修改环境变量。
               </span>
             </label>
             <label className="space-y-1 text-sm">
-              站点域名后缀
+              发布域名后缀
               <Input {...register('domain')} placeholder="sites.example.com" required />
               <span className="text-xs text-muted-foreground">应与控制台域名分开，例如 demo.sites.example.com</span>
             </label>
@@ -263,7 +263,7 @@ export function SiteSettingsCard() {
                 </p>
                 <label className="flex items-center gap-2 text-sm sm:col-span-2">
                   <input type="checkbox" {...register('autoDns')} />
-                  自动添加 *.{domain || '站点域名'} → {target || '部署入口'} 的解析（仅在不存在时添加，不覆盖已有记录）
+                  自动添加 *.{domain || '页面域名'} → {target || '部署入口'} 的解析（仅在不存在时添加，不覆盖已有记录）
                 </label>
               </>
             )}
@@ -281,7 +281,7 @@ export function SiteSettingsCard() {
                   </select>
                 </label>
                 <p className="text-xs text-muted-foreground sm:col-span-2">
-                  证书需覆盖 *.{domain || '站点域名'}，并已在 Dokploy 中安装。续期和证书更新由原有流程负责。
+                  证书需覆盖 *.{domain || '页面域名'}，并已在 Dokploy 中安装。续期和证书更新由原有流程负责。
                 </p>
               </>
             )}
@@ -346,7 +346,7 @@ export function SiteSettingsCard() {
           )}
         </div>
         {!!r?.checks.length && (
-          <ol aria-label="静态网站启用检查" className="space-y-3">
+          <ol aria-label="页面启用检查" className="space-y-3">
             {r.checks.map((check) => (
               <li key={check.id} className="flex items-start gap-2 text-sm">
                 {check.status === 'running' ? (

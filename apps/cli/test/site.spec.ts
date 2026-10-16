@@ -26,13 +26,46 @@ describe('静态发布打包', () => {
     const program = new Command().version('0.6.0').exitOverride();
     registerSiteCommands(program);
     const id = '00000000-0000-4000-8000-000000000001';
-    await program.parseAsync(['node', 'eat', 'site', 'comment', 'demo', 'reply', '--version-id', id, '--thread', id]);
+    await program.parseAsync([
+      'node',
+      'eat',
+      'site',
+      'comment',
+      'demo',
+      'reply',
+      '--version-id',
+      id,
+      '--thread',
+      id,
+    ]);
     expect(request).toHaveBeenCalledWith(
       'POST',
       `/api/sites/demo/threads/${id}/replies`,
       { content: 'reply', versionId: id, mentions: [] },
       {},
     );
+  });
+  it('删除评论命令与 MCP 使用相同的权限校验端点和访问凭据', async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+    vi.spyOn(Api, 'fromSaved').mockReturnValue({ request } as unknown as Api);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const program = new Command().exitOverride();
+    registerSiteCommands(program);
+    const id = '00000000-0000-4000-8000-000000000001';
+    await program.parseAsync([
+      'node',
+      'eat',
+      'site',
+      'delete-comment',
+      'demo',
+      id,
+      '--access-token',
+      'proof',
+    ]);
+    expect(request).toHaveBeenCalledWith('DELETE', '/api/sites/demo/comments/' + id, undefined, {
+      'x-eat-site-access': 'proof',
+    });
+    expect(() => siteToolRequest('delete_site_comment', { site: 'demo', commentId: 'invalid' })).toThrow();
   });
   it('目录支持二进制和嵌套文件，并排除环境配置', () => {
     const d = dir();
@@ -74,6 +107,8 @@ describe('静态发布打包', () => {
     expect(req.path).toBe('/api/sites/demo/threads/' + id + '/replies');
     expect(req.headers).toEqual({ 'x-eat-site-access': 'proof' });
     expect(req.body).toMatchObject({ versionId: id, content: 'reply' });
-    expect(() => siteToolRequest('create_site', { slug: 'demo', name: 'Demo', access: 'password' })).toThrow();
+    expect(() =>
+      siteToolRequest('create_site', { slug: 'demo', name: 'Demo', access: 'password' }),
+    ).toThrow();
   });
 });

@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -35,7 +36,10 @@ import { SiteRuntime } from './site-config';
 
 import { siteProbeMarker } from './site-setup.service';
 
-const accessBody = z.object({ password: z.string().max(128).optional(), accessToken: z.string().max(4096).optional() });
+const accessBody = z.object({
+  password: z.string().max(128).optional(),
+  accessToken: z.string().max(4096).optional(),
+});
 const proofOf = (req: FastifyRequest) =>
   typeof req.headers['x-eat-site-access'] === 'string' ? req.headers['x-eat-site-access'] : undefined;
 
@@ -61,7 +65,10 @@ export class SitesController {
   @Get() list(@CurrentUser() user: AuthUser) {
     return this.sites.list(user);
   }
-  @Post() create(@CurrentUser() user: AuthUser, @Body(new ZodValidationPipe(createSiteSchema)) body: CreateSite) {
+  @Post() create(
+    @CurrentUser() user: AuthUser,
+    @Body(new ZodValidationPipe(createSiteSchema)) body: CreateSite,
+  ) {
     return this.sites.create(user, body);
   }
   @Get(':slug') async detail(@CurrentUser() user: AuthUser, @Param('slug') slug: string) {
@@ -113,7 +120,8 @@ export class SitesController {
   @Post(':slug/authorize') authorize(
     @CurrentUser() user: AuthUser,
     @Param('slug') slug: string,
-    @Body(new ZodValidationPipe(z.object({ returnUrl: z.string().url().max(4096) }))) body: { returnUrl: string },
+    @Body(new ZodValidationPipe(z.object({ returnUrl: z.string().url().max(4096) })))
+    body: { returnUrl: string },
   ) {
     return this.sites.ticket(user, slug, body.returnUrl);
   }
@@ -128,7 +136,11 @@ export class SitesController {
     return this.sites.unlock(await this.sites.get(slug), body.password, body.accessToken, req.ip);
   }
   @Post(':slug/comment-ticket')
-  async commentTicket(@CurrentUser() user: AuthUser, @Param('slug') slug: string, @Req() req: FastifyRequest) {
+  async commentTicket(
+    @CurrentUser() user: AuthUser,
+    @Param('slug') slug: string,
+    @Req() req: FastifyRequest,
+  ) {
     const site = await this.sites.get(slug);
     this.sites.assertView(site, user, proofOf(req));
     return { code: await this.sites.newSession(site, 'comment_ticket', user.tokenId, '', '/', 60_000) };
@@ -196,6 +208,16 @@ export class SitesController {
   ) {
     const viewer = await this.viewer(slug, req, true);
     return this.comments.reply(viewer.user!, slug, id, body, viewer.proof);
+  }
+  @Public()
+  @Delete(':slug/comments/:id')
+  async deleteComment(
+    @Param('slug') slug: string,
+    @Param('id', new ZodValidationPipe(z.string().uuid())) id: string,
+    @Req() req: FastifyRequest,
+  ) {
+    const viewer = await this.viewer(slug, req, true);
+    return this.comments.remove(viewer.user!, slug, id, viewer.proof);
   }
   @Public()
   @Patch(':slug/threads/:id')

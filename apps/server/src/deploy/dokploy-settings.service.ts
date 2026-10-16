@@ -76,7 +76,7 @@ export class DokploySettingsService {
         sites &&
         (sites.routeConfigured || ['checking', 'provisioning', 'verifying', 'disabling'].includes(sites.status))
       )
-        throw new ConflictException('请先在静态网站设置中停用并清理入口，再更换或停用部署后台');
+        throw new ConflictException('请先在页面设置中停用并清理入口，再更换或停用部署后台');
     }
     const apiTokenEncrypted = dto.apiToken
       ? encryptSecret(dto.apiToken)

@@ -41,9 +41,9 @@ export class SiteGateway {
         req.raw.url === `/__eat/verify/${setting.operationId}`
       )
         return reply.type('text/plain').send(siteProbeMarker(setting));
-      if (setting.status !== 'enabled') return reply.status(503).send('静态网站尚未启用');
+      if (setting.status !== 'enabled') return reply.status(503).send('页面尚未启用');
       const target = parseSiteHost(host, setting.domain);
-      if (!target) return reply.status(404).send('网站不存在');
+      if (!target) return reply.status(404).send('页面不存在');
       const site = await this.sites.get(target.slug);
       const base = await this.runtime.url(site.slug, target.version);
       const url = new URL(req.raw.url ?? '/', base);
@@ -98,7 +98,7 @@ export class SiteGateway {
         if (site.access === 'authenticated') {
           const authorize = `${await this.runtime.platform()}/sites/authorize?site=${encodeURIComponent(site.slug)}&returnUrl=${encodeURIComponent(base + url.pathname + url.search)}`;
           if (req.headers['sec-fetch-dest'] && req.headers['sec-fetch-dest'] !== 'document')
-            return reply.status(401).send('网站访问会话已失效');
+            return reply.status(401).send('页面访问会话已失效');
           return reply.redirect(authorize);
         }
         return reply.status(403).type('text/html; charset=utf-8').send(this.passwordPage(site.name));
@@ -120,8 +120,8 @@ export class SiteGateway {
       const file = version.manifest[path];
       const content = await this.storage.get(version.storage, site.id, version.id, path);
       reply.header('x-eat-site-version', version.id).type(file.type);
-      // 禁止站点注册持久化 Service Worker，避免访问策略变化后离线缓存继续提供受保护页面。
-      if (req.headers['service-worker'] === 'script') return reply.status(403).send('静态站点不支持 Service Worker');
+      // 禁止页面注册持久化 Service Worker，避免访问策略变化后离线缓存继续提供受保护页面。
+      if (req.headers['service-worker'] === 'script') return reply.status(403).send('页面不支持 Service Worker');
       if (file.type.startsWith('text/html')) {
         const config = Buffer.from(
           JSON.stringify({
@@ -147,7 +147,7 @@ export class SiteGateway {
       const status = e instanceof HttpException ? e.getStatus() : e instanceof z.ZodError ? 400 : 500;
       return reply.status(status).send({
         error: status === 500 ? 'INTERNAL_ERROR' : 'SITE_ACCESS_ERROR',
-        message: status === 500 ? '网站访问失败' : (e as Error).message,
+        message: status === 500 ? '页面访问失败' : (e as Error).message,
       });
     }
   }
@@ -169,6 +169,6 @@ export class SiteGateway {
     }
   }
   private passwordPage(name: string) {
-    return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>验证访问密码</title></head><body style="font:16px system-ui;max-width:360px;margin:15vh auto;padding:24px"><h1>${escapeHtml(name)}</h1><p>输入网站密码后访问，发表评论需要登录 EAT。</p><form><input name="password" type="password" required autofocus placeholder="访问密码" style="padding:10px"><button style="padding:10px">进入网站</button><p role="alert"></p></form><script>document.querySelector('form').onsubmit=async function(e){e.preventDefault();var r=await fetch('/__eat/access',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:this.password.value})});if(r.ok)location.reload();else this.querySelector('p').textContent=(await r.json()).message||'密码验证失败';};</script></body></html>`;
+    return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>验证访问密码</title></head><body style="font:16px system-ui;max-width:360px;margin:15vh auto;padding:24px"><h1>${escapeHtml(name)}</h1><p>输入页面密码后访问，发表评论需要登录 EAT。</p><form><input name="password" type="password" required autofocus placeholder="访问密码" style="padding:10px"><button style="padding:10px">进入页面</button><p role="alert"></p></form><script>document.querySelector('form').onsubmit=async function(e){e.preventDefault();var r=await fetch('/__eat/access',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:this.password.value})});if(r.ok)location.reload();else this.querySelector('p').textContent=(await r.json()).message||'密码验证失败';};</script></body></html>`;
   }
 }

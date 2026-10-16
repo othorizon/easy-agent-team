@@ -120,6 +120,13 @@
       "when": 1792124576098,
       "tag": "0016_site_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1792150398175,
+      "tag": "0017_site_comment_deletion",
+      "breakpoints": true
     }
   ]
 }

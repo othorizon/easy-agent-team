@@ -12,6 +12,16 @@ import {
   type SiteVersion,
 } from '@eat/shared';
 import { toast } from 'sonner';
+import {
+  ArrowLeft,
+  Copy,
+  ExternalLink,
+  FolderUp,
+  History,
+  MessageSquare,
+  Settings,
+  Upload,
+} from 'lucide-react';
 import { api } from '../api';
 import { PageHeader } from '../components/page-header';
 import { Button } from '../components/ui/button';
@@ -19,9 +29,32 @@ import { Input, Textarea } from '../components/ui/input';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { SiteDiscussion } from './SiteComments';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '../components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
 
 const selectClass = 'h-9 rounded-md border bg-background px-2 text-sm';
-const modes: Record<string, string> = { authenticated: '仅登录用户', public: '公开访问', password: '密码访问' };
+const modes: Record<string, string> = {
+  authenticated: '仅登录用户',
+  public: '公开访问',
+  password: '密码访问',
+};
 
 export function SitesPage() {
   const cache = useQueryClient();
@@ -39,66 +72,83 @@ export function SitesPage() {
   const [busy, setBusy] = useState(false);
   const [access, setAccess] = useState('authenticated');
   return (
-    <div className="space-y-5">
-      <PageHeader
-        title="静态网站"
-        description="推送静态文件即可发布，自动分配域名，保留历史版本。"
-        actions={
-          <Button disabled={!capability.data?.enabled} onClick={() => setCreating(!creating)}>
-            创建网站
-          </Button>
-        }
-      />
-      {capability.data && !capability.data.enabled && (
-        <Card>
-          <CardContent className="space-y-2 pt-5">
-            <p>静态网站尚未启用，或正在检查配置。</p>
-            <p className="text-sm text-muted-foreground">
-              请管理员在系统设置中配置 OSS、域名和 HTTPS，并完成启用检查。已有文件、历史版本与评论会保留。
-            </p>
-          </CardContent>
-        </Card>
-      )}
-      {capability.error && (
-        <p role="alert" className="text-destructive">
-          {capability.error.message}
-        </p>
-      )}
-      {creating && capability.data?.enabled && (
-        <Card>
-          <CardContent className="pt-5">
-            <form
-              className="grid gap-3 sm:grid-cols-2"
-              onSubmit={async (e) => {
-                e.preventDefault();
-                const data = new FormData(e.currentTarget);
-                setBusy(true);
-                try {
-                  await api('POST', '/api/sites', {
-                    slug: data.get('slug'),
-                    name: data.get('name'),
-                    description: data.get('description'),
-                    access,
-                    password: data.get('password') || undefined,
-                    spa: data.get('spa') === 'on',
-                  });
-                  setCreating(false);
-                  void cache.invalidateQueries({ queryKey: ['sites'] });
-                  toast.success('网站已创建，可以上传首个版本');
-                } catch (e) {
-                  toast.error((e as Error).message);
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
+    <Dialog
+      open={creating}
+      onOpenChange={(open) => {
+        if (busy) return;
+        if (open) setAccess('authenticated');
+        setCreating(open);
+      }}
+    >
+      <div className="space-y-5">
+        <PageHeader
+          title="页面"
+          description="发布、分享页面，与团队一起收集和处理反馈。"
+          actions={
+            <DialogTrigger asChild>
+              <Button disabled={!capability.data?.enabled}>创建页面</Button>
+            </DialogTrigger>
+          }
+        />
+        {capability.data && !capability.data.enabled && (
+          <Card>
+            <CardContent className="space-y-2 pt-5">
+              <p>页面发布尚未启用，或正在检查配置。</p>
+              <p className="text-sm text-muted-foreground">
+                请管理员在系统设置中配置 OSS、域名和 HTTPS，并完成启用检查。已有文件、历史版本与评论会保留。
+              </p>
+            </CardContent>
+          </Card>
+        )}
+        {capability.error && (
+          <p role="alert" className="text-destructive">
+            {capability.error.message}
+          </p>
+        )}
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>创建页面</DialogTitle>
+            <DialogDescription>设置页面信息和访问方式，创建后上传文件即可发布。</DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (busy || !capability.data?.enabled) return;
+              const data = new FormData(e.currentTarget);
+              setBusy(true);
+              try {
+                await api('POST', '/api/sites', {
+                  slug: data.get('slug'),
+                  name: data.get('name'),
+                  description: data.get('description'),
+                  access,
+                  password: data.get('password') || undefined,
+                  spa: data.get('spa') === 'on',
+                });
+                setCreating(false);
+                void cache.invalidateQueries({ queryKey: ['sites'] });
+                toast.success('页面已创建，可以上传文件发布');
+              } catch (e) {
+                toast.error((e as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            <fieldset disabled={busy} className="grid gap-4 sm:grid-cols-2">
               <label className="space-y-1 text-sm">
-                网站标识
-                <Input name="slug" required maxLength={40} pattern="[a-z0-9][a-z0-9-]*" placeholder="my-site" />
+                页面标识
+                <Input
+                  name="slug"
+                  required
+                  maxLength={40}
+                  pattern="[a-z0-9][a-z0-9-]*"
+                  placeholder="my-site"
+                />
               </label>
               <label className="space-y-1 text-sm">
                 名称
-                <Input name="name" required maxLength={100} placeholder="网站名称" />
+                <Input name="name" required maxLength={100} placeholder="页面名称" />
               </label>
               <label className="space-y-1 text-sm sm:col-span-2">
                 说明
@@ -128,50 +178,56 @@ export function SitesPage() {
                 <input type="checkbox" name="spa" />
                 单页应用路由回退
               </label>
-              <div className="sm:col-span-2">
-                <Button loading={busy}>创建</Button>
+              <div className="flex justify-end gap-2 border-t pt-4 sm:col-span-2">
+                <Button type="button" variant="outline" onClick={() => setCreating(false)}>
+                  取消
+                </Button>
+                <Button type="submit" loading={busy}>
+                  {busy ? '正在创建…' : '创建页面'}
+                </Button>
               </div>
-            </form>
-          </CardContent>
-        </Card>
-      )}
-      {list.isLoading && <p className="text-muted-foreground">正在读取网站…</p>}
-      {list.error && (
-        <p role="alert" className="text-destructive">
-          {list.error.message}
-        </p>
-      )}
-      {capability.data?.enabled && !list.isLoading && !list.error && !list.data?.length && (
-        <p className="py-12 text-center text-muted-foreground">创建网站后，即可上传目录或 ZIP 发布。</p>
-      )}
-      <div className="grid gap-4 sm:grid-cols-2">
-        {capability.data?.enabled &&
-          list.data?.map((s) => (
-            <Card key={s.id}>
-              <CardContent className="space-y-3 pt-5">
-                <div className="flex items-center justify-between gap-2">
-                  <Link to={'/sites/' + s.slug} className="font-semibold hover:text-primary">
-                    {s.name}
-                  </Link>
-                  <Badge variant="secondary">{modes[s.access]}</Badge>
-                </div>
-                <p className="text-sm text-muted-foreground">{s.description || s.slug}</p>
-                <a
-                  className="break-all text-sm text-primary hover:underline"
-                  href={s.url}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {s.url}
-                </a>
-                <div className="text-xs text-muted-foreground">
-                  {s.currentVersionId ? '已发布' : '尚未发布'} · {s.canManage ? '你可以管理' : '可查看与评论'}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+            </fieldset>
+          </form>
+        </DialogContent>
+        {list.isLoading && <p className="text-muted-foreground">正在读取页面…</p>}
+        {list.error && (
+          <p role="alert" className="text-destructive">
+            {list.error.message}
+          </p>
+        )}
+        {capability.data?.enabled && !list.isLoading && !list.error && !list.data?.length && (
+          <p className="py-12 text-center text-muted-foreground">创建页面后，即可上传目录或 ZIP 发布。</p>
+        )}
+        <div className="grid gap-4 sm:grid-cols-2">
+          {capability.data?.enabled &&
+            list.data?.map((s) => (
+              <Card key={s.id}>
+                <CardContent className="space-y-3 pt-5">
+                  <div className="flex items-center justify-between gap-2">
+                    <Link to={'/sites/' + s.slug} className="font-semibold hover:text-primary">
+                      {s.name}
+                    </Link>
+                    <Badge variant="secondary">{modes[s.access]}</Badge>
+                  </div>
+                  <p className="text-sm text-muted-foreground">{s.description || s.slug}</p>
+                  <a
+                    className="break-all text-sm text-primary hover:underline"
+                    href={s.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {s.url}
+                  </a>
+                  <div className="text-xs text-muted-foreground">
+                    {s.currentVersionId ? '已发布' : '尚未发布'} ·{' '}
+                    {s.canManage ? '你可以管理' : '可查看与评论'}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+        </div>
       </div>
-    </div>
+    </Dialog>
   );
 }
 
@@ -185,7 +241,8 @@ async function uploadFiles(selection: FileList): Promise<SiteFile[]> {
   let total = 0;
   const add = (path: string, bytes: Uint8Array) => {
     total += bytes.length;
-    if (total > SITE_MAX_BYTES || files.length >= SITE_MAX_FILES) throw new Error('每次发布最多 2000 个文件、50 MiB');
+    if (total > SITE_MAX_BYTES || files.length >= SITE_MAX_FILES)
+      throw new Error('每次发布最多 2000 个文件、50 MiB');
     files.push(siteFileSchema.parse({ path, content: base64(bytes), encoding: 'base64' }));
   };
   if (selection.length === 1 && selection[0].name.toLowerCase().endsWith('.zip')) {
@@ -222,76 +279,122 @@ async function uploadFiles(selection: FileList): Promise<SiteFile[]> {
 
 export function SiteDetailPage() {
   const { slug = '' } = useParams();
+  const [params, setParams] = useSearchParams();
   const cache = useQueryClient();
   const [proof, setProof] = useState('');
+  const [publishing, setPublishing] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [selected, setSelected] = useState('');
-  const detail = useQuery({ queryKey: ['site', slug], queryFn: () => api<SiteInfo>('GET', '/api/sites/' + slug) });
+  const [restoring, setRestoring] = useState(false);
+  const [restore, setRestore] = useState<SiteVersion | null>(null);
+  const [commentVersion, setCommentVersion] = useState<SiteVersion | null>(null);
+  const zipInput = useRef<HTMLInputElement>(null);
+  const directoryInput = useRef<HTMLInputElement>(null);
+  const detail = useQuery({
+    queryKey: ['site', slug],
+    queryFn: () => api<SiteInfo>('GET', '/api/sites/' + slug),
+  });
   const headers: Record<string, string> = proof ? { 'x-eat-site-access': proof } : {};
   const versions = useQuery({
     queryKey: ['site-versions', slug, proof],
     queryFn: () => api<SiteVersion[]>('GET', '/api/sites/' + slug + '/versions', undefined, headers),
+    enabled: !!detail.data,
     retry: false,
   });
   const s = detail.data;
-  const versionId = selected || s?.currentVersionId || '';
+  const tab =
+    params.get('tab') === 'releases'
+      ? 'releases'
+      : params.get('tab') === 'settings' && s?.canManage
+        ? 'settings'
+        : 'comments';
+  function changeTab(value: string) {
+    setParams((previous) => {
+      const next = new URLSearchParams(previous);
+      if (value === 'comments') next.delete('tab');
+      else {
+        next.set('tab', value);
+        next.delete('thread');
+      }
+      return next;
+    });
+  }
+  useEffect(() => {
+    setProof('');
+    setCommentVersion(null);
+  }, [slug]);
   const refresh = () => {
     void cache.invalidateQueries({ queryKey: ['site', slug] });
     void cache.invalidateQueries({ queryKey: ['site-versions', slug] });
     void cache.invalidateQueries({ queryKey: ['sites'] });
   };
   async function upload(e: ChangeEvent<HTMLInputElement>) {
-    const files = e.target.files;
-    if (!files?.length) return;
+    const input = e.currentTarget;
+    const files = input.files;
+    if (!files?.length || busy) return;
     setBusy(true);
     try {
       const payload = await uploadFiles(files);
-      const v = await api<SiteVersion>('POST', '/api/sites/' + slug + '/releases', { files: payload, message: '' });
-      setSelected(v.id);
+      await api<SiteVersion>('POST', '/api/sites/' + slug + '/releases', { files: payload, message: '' });
       refresh();
-      toast.success('已发布 v' + v.number);
+      setPublishing(false);
+      toast.success('页面已发布，访问链接保持不变');
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
       setBusy(false);
-      e.target.value = '';
+      input.value = '';
     }
   }
-  if (!s) return <p role="status">{detail.error?.message || '正在读取网站…'}</p>;
+  if (!s) return <p role={detail.error ? 'alert' : 'status'}>{detail.error?.message || '正在读取页面…'}</p>;
   return (
-    <div className="space-y-5">
-      <Link to="/sites" className="text-sm text-muted-foreground hover:underline">
-        ← 静态网站
+    <div className="space-y-6">
+      <Link
+        to="/sites"
+        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+      >
+        <ArrowLeft className="size-4" /> 页面
       </Link>
       <PageHeader
         title={s.name}
         description={s.description || s.slug}
         actions={
-          <Button asChild variant="outline">
-            <a href={s.url} target="_blank" rel="noreferrer">
-              打开网站
-            </a>
-          </Button>
+          <>
+            {s.currentVersionId && (
+              <Button asChild variant="outline">
+                <a href={s.url} target="_blank" rel="noreferrer">
+                  <ExternalLink />
+                  打开页面
+                </a>
+              </Button>
+            )}
+            {s.canManage && (
+              <Button onClick={() => setPublishing(true)}>
+                <Upload />
+                {s.currentVersionId ? '发布更新' : '发布页面'}
+              </Button>
+            )}
+          </>
         }
       />
-      <div className="flex flex-wrap gap-2">
-        <Badge variant="secondary">{modes[s.access]}</Badge>
-        <span className="break-all text-sm text-muted-foreground">{s.url}</span>
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-muted/20 p-3">
+        <Badge variant="secondary">{s.currentVersionId ? '已发布' : '待发布'}</Badge>
+        <Badge variant="outline">{modes[s.access]}</Badge>
+        <span className="min-w-0 flex-1 basis-48 break-all text-sm text-muted-foreground">{s.url}</span>
         <Button
-          size="sm"
-          variant="ghost"
+          variant="outline"
+          disabled={!s.currentVersionId}
           onClick={() =>
             void navigator.clipboard
               .writeText(s.url)
-              .then(() => toast.success('已复制链接'))
+              .then(() => toast.success('已复制页面链接'))
               .catch(() => toast.error('复制失败'))
           }
         >
+          <Copy />
           复制链接
         </Button>
-        {s.canManage && s.access === 'password' && (
+        {s.canManage && s.access === 'password' && s.currentVersionId && (
           <Button
-            size="sm"
             variant="outline"
             onClick={async () => {
               try {
@@ -307,204 +410,384 @@ export function SiteDetailPage() {
           </Button>
         )}
       </div>
-      {s.canManage && (
-        <Card>
-          <CardContent className="space-y-4 pt-5">
-            <h2 className="font-semibold">发布新版本</h2>
-            <p className="text-sm text-muted-foreground">
-              上传构建产物，根目录包含 index.html。最多 2000 个文件、50 MiB；历史发布文件完整保留。
+      <Tabs value={tab} onValueChange={changeTab} className="space-y-5">
+        <TabsList aria-label="页面详情">
+          <TabsTrigger value="comments">
+            <MessageSquare className="size-4" />
+            评论
+          </TabsTrigger>
+          <TabsTrigger value="releases">
+            <History className="size-4" />
+            发布记录
+          </TabsTrigger>
+          {s.canManage && (
+            <TabsTrigger value="settings">
+              <Settings className="size-4" />
+              设置
+            </TabsTrigger>
+          )}
+        </TabsList>
+        <TabsContent value="comments" forceMount hidden={tab !== 'comments'}>
+          {s.currentVersionId ? (
+            <Card>
+              <CardContent className="pt-5">
+                {commentVersion && (
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/40 p-3 text-sm">
+                    <span>正在查看发布记录 v{commentVersion.number} 的评论</span>
+                    <Button variant="outline" onClick={() => setCommentVersion(null)}>
+                      返回全部评论
+                    </Button>
+                  </div>
+                )}
+                <SiteDiscussion
+                  key={slug}
+                  slug={slug}
+                  versionId={s.currentVersionId}
+                  initialProof={proof}
+                  filterVersionId={commentVersion?.id}
+                  siteUrl={s.url}
+                  onAccessVerified={setProof}
+                />
+              </CardContent>
+            </Card>
+          ) : (
+            <Card>
+              <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
+                <MessageSquare className="size-8 text-muted-foreground" />
+                <h2 className="font-medium">发布页面，开始收集反馈</h2>
+                <p className="text-sm text-muted-foreground">发布后，访客可以直接评论或标注内容。</p>
+                {s.canManage && (
+                  <Button onClick={() => setPublishing(true)}>
+                    <Upload />
+                    发布页面
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+        <TabsContent value="releases" className="space-y-4">
+          <PageHeader
+            title="发布记录"
+            description="每次发布后页面链接保持不变。需要时可查看历史内容或恢复某次发布。"
+          />
+          {versions.isLoading && (
+            <p role="status" className="text-sm text-muted-foreground">
+              正在读取发布记录…
             </p>
-            <div className="flex flex-wrap items-center gap-3">
-              <label className="text-sm">
-                上传 ZIP
-                <input
-                  className="block max-w-full text-sm"
-                  type="file"
-                  accept=".zip"
-                  disabled={busy}
-                  onChange={upload}
-                />
-              </label>
-              <label className="text-sm">
-                上传目录
-                <input
-                  className="block max-w-full text-sm"
-                  type="file"
-                  multiple
-                  {...({ webkitdirectory: '' } as object)}
-                  disabled={busy}
-                  onChange={upload}
-                />
-              </label>
-              {busy && (
-                <span role="status" className="text-sm">
-                  正在上传并发布…
-                </span>
+          )}
+          {versions.error && (
+            <div className="space-y-3 rounded-lg border p-4">
+              <p role="alert" className="text-sm text-destructive">
+                {versions.error.message}
+              </p>
+              {s.access === 'password' && !s.canManage ? (
+                <SiteAccessForm slug={slug} onVerified={setProof} />
+              ) : (
+                <Button variant="outline" onClick={() => void versions.refetch()}>
+                  重试
+                </Button>
               )}
             </div>
-            <details>
-              <summary className="cursor-pointer text-sm font-medium">网站设置</summary>
-              <form
-                key={s.updatedAt}
-                className="mt-3 grid gap-3 sm:grid-cols-2"
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  const d = new FormData(e.currentTarget);
-                  try {
-                    await api('PATCH', '/api/sites/' + slug, {
-                      name: d.get('name'),
-                      description: d.get('description'),
-                      access: d.get('access'),
-                      password: d.get('password') || undefined,
-                      spa: d.get('spa') === 'on',
-                    });
-                    refresh();
-                    toast.success('设置已更新');
-                  } catch (e) {
-                    toast.error((e as Error).message);
-                  }
-                }}
-              >
-                <Input aria-label="网站名称" name="name" required defaultValue={s.name} />
-                <select aria-label="访问方式" className={selectClass} name="access" defaultValue={s.access}>
-                  {Object.entries(modes).map(([v, l]) => (
-                    <option key={v} value={v}>
-                      {l}
-                    </option>
+          )}
+          {!!versions.data?.length && (
+            <div className="overflow-x-auto rounded-xl border">
+              <table className="w-full min-w-[600px] text-left text-sm">
+                <thead className="bg-muted/50">
+                  <tr>
+                    <th className="p-4">发布时间</th>
+                    <th className="p-4">内容</th>
+                    <th className="p-4">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {versions.data.map((v) => (
+                    <tr key={v.id} className="border-t">
+                      <td className="p-4">
+                        <p>{new Date(v.createdAt).toLocaleString()}</p>
+                        <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                          v{v.number}
+                          {s.currentVersionId === v.id && <Badge variant="secondary">当前在线</Badge>}
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        {v.fileCount} 个文件 · {(v.totalBytes / 1024).toFixed(1)} KiB
+                        {v.message && (
+                          <p className="mt-1 max-w-sm break-words text-muted-foreground">{v.message}</p>
+                        )}
+                      </td>
+                      <td className="p-4">
+                        <div className="flex flex-wrap gap-2">
+                          <Button asChild variant="outline" size="sm">
+                            <a href={v.url} target="_blank" rel="noreferrer">
+                              预览页面
+                              <ExternalLink />
+                            </a>
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setCommentVersion(v);
+                              changeTab('comments');
+                            }}
+                          >
+                            相关评论
+                          </Button>
+                          {s.canManage && s.currentVersionId !== v.id && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={restoring}
+                              onClick={() => setRestore(v)}
+                            >
+                              恢复此发布
+                            </Button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
                   ))}
-                </select>
-                <Input
-                  name="password"
-                  type="password"
-                  aria-label="新访问密码"
-                  minLength={4}
-                  maxLength={128}
-                  placeholder="新访问密码，留空保持原密码"
-                />
-                <Textarea aria-label="说明" name="description" defaultValue={s.description} />
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" name="spa" defaultChecked={s.spa} />
-                  单页应用路由回退
-                </label>
-                <Button type="submit" size="sm">
-                  保存设置
+                </tbody>
+              </table>
+            </div>
+          )}
+          {!versions.isLoading && !versions.data?.length && !versions.error && (
+            <p className="rounded-xl border py-12 text-center text-sm text-muted-foreground">
+              尚无发布记录，上传页面文件后会显示在这里。
+            </p>
+          )}
+        </TabsContent>
+        {s.canManage && (
+          <TabsContent value="settings">
+            <SiteSettingsForm key={s.id + s.updatedAt} site={s} onSaved={refresh} />
+          </TabsContent>
+        )}
+      </Tabs>
+      <Dialog
+        open={publishing}
+        onOpenChange={(open) => {
+          if (!busy) setPublishing(open);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{s.currentVersionId ? '发布页面更新' : '发布页面'}</DialogTitle>
+            <DialogDescription>上传构建好的页面文件，发布后即可通过页面链接访问。</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="rounded-xl border border-dashed bg-muted/20 p-5 text-center">
+              <Upload className="mx-auto mb-3 size-7 text-muted-foreground" />
+              <p className="mb-4 text-sm">选择 ZIP 或整个文件夹</p>
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button disabled={busy} onClick={() => zipInput.current?.click()}>
+                  <Upload />
+                  选择 ZIP
                 </Button>
-              </form>
-            </details>
-          </CardContent>
-        </Card>
-      )}
-      {versions.error && (
+                <Button variant="outline" disabled={busy} onClick={() => directoryInput.current?.click()}>
+                  <FolderUp />
+                  选择文件夹
+                </Button>
+              </div>
+              <input
+                ref={zipInput}
+                aria-label="上传 ZIP"
+                className="hidden"
+                type="file"
+                accept=".zip"
+                disabled={busy}
+                onChange={upload}
+              />
+              <input
+                ref={directoryInput}
+                aria-label="上传目录"
+                className="hidden"
+                type="file"
+                multiple
+                {...({ webkitdirectory: '' } as object)}
+                disabled={busy}
+                onChange={upload}
+              />
+            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              根目录需包含 index.html，最多 2000 个文件、50 MiB。发布成功后自动上线，历史内容和评论会保留。
+            </p>
+            {busy && (
+              <p role="status" className="text-sm">
+                正在上传并发布，请稍候…
+              </p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+      <AlertDialog
+        open={!!restore}
+        onOpenChange={(open) => {
+          if (!open) setRestore(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>恢复这次发布？</AlertDialogTitle>
+            <AlertDialogDescription>
+              页面链接将展示 {restore && new Date(restore.createdAt).toLocaleString()}{' '}
+              发布的内容。所有发布记录和评论都会保留。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={async () => {
+                if (!restore) return;
+                setRestoring(true);
+                try {
+                  await api('POST', '/api/sites/' + slug + '/activate', { versionId: restore.id });
+                  refresh();
+                  toast.success('已恢复，页面链接现在展示所选内容');
+                } catch (e) {
+                  toast.error((e as Error).message);
+                } finally {
+                  setRestoring(false);
+                }
+              }}
+            >
+              恢复发布
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+function SiteAccessForm({ slug, onVerified }: { slug: string; onVerified: (proof: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <form
+      className="flex flex-wrap gap-2"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        const data = new FormData(e.currentTarget);
+        setBusy(true);
+        try {
+          const result = await api<{ accessToken: string }>('POST', '/api/sites/' + slug + '/access', {
+            password: data.get('password'),
+          });
+          onVerified(result.accessToken);
+        } catch (e) {
+          toast.error((e as Error).message);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <Input
+        className="w-52"
+        aria-label="页面访问密码"
+        name="password"
+        type="password"
+        required
+        placeholder="输入页面访问密码"
+      />
+      <Button loading={busy}>验证密码</Button>
+    </form>
+  );
+}
+
+function SiteSettingsForm({ site: s, onSaved }: { site: SiteInfo; onSaved: () => void }) {
+  const [access, setAccess] = useState(s.access);
+  const [saving, setSaving] = useState(false);
+  return (
+    <Card>
+      <CardContent className="pt-5">
         <form
-          className="flex flex-wrap items-center gap-2 rounded-lg border p-3"
+          className="max-w-2xl space-y-6"
           onSubmit={async (e) => {
             e.preventDefault();
+            if (saving) return;
             const d = new FormData(e.currentTarget);
+            setSaving(true);
             try {
-              const result = await api<{ accessToken: string }>('POST', '/api/sites/' + slug + '/access', {
-                password: d.get('password'),
+              await api('PATCH', '/api/sites/' + s.slug, {
+                name: d.get('name'),
+                description: d.get('description'),
+                access,
+                password: access === 'password' ? d.get('password') || undefined : undefined,
+                spa: d.get('spa') === 'on',
               });
-              setProof(result.accessToken);
+              onSaved();
+              toast.success('设置已保存');
             } catch (e) {
               toast.error((e as Error).message);
+            } finally {
+              setSaving(false);
             }
           }}
         >
-          <p className="text-sm">{versions.error.message}</p>
-          <Input
-            className="w-44"
-            aria-label="网站访问密码"
-            name="password"
-            type="password"
-            required
-            placeholder="网站访问密码"
-          />
-          <Button size="sm">验证密码</Button>
-        </form>
-      )}
-      <section className="space-y-3">
-        <h2 className="font-semibold">历史版本</h2>
-        <div className="overflow-auto rounded-lg border">
-          <table className="min-w-[600px] w-full text-left text-sm">
-            <thead className="bg-muted/50">
-              <tr>
-                <th className="p-3">版本</th>
-                <th className="p-3">内容</th>
-                <th className="p-3">发布时间</th>
-                <th className="p-3">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {versions.data?.map((v) => (
-                <tr key={v.id} className="border-t">
-                  <td className="p-3">
-                    v{v.number}
-                    {s.currentVersionId === v.id && (
-                      <Badge className="ml-2" variant="secondary">
-                        当前
-                      </Badge>
-                    )}
-                  </td>
-                  <td className="p-3">
-                    {v.fileCount} 个文件 · {(v.totalBytes / 1024).toFixed(1)} KiB{v.message && <p>{v.message}</p>}
-                  </td>
-                  <td className="whitespace-nowrap p-3">{new Date(v.createdAt).toLocaleString()}</td>
-                  <td className="p-3">
-                    <div className="flex gap-2">
-                      <a className="text-primary" href={v.url} target="_blank" rel="noreferrer">
-                        打开
-                      </a>
-                      <button className="text-primary" onClick={() => setSelected(v.id)}>
-                        查看评论
-                      </button>
-                      {s.canManage && s.currentVersionId !== v.id && (
-                        <button
-                          className="text-primary"
-                          onClick={async () => {
-                            try {
-                              await api('POST', '/api/sites/' + slug + '/activate', { versionId: v.id });
-                              refresh();
-                              toast.success('已切换到 v' + v.number);
-                            } catch (e) {
-                              toast.error((e as Error).message);
-                            }
-                          }}
-                        >
-                          设为当前
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {!versions.data?.length && !versions.error && <p className="text-sm text-muted-foreground">尚未发布版本。</p>}
-      </section>
-      {versionId && (
-        <Card>
-          <CardContent className="pt-5">
-            <div className="mb-3 flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">浏览上下文</span>
+          <div>
+            <h2 className="font-semibold">页面设置</h2>
+            <p className="mt-1 text-sm text-muted-foreground">管理页面信息和访问权限。</p>
+          </div>
+          <label className="block space-y-2 text-sm">
+            <span>页面名称</span>
+            <Input name="name" required maxLength={100} defaultValue={s.name} />
+          </label>
+          <label className="block space-y-2 text-sm">
+            <span>页面说明</span>
+            <Textarea name="description" maxLength={2000} defaultValue={s.description} />
+          </label>
+          <div className="space-y-4 border-t pt-5">
+            <label className="block space-y-2 text-sm">
+              <span>谁可以访问</span>
               <select
-                className={selectClass}
-                aria-label="评论浏览版本"
-                value={versionId}
-                onChange={(e) => setSelected(e.target.value)}
+                className={selectClass + ' block w-full'}
+                value={access}
+                onChange={(e) => setAccess(e.target.value as SiteInfo['access'])}
               >
-                {versions.data?.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    v{v.number}
+                {Object.entries(modes).map(([v, l]) => (
+                  <option key={v} value={v}>
+                    {l}
                   </option>
                 ))}
               </select>
-            </div>
-            <SiteDiscussion key={slug} slug={slug} versionId={versionId} initialProof={proof} />
-          </CardContent>
-        </Card>
-      )}
-    </div>
+            </label>
+            <p className="text-xs text-muted-foreground">
+              {access === 'public'
+                ? '任何人都可浏览，发表评论仍需登录 EAT。'
+                : access === 'password'
+                  ? '访客需要输入密码，或通过免输密码链接访问。'
+                  : '仅已登录 EAT 的用户可以浏览和评论。'}
+            </p>
+            {access === 'password' && (
+              <label className="block space-y-2 text-sm">
+                <span>{s.access === 'password' ? '更换访问密码' : '访问密码'}</span>
+                <Input
+                  name="password"
+                  type="password"
+                  required={s.access !== 'password'}
+                  minLength={4}
+                  maxLength={128}
+                  autoComplete="new-password"
+                  placeholder={s.access === 'password' ? '留空保留原密码' : '至少 4 个字符'}
+                />
+              </label>
+            )}
+          </div>
+          <label className="flex items-start gap-3 rounded-lg border p-4 text-sm">
+            <input className="mt-1" type="checkbox" name="spa" defaultChecked={s.spa} />
+            <span>
+              单页应用路由回退
+              <span className="mt-1 block text-xs text-muted-foreground">
+                适用于 React、Vue 等应用；找不到路径时返回首页。
+              </span>
+            </span>
+          </label>
+          <Button loading={saving} type="submit">
+            保存设置
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -512,17 +795,19 @@ export function SiteAuthorizePage() {
   const [params] = useSearchParams();
   const [error, setError] = useState('');
   const started = useRef(false);
-  // 防止 StrictMode / 重渲染重复创建授权票据；只接受服务端校验后返回的站点地址。
+  // 防止 StrictMode / 重渲染重复创建授权票据；只接受服务端校验后返回的页面地址。
   useEffect(() => {
     if (started.current) return;
     started.current = true;
     const slug = params.get('site'),
       returnUrl = params.get('returnUrl');
-    if (!slug || !returnUrl) setError('网站登录地址不完整');
+    if (!slug || !returnUrl) setError('页面登录地址不完整');
     else
-      void api<{ url: string }>('POST', '/api/sites/' + encodeURIComponent(slug) + '/authorize', { returnUrl })
+      void api<{ url: string }>('POST', '/api/sites/' + encodeURIComponent(slug) + '/authorize', {
+        returnUrl,
+      })
         .then((r) => location.replace(r.url))
         .catch((e) => setError(e.message));
   }, []);
-  return <p role="status">{error || '正在验证网站访问身份…'}</p>;
+  return <p role="status">{error || '正在验证页面访问身份…'}</p>;
 }

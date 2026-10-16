@@ -243,7 +243,7 @@ describe('系统设置启用静态发布', () => {
     expect(created.status).toBe(201);
     expect(created.body.url).toBe('https://demo.sites.example.com');
   });
-  it('启用中不能改设置；停用保留网站并撤下入口，配置不能破坏已有域名', async () => {
+  it('启用中不能改设置；停用保留页面并撤下入口，配置不能破坏已有域名', async () => {
     expect((await api('PUT', '/api/admin/site-settings', admin, values)).status).toBe(409);
     await api('POST', '/api/admin/site-settings/disable', admin);
     expect((await settled()).status).toBe('disabled');

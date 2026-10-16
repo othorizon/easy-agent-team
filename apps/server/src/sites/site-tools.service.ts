@@ -50,6 +50,8 @@ export class SiteToolsService {
           return this.comments.create(user, slug, createSiteThreadSchema.parse(body), proof);
         case 'reply_site_comment':
           return this.comments.reply(user, slug, threadId as string, siteCommentBodySchema.parse(body), proof);
+        case 'delete_site_comment':
+          return this.comments.remove(user, slug, body.commentId as string, proof);
         case 'set_site_thread_status':
           return this.comments.status(user, slug, threadId as string, body.status as 'open' | 'resolved', proof);
         case 'list_site_mention_users':
