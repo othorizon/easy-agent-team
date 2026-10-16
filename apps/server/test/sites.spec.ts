@@ -57,7 +57,7 @@ function content(
     token?: string;
     cookie?: string;
     site?: string;
-    method?: 'GET' | 'POST';
+    method?: 'GET' | 'HEAD' | 'POST';
     payload?: unknown;
     origin?: string;
   } = {},
@@ -162,6 +162,20 @@ describe('静态发布与不可变历史版本', () => {
     expect(page.body).toContain('v1');
     expect(page.body).toContain('/__eat/embed.js');
     expect(page.body).not.toContain(other);
+    const latest = await content('/', { token: other });
+    expect(latest.statusCode).toBe(200);
+    expect(latest.headers.location).toBeUndefined();
+    expect(latest.headers['x-eat-site-version']).toBe(v1);
+    expect(latest.body).toContain('v1');
+    const latestConfig = JSON.parse(
+      Buffer.from(/data-eat="([^"]+)"/.exec(latest.body)![1], 'base64').toString(),
+    );
+    expect(latestConfig.versionId).toBe(v1);
+    const head = await content('/', { token: other, method: 'HEAD' });
+    expect(head.statusCode).toBe(200);
+    expect(head.headers.location).toBeUndefined();
+    expect(head.headers['x-eat-site-version']).toBe(v1);
+    expect(head.body).toBe('');
     const image = await content('/image.png', { version: 1, token: other });
     expect(image.rawPayload).toEqual(Buffer.from([137, 80, 78, 71]));
     expect((await content('/about', { version: 1, token: other })).headers.location).toBe('/about/');
@@ -219,19 +233,32 @@ describe('静态发布与不可变历史版本', () => {
     expect(rs.every((r) => r.status === 201)).toBe(true);
     expect(new Set(rs.map((r) => r.body.number)).size).toBe(2);
     v2 = rs[0].body.id;
-    expect((await content('/')).headers.location).toMatch(/^http:\/\/v[34]--demo/);
+    const latestVersion = rs.map((r) => r.body).sort((a, b) => b.number - a.number)[0];
+    const latest = await content('/', { token: owner });
+    expect(latest.statusCode).toBe(200);
+    expect(latest.headers.location).toBeUndefined();
+    expect(latest.headers['x-eat-site-version']).toBe(latestVersion.id);
     expect((await api('POST', '/api/sites/demo/activate', owner, { versionId: v1 })).status).toBe(201);
-    expect((await content('/')).headers.location).toBe('http://v1--demo.sites.test:3000/');
+    const rolledBack = await content('/', { token: owner });
+    expect(rolledBack.statusCode).toBe(200);
+    expect(rolledBack.headers.location).toBeUndefined();
+    expect(rolledBack.headers['x-eat-site-version']).toBe(v1);
+    expect((await content('/', { version: latestVersion.number, token: owner })).headers['x-eat-site-version']).toBe(
+      latestVersion.id,
+    );
   });
 });
 
 describe('登录、公开、密码与域名隔离', () => {
   it('登录模式同时保护 HTML、资源和历史版本', async () => {
-    for (const path of ['/', '/app.js', '/image.png']) {
-      const r = await content(path, { version: 1 });
-      expect(r.statusCode).toBe(302);
-      expect(r.headers.location).toContain('/sites/authorize?');
-    }
+    for (const version of [undefined, 1])
+      for (const path of ['/', '/app.js', '/image.png']) {
+        const r = await content(path, { version });
+        expect(r.statusCode).toBe(302);
+        expect(r.headers.location).toContain('/sites/authorize?');
+        const returnUrl = new URL(String(r.headers.location)).searchParams.get('returnUrl');
+        expect(new URL(returnUrl!).host).toBe(`${version ? 'v1--' : ''}demo.sites.test:3000`);
+      }
     const r = await content('/api/users', { version: 1, token: owner });
     expect(r.statusCode).toBe(404);
     expect(r.body).not.toContain('owner@site.test');
@@ -265,10 +292,31 @@ describe('登录、公开、密码与域名隔离', () => {
   it('公开访问无需登录，但匿名用户不能发表评论', async () => {
     await api('PATCH', '/api/sites/demo', owner, { access: 'public' });
     expect((await content('/', { version: 1 })).statusCode).toBe(200);
+    const latest = await content('/');
+    expect(latest.statusCode).toBe(200);
+    expect(latest.headers.location).toBeUndefined();
     expect(
       (await api('POST', '/api/sites/demo/threads', undefined, { versionId: v1, page: '/', content: 'anonymous' }))
         .status,
     ).toBe(401);
+  });
+  it('固定域名登录后保持原域名，访问会话不能用于历史域名', async () => {
+    await api('PATCH', '/api/sites/demo', owner, { access: 'authenticated' });
+    const r = await api('POST', '/api/sites/demo/authorize', other, {
+      returnUrl: 'http://demo.sites.test:3000/about/?view=full',
+    });
+    expect(r.status).toBe(201);
+    const callback = new URL(r.body.url);
+    expect(callback.host).toBe('demo.sites.test:3000');
+    expect((await content(callback.pathname + callback.search, { version: 1 })).statusCode).toBe(401);
+    const login = await content(callback.pathname + callback.search);
+    expect(login.statusCode).toBe(302);
+    expect(login.headers.location).toBe('/about/?view=full');
+    const cookie = String(login.headers['set-cookie']).split(';')[0];
+    const page = await content('/about/?view=full', { cookie });
+    expect(page.statusCode).toBe(200);
+    expect(page.headers.location).toBeUndefined();
+    expect((await content('/', { version: 1, cookie })).statusCode).toBe(302);
   });
   it('密码限制覆盖历史资源；免输密码链接不包含明文密码', async () => {
     expect((await api('PATCH', '/api/sites/demo', owner, { access: 'password' })).status).toBe(400);
@@ -322,6 +370,17 @@ describe('登录、公开、密码与域名隔离', () => {
 });
 
 describe('版本评论、区域锚点、@ 与工具接入', () => {
+  it('批注仅接受本站固定域名或实际浏览版本域名，旧页面发布后仍可连接', async () => {
+    const path = '/api/sites/demo/embed-origin?versionId=' + v1;
+    for (const origin of ['http://demo.sites.test:3000', 'http://v1--demo.sites.test:3000']) {
+      const r = await api('GET', path + '&origin=' + encodeURIComponent(origin));
+      expect(r.status).toBe(200);
+      expect(r.body.origin).toBe(origin);
+    }
+    expect((await api('GET', path)).body.origin).toBe('http://v1--demo.sites.test:3000');
+    for (const origin of ['http://evil.test', 'http://second.sites.test:3000', 'http://v2--demo.sites.test:3000'])
+      expect((await api('GET', path + '&origin=' + encodeURIComponent(origin))).status).toBe(400);
+  });
   it('评论创建在 v1，发布后回复记录实际浏览版本', async () => {
     await api('PATCH', '/api/sites/demo', owner, { access: 'authenticated' });
     const r = await api('POST', '/api/sites/demo/threads', other, {

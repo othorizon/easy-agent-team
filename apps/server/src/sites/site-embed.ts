@@ -13,6 +13,7 @@ export const SITE_EMBED_SCRIPT = String.raw`(() => {
   var page = () => location.pathname + (/^#(?:\/|!)/.test(location.hash) ? location.hash : '');
   var url = new URL(config.platform + '/site-comments/' + config.slug);
   url.searchParams.set('versionId', config.versionId); url.searchParams.set('page', page());
+  url.searchParams.set('origin', location.origin);
   var thread = new URL(location.href).searchParams.get('eat_thread'); if (thread) url.searchParams.set('thread', thread);
   frame.src = url.href; panel.appendChild(frame); root.append(panel, toggle); document.body.appendChild(root);
   var send = (type, data) => frame.contentWindow.postMessage({ type: type, ...data }, origin);

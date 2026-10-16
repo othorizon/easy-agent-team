@@ -134,6 +134,7 @@ export function SiteDiscussion({
   proofRef.current = proof;
   const [params] = useSearchParams();
   const targetThread = params.get('thread');
+  const embedOrigin = params.get('origin');
   const base = `/api/sites/${encodeURIComponent(slug)}`;
   const parentOrigin = useRef<string | null>(null);
 
@@ -201,11 +202,16 @@ export function SiteDiscussion({
   }, [targetThread, threads]);
   useEffect(() => {
     if (!embedded || window.parent === window) return;
-    // 只接受此站点的固定版本域名；不能信任任意 parent 发送的访问凭据和锚点。
-    // 网关使用 no-referrer，因此从服务器提供的版本地址获取允许的父源。
+    // 由服务器验证父源为本站固定域名或此版本域名，不信任 URL 参数本身。
     let canceled = false;
-    fetch(base + '/embed-origin?versionId=' + encodeURIComponent(versionId))
-      .then((r) => r.json())
+    parentOrigin.current = null;
+    const query = new URLSearchParams({ versionId });
+    if (embedOrigin) query.set('origin', embedOrigin);
+    fetch(base + '/embed-origin?' + query)
+      .then((r) => {
+        if (!r.ok) throw new Error('网站来源验证失败');
+        return r.json();
+      })
       .then((data) => {
         if (canceled || typeof data.origin !== 'string') return;
         parentOrigin.current = data.origin;
@@ -230,7 +236,7 @@ export function SiteDiscussion({
       canceled = true;
       window.removeEventListener('message', listener);
     };
-  }, [embedded, slug, versionId]);
+  }, [embedded, slug, versionId, embedOrigin]);
   useEffect(() => {
     const listener = async (e: MessageEvent) => {
       if (e.origin !== location.origin || e.source !== popup.current || !e.data) return;

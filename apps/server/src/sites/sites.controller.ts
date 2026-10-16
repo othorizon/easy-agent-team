@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -85,11 +86,16 @@ export class SitesController {
   @Get(':slug/embed-origin')
   async embedOrigin(
     @Param('slug') slug: string,
-    @Query(new ZodValidationPipe(z.object({ versionId: z.string().uuid() }))) query: { versionId: string },
+    @Query(new ZodValidationPipe(z.object({ versionId: z.string().uuid(), origin: z.string().url().optional() })))
+    query: { versionId: string; origin?: string },
   ) {
     const site = await this.sites.get(slug);
     const version = await this.sites.version(site, query.versionId);
-    return { origin: new URL(await this.runtime.url(site.slug, version.number)).origin };
+    const versionOrigin = new URL(await this.runtime.url(site.slug, version.number)).origin;
+    const siteOrigin = new URL(await this.runtime.url(site.slug)).origin;
+    if (query.origin && query.origin !== siteOrigin && query.origin !== versionOrigin)
+      throw new BadRequestException('网站来源不合法');
+    return { origin: query.origin ?? versionOrigin };
   }
   @Post(':slug/releases')
   @RouteConfig({ eatSiteUpload: true })

@@ -57,11 +57,7 @@ export class SiteGateway {
         return reply.redirect(ticket.row.returnPath);
       }
       const version = await this.sites.version(site, undefined, target.version);
-      // 入口指向当前不可变域名，根路径资源、SPA 与多页链接始终落在同一版本。
-      if (!target.version && (req.method === 'GET' || req.method === 'HEAD'))
-        return reply.redirect(
-          `${await this.runtime.url(site.slug, version.number)}${url.pathname}${url.search}${url.hash}`,
-        );
+      // 固定域名直接提供当前版本；只有显式版本域名固定到对应快照。
       if (req.method === 'POST' && url.pathname === '/__eat/access') {
         const origin = req.headers.origin;
         if (origin !== new URL(base).origin) return reply.status(403).send({ message: '请求来源不合法' });
