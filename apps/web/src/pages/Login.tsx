@@ -4,6 +4,7 @@ import { useForm } from 'react-hook-form';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api, ApiError, setSession } from '../api';
+import { BrandIcon } from '../components/brand-icon';
 import { Field, rules } from '../components/form';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
@@ -56,9 +57,7 @@ export function LoginPage() {
     <div className="flex min-h-dvh items-center justify-center bg-gradient-to-b from-primary/6 via-background to-background px-4 py-10">
       <div className="w-full max-w-sm">
         <div className="mb-6 flex flex-col items-center gap-3 text-center">
-          <span className="flex size-12 items-center justify-center rounded-2xl bg-primary font-mono text-xl font-bold text-primary-foreground shadow-md">
-            e
-          </span>
+          <BrandIcon className="size-12" />
           <div>
             <h1 className="text-xl font-semibold tracking-tight">easy-agent-team</h1>
             <p className="mt-1 text-sm text-muted-foreground">团队 AI 能力集中管理与分发平台</p>

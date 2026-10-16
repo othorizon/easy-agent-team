@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/logo.svg" alt="eat — easy agent team" width="560" />
+</p>
+
 # easy-agent-team
 
 面向团队的 **AI 能力集中管理与分发平台**。
