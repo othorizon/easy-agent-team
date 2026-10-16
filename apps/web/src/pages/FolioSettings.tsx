@@ -51,7 +51,7 @@ const formValues = (r: SiteSettingsInfo): UpdateSiteSettings => ({
 });
 const selectClass = 'h-9 w-full rounded-md border bg-background px-2 text-sm';
 
-export function SiteSettingsCard() {
+export function FolioSettingsCard() {
   const cache = useQueryClient();
   const settings = useQuery({
     queryKey: ['site-settings'],
@@ -94,7 +94,7 @@ export function SiteSettingsCard() {
       reset(formValues(data));
       cache.setQueryData(['site-settings'], data);
       refresh();
-      toast.success('页面配置已保存');
+      toast.success('Folio 配置已保存');
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -114,7 +114,7 @@ export function SiteSettingsCard() {
     <Card id="static-sites">
       <CardContent className="space-y-5 pt-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-semibold">页面发布</h2>
+          <h2 className="font-semibold">Folio 发布</h2>
           <Badge variant={r?.enabled ? 'default' : 'secondary'}>{statuses[r?.status ?? 'disabled']}</Badge>
         </div>
         <p className="text-sm text-muted-foreground">
@@ -144,7 +144,7 @@ export function SiteSettingsCard() {
               EAT 控制台 HTTPS 地址
               <Input {...register('platformUrl')} placeholder="https://eat.example.com" required />
               <span className="text-xs text-muted-foreground">
-                用于页面登录和评论，默认填写当前控制台地址，无需修改环境变量。
+                用于 Folio 登录和评论，默认填写当前控制台地址，无需修改环境变量。
               </span>
             </label>
             <label className="space-y-1 text-sm">
@@ -263,7 +263,7 @@ export function SiteSettingsCard() {
                 </p>
                 <label className="flex items-center gap-2 text-sm sm:col-span-2">
                   <input type="checkbox" {...register('autoDns')} />
-                  自动添加 *.{domain || '页面域名'} → {target || '部署入口'} 的解析（仅在不存在时添加，不覆盖已有记录）
+                  自动添加 *.{domain || 'Folio 域名'} → {target || '部署入口'} 的解析（仅在不存在时添加，不覆盖已有记录）
                 </label>
               </>
             )}
@@ -281,7 +281,7 @@ export function SiteSettingsCard() {
                   </select>
                 </label>
                 <p className="text-xs text-muted-foreground sm:col-span-2">
-                  证书需覆盖 *.{domain || '页面域名'}，并已在 Dokploy 中安装。续期和证书更新由原有流程负责。
+                  证书需覆盖 *.{domain || 'Folio 域名'}，并已在 Dokploy 中安装。续期和证书更新由原有流程负责。
                 </p>
               </>
             )}
@@ -346,7 +346,7 @@ export function SiteSettingsCard() {
           )}
         </div>
         {!!r?.checks.length && (
-          <ol aria-label="页面启用检查" className="space-y-3">
+          <ol aria-label="Folio 启用检查" className="space-y-3">
             {r.checks.map((check) => (
               <li key={check.id} className="flex items-start gap-2 text-sm">
                 {check.status === 'running' ? (

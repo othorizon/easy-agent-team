@@ -28,7 +28,7 @@ import { Button } from '../components/ui/button';
 import { Input, Textarea } from '../components/ui/input';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
-import { SiteDiscussion } from './SiteComments';
+import { FolioDiscussion } from './FolioComments';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import {
   Dialog,
@@ -56,7 +56,7 @@ const modes: Record<string, string> = {
   password: '密码访问',
 };
 
-export function SitesPage() {
+export function FoliosPage() {
   const cache = useQueryClient();
   const capability = useQuery({
     queryKey: ['sites-capability'],
@@ -82,18 +82,18 @@ export function SitesPage() {
     >
       <div className="space-y-5">
         <PageHeader
-          title="页面"
-          description="发布、分享页面，与团队一起收集和处理反馈。"
+          title="Folio"
+          description="发布和分享网页、演示与报告，支持版本管理和评论。"
           actions={
             <DialogTrigger asChild>
-              <Button disabled={!capability.data?.enabled}>创建页面</Button>
+              <Button disabled={!capability.data?.enabled}>创建 Folio</Button>
             </DialogTrigger>
           }
         />
         {capability.data && !capability.data.enabled && (
           <Card>
             <CardContent className="space-y-2 pt-5">
-              <p>页面发布尚未启用，或正在检查配置。</p>
+              <p>Folio 发布尚未启用，或正在检查配置。</p>
               <p className="text-sm text-muted-foreground">
                 请管理员在系统设置中配置 OSS、域名和 HTTPS，并完成启用检查。已有文件、历史版本与评论会保留。
               </p>
@@ -107,8 +107,8 @@ export function SitesPage() {
         )}
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>创建页面</DialogTitle>
-            <DialogDescription>设置页面信息和访问方式，创建后上传文件即可发布。</DialogDescription>
+            <DialogTitle>创建 Folio</DialogTitle>
+            <DialogDescription>设置 Folio 信息和访问方式，创建后上传文件即可发布。</DialogDescription>
           </DialogHeader>
           <form
             onSubmit={async (e) => {
@@ -127,7 +127,7 @@ export function SitesPage() {
                 });
                 setCreating(false);
                 void cache.invalidateQueries({ queryKey: ['sites'] });
-                toast.success('页面已创建，可以上传文件发布');
+                toast.success('Folio 已创建，可以上传文件发布');
               } catch (e) {
                 toast.error((e as Error).message);
               } finally {
@@ -137,18 +137,18 @@ export function SitesPage() {
           >
             <fieldset disabled={busy} className="grid gap-4 sm:grid-cols-2">
               <label className="space-y-1 text-sm">
-                页面标识
+                Folio 标识
                 <Input
                   name="slug"
                   required
                   maxLength={40}
                   pattern="[a-z0-9][a-z0-9-]*"
-                  placeholder="my-site"
+                  placeholder="my-folio"
                 />
               </label>
               <label className="space-y-1 text-sm">
                 名称
-                <Input name="name" required maxLength={100} placeholder="页面名称" />
+                <Input name="name" required maxLength={100} placeholder="Folio 名称" />
               </label>
               <label className="space-y-1 text-sm sm:col-span-2">
                 说明
@@ -183,20 +183,20 @@ export function SitesPage() {
                   取消
                 </Button>
                 <Button type="submit" loading={busy}>
-                  {busy ? '正在创建…' : '创建页面'}
+                  {busy ? '正在创建…' : '创建 Folio'}
                 </Button>
               </div>
             </fieldset>
           </form>
         </DialogContent>
-        {list.isLoading && <p className="text-muted-foreground">正在读取页面…</p>}
+        {list.isLoading && <p className="text-muted-foreground">正在读取 Folio…</p>}
         {list.error && (
           <p role="alert" className="text-destructive">
             {list.error.message}
           </p>
         )}
         {capability.data?.enabled && !list.isLoading && !list.error && !list.data?.length && (
-          <p className="py-12 text-center text-muted-foreground">创建页面后，即可上传目录或 ZIP 发布。</p>
+          <p className="py-12 text-center text-muted-foreground">创建 Folio 后，即可上传目录或 ZIP 发布。</p>
         )}
         <div className="grid gap-4 sm:grid-cols-2">
           {capability.data?.enabled &&
@@ -204,7 +204,7 @@ export function SitesPage() {
               <Card key={s.id}>
                 <CardContent className="space-y-3 pt-5">
                   <div className="flex items-center justify-between gap-2">
-                    <Link to={'/sites/' + s.slug} className="font-semibold hover:text-primary">
+                    <Link to={'/folios/' + s.slug} className="font-semibold hover:text-primary">
                       {s.name}
                     </Link>
                     <Badge variant="secondary">{modes[s.access]}</Badge>
@@ -277,7 +277,7 @@ async function uploadFiles(selection: FileList): Promise<SiteFile[]> {
   return files;
 }
 
-export function SiteDetailPage() {
+export function FolioDetailPage() {
   const { slug = '' } = useParams();
   const [params, setParams] = useSearchParams();
   const cache = useQueryClient();
@@ -337,7 +337,7 @@ export function SiteDetailPage() {
       await api<SiteVersion>('POST', '/api/sites/' + slug + '/releases', { files: payload, message: '' });
       refresh();
       setPublishing(false);
-      toast.success('页面已发布，访问链接保持不变');
+      toast.success('Folio 已发布，访问链接保持不变');
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -345,14 +345,14 @@ export function SiteDetailPage() {
       input.value = '';
     }
   }
-  if (!s) return <p role={detail.error ? 'alert' : 'status'}>{detail.error?.message || '正在读取页面…'}</p>;
+  if (!s) return <p role={detail.error ? 'alert' : 'status'}>{detail.error?.message || '正在读取 Folio…'}</p>;
   return (
     <div className="space-y-6">
       <Link
-        to="/sites"
+        to="/folios"
         className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
       >
-        <ArrowLeft className="size-4" /> 页面
+        <ArrowLeft className="size-4" /> Folio
       </Link>
       <PageHeader
         title={s.name}
@@ -363,14 +363,14 @@ export function SiteDetailPage() {
               <Button asChild variant="outline">
                 <a href={s.url} target="_blank" rel="noreferrer">
                   <ExternalLink />
-                  打开页面
+                  打开 Folio
                 </a>
               </Button>
             )}
             {s.canManage && (
               <Button onClick={() => setPublishing(true)}>
                 <Upload />
-                {s.currentVersionId ? '发布更新' : '发布页面'}
+                {s.currentVersionId ? '发布新版' : '发布 Folio'}
               </Button>
             )}
           </>
@@ -386,7 +386,7 @@ export function SiteDetailPage() {
           onClick={() =>
             void navigator.clipboard
               .writeText(s.url)
-              .then(() => toast.success('已复制页面链接'))
+              .then(() => toast.success('已复制 Folio 链接'))
               .catch(() => toast.error('复制失败'))
           }
         >
@@ -411,7 +411,7 @@ export function SiteDetailPage() {
         )}
       </div>
       <Tabs value={tab} onValueChange={changeTab} className="space-y-5">
-        <TabsList aria-label="页面详情">
+        <TabsList aria-label="Folio 详情">
           <TabsTrigger value="comments">
             <MessageSquare className="size-4" />
             评论
@@ -439,7 +439,7 @@ export function SiteDetailPage() {
                     </Button>
                   </div>
                 )}
-                <SiteDiscussion
+                <FolioDiscussion
                   key={slug}
                   slug={slug}
                   versionId={s.currentVersionId}
@@ -454,12 +454,12 @@ export function SiteDetailPage() {
             <Card>
               <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
                 <MessageSquare className="size-8 text-muted-foreground" />
-                <h2 className="font-medium">发布页面，开始收集反馈</h2>
+                <h2 className="font-medium">发布 Folio，开始收集反馈</h2>
                 <p className="text-sm text-muted-foreground">发布后，访客可以直接评论或标注内容。</p>
                 {s.canManage && (
                   <Button onClick={() => setPublishing(true)}>
                     <Upload />
-                    发布页面
+                    发布 Folio
                   </Button>
                 )}
               </CardContent>
@@ -469,7 +469,7 @@ export function SiteDetailPage() {
         <TabsContent value="releases" className="space-y-4">
           <PageHeader
             title="发布记录"
-            description="每次发布后页面链接保持不变。需要时可查看历史内容或恢复某次发布。"
+            description="每次发布后 Folio 链接保持不变。需要时可查看历史内容或恢复某次发布。"
           />
           {versions.isLoading && (
             <p role="status" className="text-sm text-muted-foreground">
@@ -520,7 +520,7 @@ export function SiteDetailPage() {
                         <div className="flex flex-wrap gap-2">
                           <Button asChild variant="outline" size="sm">
                             <a href={v.url} target="_blank" rel="noreferrer">
-                              预览页面
+                              预览 Folio
                               <ExternalLink />
                             </a>
                           </Button>
@@ -554,13 +554,13 @@ export function SiteDetailPage() {
           )}
           {!versions.isLoading && !versions.data?.length && !versions.error && (
             <p className="rounded-xl border py-12 text-center text-sm text-muted-foreground">
-              尚无发布记录，上传页面文件后会显示在这里。
+              尚无发布记录，上传 Folio 文件后会显示在这里。
             </p>
           )}
         </TabsContent>
         {s.canManage && (
           <TabsContent value="settings">
-            <SiteSettingsForm key={s.id + s.updatedAt} site={s} onSaved={refresh} />
+            <FolioSettingsForm key={s.id + s.updatedAt} folio={s} onSaved={refresh} />
           </TabsContent>
         )}
       </Tabs>
@@ -572,8 +572,8 @@ export function SiteDetailPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{s.currentVersionId ? '发布页面更新' : '发布页面'}</DialogTitle>
-            <DialogDescription>上传构建好的页面文件，发布后即可通过页面链接访问。</DialogDescription>
+            <DialogTitle>{s.currentVersionId ? '发布新版' : '发布 Folio'}</DialogTitle>
+            <DialogDescription>上传构建好的 Folio 文件，发布后即可通过 Folio 链接访问。</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="rounded-xl border border-dashed bg-muted/20 p-5 text-center">
@@ -630,7 +630,7 @@ export function SiteDetailPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>恢复这次发布？</AlertDialogTitle>
             <AlertDialogDescription>
-              页面链接将展示 {restore && new Date(restore.createdAt).toLocaleString()}{' '}
+              Folio 链接将展示 {restore && new Date(restore.createdAt).toLocaleString()}{' '}
               发布的内容。所有发布记录和评论都会保留。
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -643,7 +643,7 @@ export function SiteDetailPage() {
                 try {
                   await api('POST', '/api/sites/' + slug + '/activate', { versionId: restore.id });
                   refresh();
-                  toast.success('已恢复，页面链接现在展示所选内容');
+                  toast.success('已恢复，Folio 链接现在展示所选内容');
                 } catch (e) {
                   toast.error((e as Error).message);
                 } finally {
@@ -683,18 +683,18 @@ function SiteAccessForm({ slug, onVerified }: { slug: string; onVerified: (proof
     >
       <Input
         className="w-52"
-        aria-label="页面访问密码"
+        aria-label="Folio 访问密码"
         name="password"
         type="password"
         required
-        placeholder="输入页面访问密码"
+        placeholder="输入 Folio 访问密码"
       />
       <Button loading={busy}>验证密码</Button>
     </form>
   );
 }
 
-function SiteSettingsForm({ site: s, onSaved }: { site: SiteInfo; onSaved: () => void }) {
+function FolioSettingsForm({ folio: s, onSaved }: { folio: SiteInfo; onSaved: () => void }) {
   const [access, setAccess] = useState(s.access);
   const [saving, setSaving] = useState(false);
   return (
@@ -725,15 +725,15 @@ function SiteSettingsForm({ site: s, onSaved }: { site: SiteInfo; onSaved: () =>
           }}
         >
           <div>
-            <h2 className="font-semibold">页面设置</h2>
-            <p className="mt-1 text-sm text-muted-foreground">管理页面信息和访问权限。</p>
+            <h2 className="font-semibold">Folio 设置</h2>
+            <p className="mt-1 text-sm text-muted-foreground">管理 Folio 信息和访问权限。</p>
           </div>
           <label className="block space-y-2 text-sm">
-            <span>页面名称</span>
+            <span>Folio 名称</span>
             <Input name="name" required maxLength={100} defaultValue={s.name} />
           </label>
           <label className="block space-y-2 text-sm">
-            <span>页面说明</span>
+            <span>Folio 说明</span>
             <Textarea name="description" maxLength={2000} defaultValue={s.description} />
           </label>
           <div className="space-y-4 border-t pt-5">
@@ -791,17 +791,17 @@ function SiteSettingsForm({ site: s, onSaved }: { site: SiteInfo; onSaved: () =>
   );
 }
 
-export function SiteAuthorizePage() {
+export function FolioAuthorizePage() {
   const [params] = useSearchParams();
   const [error, setError] = useState('');
   const started = useRef(false);
-  // 防止 StrictMode / 重渲染重复创建授权票据；只接受服务端校验后返回的页面地址。
+  // 防止 StrictMode / 重渲染重复创建授权票据；只接受服务端校验后返回的 Folio 地址。
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    const slug = params.get('site'),
+    const slug = params.get('folio'),
       returnUrl = params.get('returnUrl');
-    if (!slug || !returnUrl) setError('页面登录地址不完整');
+    if (!slug || !returnUrl) setError('Folio 登录地址不完整');
     else
       void api<{ url: string }>('POST', '/api/sites/' + encodeURIComponent(slug) + '/authorize', {
         returnUrl,
@@ -809,5 +809,5 @@ export function SiteAuthorizePage() {
         .then((r) => location.replace(r.url))
         .catch((e) => setError(e.message));
   }, []);
-  return <p role="status">{error || '正在验证页面访问身份…'}</p>;
+  return <p role="status">{error || '正在验证 Folio 访问身份…'}</p>;
 }

@@ -19,7 +19,7 @@ import { encryptSecret } from '../src/common/crypto';
 import { SiteInfrastructure, siteResource, siteProbeHost } from '../src/sites/site-infrastructure.service';
 import { SiteDns, SiteSetupError } from '../src/sites/site-dns.service';
 import { SiteSettingsStore } from '../src/sites/site-settings.store';
-import { SiteToolsService } from '../src/sites/site-tools.service';
+import { FolioToolsService } from '../src/sites/folio-tools.service';
 import { AuthService } from '../src/auth/auth.service';
 import { SiteSetupService } from '../src/sites/site-setup.service';
 
@@ -177,7 +177,7 @@ describe('系统设置启用静态发布', () => {
     expect((await api('POST', '/api/sites', member, { slug: 'demo', name: 'Demo' })).status).toBe(503);
     const identity = await app.get(AuthService).authenticate(member);
     await expect(
-      app.get(SiteToolsService).call(identity!, 'create_site', { slug: 'mcp-demo', name: 'MCP demo' }),
+      app.get(FolioToolsService).call(identity!, 'create_folio', { slug: 'mcp-demo', name: 'MCP demo' }),
     ).rejects.toThrow('系统设置');
   });
   it('控制台保存配置，凭证加密、返回脱敏，旧 env 不参与配置', async () => {

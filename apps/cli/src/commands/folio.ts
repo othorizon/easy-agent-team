@@ -6,13 +6,13 @@ import {
   SITE_MAX_BYTES,
   SITE_MAX_FILES,
   siteFileSchema,
-  siteToolRequest,
+  folioToolRequest,
   type SiteFile,
-  type SiteToolName,
+  type FolioToolName,
 } from '@eat/shared';
 import { Api } from '../client.js';
 
-export function collectSiteFiles(input: string): SiteFile[] {
+export function collectFolioFiles(input: string): SiteFile[] {
   const root = resolve(input);
   const stat = lstatSync(root);
   const files: SiteFile[] = [];
@@ -59,16 +59,16 @@ export function collectSiteFiles(input: string): SiteFile[] {
   return files;
 }
 
-export async function runSiteTool(name: SiteToolName, args: Record<string, unknown>) {
-  const req = siteToolRequest(name, args);
+export async function runFolioTool(name: FolioToolName, args: Record<string, unknown>) {
+  const req = folioToolRequest(name, args);
   const result = await Api.fromSaved().request(req.method, req.path, req.body, req.headers);
   console.log(JSON.stringify(result, null, 2));
 }
-export async function sitePush(site: string, directory: string, opts: { message?: string }) {
-  return runSiteTool('publish_site', { site, files: collectSiteFiles(directory), message: opts.message ?? '' });
+export async function folioPush(folio: string, directory: string, opts: { message?: string }) {
+  return runFolioTool('publish_folio', { folio, files: collectFolioFiles(directory), message: opts.message ?? '' });
 }
-export function siteComment(
-  site: string,
+export function folioComment(
+  folio: string,
   content: string,
   opts: {
     versionId: string;
@@ -80,106 +80,106 @@ export function siteComment(
   },
 ) {
   const body = {
-    site,
+    folio,
     content,
     versionId: opts.versionId,
     mentions: opts.mention ?? [],
     accessToken: opts.accessToken,
   };
-  return runSiteTool(
-    opts.thread ? 'reply_site_comment' : 'create_site_comment',
+  return runFolioTool(
+    opts.thread ? 'reply_folio_comment' : 'create_folio_comment',
     opts.thread
       ? { ...body, threadId: opts.thread }
       : { ...body, page: opts.page ?? '/', anchor: opts.anchor ? JSON.parse(opts.anchor) : { type: 'page' } },
   );
 }
 
-export function registerSiteCommands(program: Command): void {
-  const site = program.command('site').description('页面：无需审批发布、版本、访问控制与评论');
-  site
+export function registerFolioCommands(program: Command): void {
+  const folio = program.command('folio').description('Folio：无需审批发布、版本、访问控制与评论');
+  folio
     .command('list')
-    .description('列出页面')
-    .action(() => runSiteTool('list_sites', {}));
-  site
+    .description('列出 Folio')
+    .action(() => runFolioTool('list_folios', {}));
+  folio
     .command('create <slug>')
-    .description('创建页面并分配域名，默认仅登录用户可访问')
-    .option('--name <name>', '页面名称，默认同 slug')
+    .description('创建 Folio 并分配域名，默认仅登录用户可访问')
+    .option('--name <name>', 'Folio 名称，默认同 slug')
     .option('--description <text>', '说明')
     .option('--access <mode>', 'authenticated / public / password', 'authenticated')
-    .option('--password <password>', '页面访问密码')
+    .option('--password <password>', 'Folio 访问密码')
     .option('--spa', '启用 SPA 路由回退')
-    .action((slug, o) => runSiteTool('create_site', { ...o, slug, name: o.name ?? slug }));
-  site
-    .command('update <site>')
-    .description('更新页面设置；修改密码使旧免输密码链接失效')
-    .option('--name <name>', '页面名称')
+    .action((slug, o) => runFolioTool('create_folio', { ...o, slug, name: o.name ?? slug }));
+  folio
+    .command('update <folio>')
+    .description('更新 Folio 设置；修改密码使旧免输密码链接失效')
+    .option('--name <name>', 'Folio 名称')
     .option('--description <text>', '说明')
     .option('--access <mode>', 'authenticated / public / password')
     .option('--password <password>', '新访问密码')
     .option('--spa', '启用 SPA')
     .option('--no-spa', '关闭 SPA')
-    .action((site, o) => runSiteTool('update_site', { ...o, site }));
-  site
-    .command('push <site> <directory-or-zip>')
+    .action((folio, o) => runFolioTool('update_folio', { ...o, folio }));
+  folio
+    .command('push <folio> <directory-or-zip>')
     .description('上传构建好的静态目录或 ZIP，发布并保留完整历史版本')
     .option('-m, --message <text>', '版本说明')
-    .action(sitePush);
-  site
-    .command('versions <site>')
+    .action(folioPush);
+  folio
+    .command('versions <folio>')
     .description('列出历史版本及固定访问地址')
-    .option('--access-token <token>', '密码验证返回的页面访问凭据')
-    .action((site, o) => runSiteTool('list_site_versions', { site, ...o }));
-  site
-    .command('activate <site> <version-id>')
+    .option('--access-token <token>', '密码验证返回的 Folio 访问凭据')
+    .action((folio, o) => runFolioTool('list_folio_versions', { folio, ...o }));
+  folio
+    .command('activate <folio> <version-id>')
     .description('切换当前版本，可用于回滚')
-    .action((site, versionId) => runSiteTool('activate_site_version', { site, versionId }));
-  site
-    .command('share <site>')
+    .action((folio, versionId) => runFolioTool('activate_folio_version', { folio, versionId }));
+  folio
+    .command('share <folio>')
     .description('生成免输密码访问链接')
-    .action((site) => runSiteTool('create_site_share_link', { site }));
-  site
-    .command('unlock <site> <password>')
-    .description('验证页面密码，获取仅限该页面的 accessToken')
-    .action((site, password) => runSiteTool('unlock_site', { site, password }));
-  site
-    .command('comments <site>')
+    .action((folio) => runFolioTool('create_folio_share_link', { folio }));
+  folio
+    .command('unlock <folio> <password>')
+    .description('验证 Folio 密码，获取仅限该 Folio 的 accessToken')
+    .action((folio, password) => runFolioTool('unlock_folio', { folio, password }));
+  folio
+    .command('comments <folio>')
     .description('读取讨论和回复，每条评论带浏览版本')
     .option('--page <path>', '页面标识')
     .option('--version-id <id>', '讨论发起版本')
     .option('--status <status>', 'open / resolved')
-    .option('--access-token <token>', '页面访问凭据')
-    .action((site, o) => runSiteTool('list_site_comments', { site, ...o }));
-  site
-    .command('comment <site> <content>')
+    .option('--access-token <token>', 'Folio 访问凭据')
+    .action((folio, o) => runFolioTool('list_folio_comments', { folio, ...o }));
+  folio
+    .command('comment <folio> <content>')
     .description('创建评论，或通过 --thread 回复已有讨论')
     .requiredOption('--version-id <id>', '实际浏览的版本 ID')
     .option('--page <path>', '页面标识，默认 /')
     .option('--thread <id>', '回复的讨论 ID')
     .option('--anchor <json>', '元素或区域锚点 JSON')
     .option('--mention <user-id...>', '@ 的用户 ID')
-    .option('--access-token <token>', '页面访问凭据')
-    .action(siteComment);
-  site
-    .command('delete-comment <site> <comment-id>')
-    .description('删除一条评论或回复，仅作者、页面所有者或管理员可操作，不影响其他人的回复')
-    .option('--access-token <token>', '页面访问凭据')
-    .action((site, commentId, o) => runSiteTool('delete_site_comment', { site, commentId, ...o }));
-  site
-    .command('resolve <site> <thread-id>')
+    .option('--access-token <token>', 'Folio 访问凭据')
+    .action(folioComment);
+  folio
+    .command('delete-comment <folio> <comment-id>')
+    .description('删除一条评论或回复，仅作者、Folio 所有者或管理员可操作，不影响其他人的回复')
+    .option('--access-token <token>', 'Folio 访问凭据')
+    .action((folio, commentId, o) => runFolioTool('delete_folio_comment', { folio, commentId, ...o }));
+  folio
+    .command('resolve <folio> <thread-id>')
     .description('标记讨论已解决')
     .option('--reopen', '重新打开')
-    .option('--access-token <token>', '页面访问凭据')
-    .action((site, threadId, o) =>
-      runSiteTool('set_site_thread_status', {
-        site,
+    .option('--access-token <token>', 'Folio 访问凭据')
+    .action((folio, threadId, o) =>
+      runFolioTool('set_folio_thread_status', {
+        folio,
         threadId,
         status: o.reopen ? 'open' : 'resolved',
         accessToken: o.accessToken,
       }),
     );
-  site
-    .command('mention-users <site>')
+  folio
+    .command('mention-users <folio>')
     .description('列出可 @ 的用户及 ID')
-    .option('--access-token <token>', '页面访问凭据')
-    .action((site, o) => runSiteTool('list_site_mention_users', { site, ...o }));
+    .option('--access-token <token>', 'Folio 访问凭据')
+    .action((folio, o) => runFolioTool('list_folio_mention_users', { folio, ...o }));
 }

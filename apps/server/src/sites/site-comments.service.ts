@@ -196,7 +196,7 @@ export class SiteCommentsService {
       .limit(1);
     if (!comment || comment.deletedAt) throw new NotFoundException('评论不存在或已删除');
     if (comment.authorId !== user.id && !this.sites.canManage(site, user))
-      throw new ForbiddenException('仅评论作者、页面所有者或管理员可以删除评论');
+      throw new ForbiddenException('仅评论作者、Folio 所有者或管理员可以删除评论');
     // 清除正文与提及，只保留占位和回复关系；并发删除仅有一次成功。
     const deleted = await this.db
       .update(siteComments)
@@ -227,7 +227,7 @@ export class SiteCommentsService {
     this.sites.assertView(site, user, proof);
     const thread = await this.thread(site, id);
     if (!this.sites.canManage(site, user) && thread.authorId !== user.id)
-      throw new ForbiddenException('仅讨论发起人、页面所有者或管理员可以变更状态');
+      throw new ForbiddenException('仅讨论发起人、Folio 所有者或管理员可以变更状态');
     await this.db.update(siteThreads).set({ status }).where(eq(siteThreads.id, id));
     await this.audit.record({
       actorId: user.id,
@@ -256,10 +256,10 @@ export class SiteCommentsService {
           .where(eq(helperProfiles.userId, userId))
           .limit(1);
         if (!profile?.webhookUrl) continue;
-        const url = `${await this.runtime.platform()}/sites/${site.slug}?thread=${threadId}`;
+        const url = `${await this.runtime.platform()}/folios/${site.slug}?thread=${threadId}`;
         const card = {
           header: {
-            title: { tag: 'plain_text', content: `${author.name} 在页面评论中 @ 了你` },
+            title: { tag: 'plain_text', content: `${author.name} 在 Folio 评论中 @ 了你` },
             template: 'blue',
           },
           elements: [
@@ -267,7 +267,7 @@ export class SiteCommentsService {
               tag: 'div',
               text: {
                 tag: 'plain_text',
-                content: `${site.name} · 评论浏览版本 v${version}\n登录 EAT 并通过页面访问验证后查看讨论。`,
+                content: `${site.name} · 评论浏览版本 v${version}\n登录 EAT 并通过 Folio 访问验证后查看讨论。`,
               },
             },
             {

@@ -42,7 +42,7 @@ export class SiteSetupService implements OnModuleInit, OnApplicationShutdown {
     const connection = await this.pool.connect();
     try {
       if (!(await connection.query('select pg_try_advisory_lock($1) as acquired', [LOCK])).rows[0].acquired)
-        throw new ConflictException('页面配置正在被其他操作处理，请稍后重试');
+        throw new ConflictException('Folio 配置正在被其他操作处理，请稍后重试');
     } catch (e) {
       connection.release();
       throw e;
@@ -95,9 +95,9 @@ export class SiteSetupService implements OnModuleInit, OnApplicationShutdown {
     try {
       row = await this.store.db.transaction(async (tx) => {
         const [r] = await tx.select().from(siteSettings).where(eq(siteSettings.id, 1)).for('update');
-        if (!r) throw new ConflictException('请先保存页面配置');
-        if (setupBusy(r.status)) throw new ConflictException('页面正在检查或配置，请等待完成');
-        if (!disable && r.status === 'enabled') throw new ConflictException('页面已启用；修改配置前请先停用');
+        if (!r) throw new ConflictException('请先保存 Folio 配置');
+        if (setupBusy(r.status)) throw new ConflictException('Folio 正在检查或配置，请等待完成');
+        if (!disable && r.status === 'enabled') throw new ConflictException('Folio 已启用；修改配置前请先停用');
         const [next] = await tx
           .update(siteSettings)
           .set({
@@ -117,7 +117,7 @@ export class SiteSetupService implements OnModuleInit, OnApplicationShutdown {
       throw e;
     }
     this.job = this.run(row, actorId, disable)
-      .catch(() => this.logger.error('页面启停任务异常，状态请以系统设置为准'))
+      .catch(() => this.logger.error('Folio 启停任务异常，状态请以系统设置为准'))
       .finally(() => this.release(lock));
     return this.store.info();
   }
@@ -174,12 +174,12 @@ export class SiteSetupService implements OnModuleInit, OnApplicationShutdown {
         row.serverId = app.serverId;
         row.upstreamUrl = row.upstreamUrl || `http://${app.appName}:${row.upstreamPort}`;
         if (new URL(row.platformUrl || loadConfig().publicUrl).protocol !== 'https:')
-          throw new SiteSetupError('请在页面设置中填写 EAT 控制台的 HTTPS 地址，页面登录和评论需要安全的平台地址');
+          throw new SiteSetupError('请在 Folio 设置中填写 EAT 控制台的 HTTPS 地址，Folio 登录和评论需要安全的平台地址');
         await update({ serverId: row.serverId });
         await this.infra.readMain(client, row.serverId);
       });
       if (disable) {
-        await check('stop', '撤下页面入口（保留文件、历史版本与证书）', 'provision', () =>
+        await check('stop', '撤下 Folio 入口（保留文件、历史版本与证书）', 'provision', () =>
           this.infra.withdraw(client!, row),
         );
         await this.audit.record({
@@ -238,10 +238,10 @@ export class SiteSetupService implements OnModuleInit, OnApplicationShutdown {
         await update({ status: 'enabled', operationId: null, lastError: '' });
       }
     } catch (e) {
-      let message = e instanceof SiteSetupError ? e.message : '页面配置失败，请检查连接、配置及访问权限';
+      let message = e instanceof SiteSetupError ? e.message : 'Folio 配置失败，请检查连接、配置及访问权限';
       if (!disable && client) {
         try {
-          await check('rollback', '撤下本次未成功启用的页面路由', 'provision', async () => {
+          await check('rollback', '撤下本次未成功启用的 Folio 路由', 'provision', async () => {
             await this.infra.withdraw(client!, row);
             await update({ routeConfigured: false });
           });

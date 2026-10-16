@@ -118,7 +118,7 @@ describe('固定域名直接提供当前版本', () => {
     expect(page.statusCode).toBe(302);
     expect(authorize.origin).toBe('https://eat.example.com');
     expect(authorize.searchParams.get('returnUrl')).toBe('https://demo.sites.example.com/about/?view=full');
-    expect((await get('/app.js')).headers.location).toContain('/sites/authorize?');
+    expect((await get('/app.js')).headers.location).toContain('/folios/authorize?');
   });
 
   it('密码分享凭据清除时保持固定域名，验证密码使用该域名的来源', async () => {

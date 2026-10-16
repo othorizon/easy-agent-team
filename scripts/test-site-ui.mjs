@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** 页面 UI 回归：先启动 web dev server，再运行 node scripts/test-site-ui.mjs。
+/** Folio UI 回归：先启动 web dev server，再运行 node scripts/test-site-ui.mjs。
  * 使用 API 替身验证交互与请求上下文；不会连接真实页面或写入业务数据。
  */
 import assert from 'node:assert/strict';
@@ -143,6 +143,8 @@ async function context(authenticated = true, viewport = { width: 1440, height: 1
       route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
     if (request.method() !== 'GET')
       writes.push({ path, method: request.method(), data, headers: request.headers() });
+    if (path === '/api/sites/capability') return json({ enabled: true, status: 'enabled' });
+    if (path === '/api/sites' && request.method() === 'GET') return json([site]);
     if (path === '' && request.method() === 'GET') return json(site);
     if (path === '' && request.method() === 'PATCH') {
       site = { ...site, ...data, updatedAt: new Date().toISOString() };
@@ -173,7 +175,7 @@ async function context(authenticated = true, viewport = { width: 1440, height: 1
     if (path === '/threads' && request.method() === 'GET') {
       if (failThreads) return json({ message: '服务暂时不可用' }, 503);
       if (denyAccess && !request.headers()['x-eat-site-access'])
-        return json({ error: 'SITE_PASSWORD_REQUIRED', message: '请先验证页面访问密码' }, 403);
+        return json({ error: 'SITE_PASSWORD_REQUIRED', message: '请先验证 Folio 访问密码' }, 403);
       const result = threads.filter(
         (t) =>
           t.comments.some((c) => !c.deletedAt) &&
@@ -239,7 +241,12 @@ try {
   await mkdir(output, { recursive: true });
   const ctx = await context();
   const page = await ctx.newPage();
-  await page.goto(platform + '/sites/demo');
+  await page.goto(platform + '/folios');
+  await page.getByRole('heading', { name: 'Folio', exact: true }).waitFor();
+  await page.getByRole('button', { name: '创建 Folio', exact: true }).click();
+  await page.getByRole('dialog').getByRole('heading', { name: '创建 Folio', exact: true }).waitFor();
+  await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
+  await page.getByRole('link', { name: site.name, exact: true }).click();
   await waitText(page, '首页标题可以更清楚地表达产品价值。');
   assert.equal(
     await page.getByRole('tab', { name: '评论', exact: true }).getAttribute('aria-selected'),
@@ -295,9 +302,9 @@ try {
   assert.equal(writes.filter((w) => w.path === '/activate').length, 0);
   await row.getByRole('button', { name: '恢复此发布' }).click();
   await page.getByRole('alertdialog').getByRole('button', { name: '恢复发布', exact: true }).click();
-  await waitText(page, '已恢复，页面链接现在展示所选内容');
+  await waitText(page, '已恢复，Folio 链接现在展示所选内容');
   assert.equal(site.currentVersionId, v1);
-  await page.getByRole('button', { name: '发布更新', exact: true }).click();
+  await page.getByRole('button', { name: '发布新版', exact: true }).click();
   await page
     .locator('input[aria-label="上传 ZIP"]')
     .setInputFiles({ name: 'bad.zip', mimeType: 'application/zip', buffer: Buffer.from('invalid') });
@@ -307,10 +314,10 @@ try {
   try {
     await writeFile(join(uploadDirectory, 'index.html'), '<h1>Updated</h1>');
     await page.locator('input[aria-label="上传目录"]').setInputFiles(uploadDirectory);
+    await waitText(page, 'Folio 已发布，访问链接保持不变');
   } finally {
     await rm(uploadDirectory, { recursive: true, force: true });
   }
-  await waitText(page, '页面已发布，访问链接保持不变');
   assert.equal(site.currentVersionId, v2);
   await page.getByRole('tab', { name: '评论', exact: true }).click();
   // 后返回的旧页面响应不能覆盖当前筛选结果。
@@ -333,7 +340,7 @@ try {
 
   const sitePage = await ctx.newPage();
   await sitePage.goto(published);
-  const iframeUrl = new URL(await sitePage.locator('iframe[title="页面评论"]').getAttribute('src'));
+  const iframeUrl = new URL(await sitePage.locator('iframe[title="Folio 评论"]').getAttribute('src'));
   assert.equal(iframeUrl.searchParams.get('origin'), published);
   const toggle = sitePage.locator('#__eat_widget').getByRole('button', { name: '评论', exact: true });
   const badge = sitePage.locator('#__eat_widget .comment-dot');
@@ -342,7 +349,7 @@ try {
   assert.equal(await toggle.getAttribute('aria-label'), '评论');
   await toggle.click();
   assert.equal(await badge.isVisible(), false);
-  const frame = sitePage.frameLocator('iframe[title="页面评论"]');
+  const frame = sitePage.frameLocator('iframe[title="Folio 评论"]');
   await frame.getByRole('textbox', { name: '评论内容', exact: true }).waitFor();
   await frame.getByText('首页标题可以更清楚地表达产品价值。', { exact: true }).waitFor();
   assert.equal(await frame.getByRole('combobox').count(), 0);
@@ -402,16 +409,16 @@ try {
   const anonymous = await context(false);
   const anon = await anonymous.newPage();
   failThreads = true;
-  await anon.goto(platform + '/site-comments/demo?versionId=' + v1);
+  await anon.goto(platform + '/folio-comments/demo?versionId=' + v1);
   await waitText(anon, '服务暂时不可用');
-  assert.equal(await anon.getByLabel('页面访问密码').count(), 0);
+  assert.equal(await anon.getByLabel('Folio 访问密码').count(), 0);
   failThreads = false;
   await anon.getByRole('button', { name: '重试', exact: true }).click();
   await waitText(anon, '首页标题可以更清楚地表达产品价值。');
   await anon.getByRole('button', { name: '登录后评论', exact: true }).waitFor();
   denyAccess = true;
   await anon.getByRole('button', { name: '刷新评论' }).click();
-  await anon.getByLabel('页面访问密码').fill('password');
+  await anon.getByLabel('Folio 访问密码').fill('password');
   await anon.getByRole('button', { name: '验证', exact: true }).click();
   await waitText(anon, '首页标题可以更清楚地表达产品价值。');
   assert.equal(writes.at(-1).path, '/access');
@@ -419,7 +426,7 @@ try {
   const blockedPopupPage = await anonymous.newPage();
   await blockedPopupPage.goto(published);
   await blockedPopupPage.locator('#__eat_widget').getByRole('button', { name: '评论', exact: true }).click();
-  const popupFrame = blockedPopupPage.frameLocator('iframe[title="页面评论"]');
+  const popupFrame = blockedPopupPage.frameLocator('iframe[title="Folio 评论"]');
   await popupFrame.getByRole('button', { name: '登录后评论', exact: true }).waitFor();
   await blockedPopupPage
     .frames()
@@ -547,16 +554,16 @@ try {
   );
   site.canManage = false;
   const readonly = await ctx.newPage();
-  await readonly.goto(platform + '/sites/demo');
+  await readonly.goto(platform + '/folios/demo');
   await waitText(readonly, '首页标题可以更清楚地表达产品价值。');
   assert.equal(await readonly.getByRole('tab', { name: '设置', exact: true }).count(), 0);
-  assert.equal(await readonly.getByRole('button', { name: '发布更新', exact: true }).count(), 0);
+  assert.equal(await readonly.getByRole('button', { name: '发布新版', exact: true }).count(), 0);
   site.canManage = true;
   site.currentVersionId = null;
   const unpublished = await ctx.newPage();
-  await unpublished.goto(platform + '/sites/demo');
-  await waitText(unpublished, '发布页面，开始收集反馈');
-  assert.equal(await unpublished.getByRole('link', { name: '打开页面', exact: true }).count(), 0);
+  await unpublished.goto(platform + '/folios/demo');
+  await waitText(unpublished, '发布 Folio，开始收集反馈');
+  assert.equal(await unpublished.getByRole('link', { name: '打开 Folio', exact: true }).count(), 0);
   console.log('PASS access states: read-only member and unpublished website');
   assert.deepEqual(failures, [], 'Browser runtime errors');
   console.log('Screenshots: ' + output);

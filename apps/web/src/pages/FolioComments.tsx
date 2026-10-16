@@ -151,7 +151,7 @@ function Composer({
   );
 }
 
-export function SiteDiscussion({
+export function FolioDiscussion({
   slug,
   versionId,
   initialPage = '',
@@ -411,7 +411,7 @@ export function SiteDiscussion({
   function login() {
     if (embedded && window.parent !== window) {
       popup.current = window.open(
-        '/site-comment-login?site=' + encodeURIComponent(slug),
+        '/folio-comment-login?folio=' + encodeURIComponent(slug),
         'eat-comment-login',
         'popup,width=520,height=680',
       );
@@ -506,16 +506,16 @@ export function SiteDiscussion({
   );
 
   return (
-    <section className={cn(embedded ? 'flex h-full min-h-0 flex-col' : 'space-y-5')} aria-label="页面评论">
+    <section className={cn(embedded ? 'flex h-full min-h-0 flex-col' : 'space-y-5')} aria-label="Folio 评论">
       <div className={cn('space-y-4', embedded && 'shrink-0 border-b px-4 pb-3 pt-4')}>
         <div className="flex items-start justify-between gap-2">
           <div>
             <h2 className="flex items-center gap-2 font-semibold">
               <MessageSquare className="size-4" />
-              页面评论
+              Folio 评论
             </h2>
             <p className="mt-1 break-all text-xs text-muted-foreground">
-              {embedded ? page || '/' : '集中查看反馈，页面更新后讨论会继续保留。'}
+              {embedded ? page || '/' : '集中查看反馈，Folio 更新后讨论会继续保留。'}
             </p>
           </div>
           <div className="flex gap-1">
@@ -632,11 +632,11 @@ export function SiteDiscussion({
               >
                 <Input
                   type="password"
-                  aria-label="页面访问密码"
+                  aria-label="Folio 访问密码"
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="输入页面访问密码"
+                  placeholder="输入 Folio 访问密码"
                 />
                 <Button type="submit" loading={verifying}>
                   验证
@@ -933,12 +933,12 @@ export function SiteDiscussion({
   );
 }
 
-export function SiteCommentPanelPage() {
+export function FolioCommentPanelPage() {
   const { slug = '' } = useParams();
   const [params] = useSearchParams();
   return (
     <main className="h-dvh overflow-hidden bg-background">
-      <SiteDiscussion
+      <FolioDiscussion
         key={slug}
         slug={slug}
         versionId={params.get('versionId') ?? ''}
@@ -949,13 +949,13 @@ export function SiteCommentPanelPage() {
   );
 }
 
-export function SiteCommentLoginPage() {
+export function FolioCommentLoginPage() {
   const [params] = useSearchParams();
   const [error, setError] = useState('');
   useEffect(() => {
-    const slug = params.get('site');
+    const slug = params.get('folio');
     if (!slug || !window.opener) {
-      setError('请从页面评论面板发起登录');
+      setError('请从 Folio 评论面板发起登录');
       return;
     }
     const listener = async (e: MessageEvent) => {

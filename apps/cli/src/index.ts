@@ -25,7 +25,7 @@ import { sync } from './commands/sync.js';
 import { configGet, configList, configSet, configUnset } from './commands/config.js';
 import { startMcpServer } from './mcp.js';
 import { flushUpdateNotice } from './update.js';
-import { registerSiteCommands } from './commands/site.js';
+import { registerFolioCommands } from './commands/folio.js';
 
 const program = new Command();
 
@@ -47,7 +47,7 @@ program
 program.command('logout').description('退出登录（删除本地凭证）').action(logout);
 program.command('whoami').description('查看当前登录身份').action(whoami);
 
-registerSiteCommands(program);
+registerFolioCommands(program);
 
 const env = program.command('env').description('环境变量：查清单、拉取值、申请权限');
 env.command('list [environment]').description('列出可见的环境与变量（key + 备注 + 权限状态）').action(envList);

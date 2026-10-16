@@ -12,7 +12,7 @@ export class SiteStorage {
     const key = [row.ossBucket, row.ossRegion, row.ossAccessKeyIdEncrypted, row.ossAccessKeySecretEncrypted].join(':');
     if (this.cached?.key === key) return this.cached.client;
     const { ossAccessKeyId: accessKeyId, ossAccessKeySecret: accessKeySecret } = this.settings.secrets(row);
-    if (!accessKeyId || !accessKeySecret) throw new ServiceUnavailableException('OSS 页面存储尚未配置完整');
+    if (!accessKeyId || !accessKeySecret) throw new ServiceUnavailableException('OSS Folio 存储尚未配置完整');
     const client = new OSS({
       bucket: row.ossBucket,
       region: row.ossRegion,

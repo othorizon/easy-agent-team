@@ -22,9 +22,9 @@ export const SITE_EMBED_SCRIPT = String.raw`(() => {
   toggle.append(toggleIcon,dot); toggle.setAttribute('aria-controls','eat-comment-panel'); toggle.setAttribute('aria-describedby',description.id);
   var panel = document.createElement('div'); panel.className='panel'; panel.id='eat-comment-panel';
   var hint = document.createElement('div'); hint.className='hint'; hint.setAttribute('role','status');
-  var frame = document.createElement('iframe'); frame.title = '页面评论';
+  var frame = document.createElement('iframe'); frame.title = 'Folio 评论';
   var page = () => location.pathname + (/^#(?:\/|!)/.test(location.hash) ? location.hash : '');
-  var url = new URL(config.platform + '/site-comments/' + config.slug);
+  var url = new URL(config.platform + '/folio-comments/' + config.slug);
   url.searchParams.set('versionId', config.versionId); url.searchParams.set('page', page());
   url.searchParams.set('origin', location.origin);
   var thread = new URL(location.href).searchParams.get('eat_thread'); if (thread) url.searchParams.set('thread', thread);

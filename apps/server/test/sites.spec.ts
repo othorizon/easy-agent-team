@@ -268,7 +268,7 @@ describe('登录、公开、密码与域名隔离', () => {
       for (const path of ['/', '/app.js', '/image.png']) {
         const r = await content(path, { version });
         expect(r.statusCode).toBe(302);
-        expect(r.headers.location).toContain('/sites/authorize?');
+        expect(r.headers.location).toContain('/folios/authorize?');
         const returnUrl = new URL(String(r.headers.location)).searchParams.get('returnUrl');
         expect(new URL(returnUrl!).host).toBe(`${version ? 'v1--' : ''}demo.sites.test:3000`);
       }
@@ -520,14 +520,15 @@ describe('版本评论、区域锚点、@ 与工具接入', () => {
   it('HTTP MCP 直接复用服务层，支持发布与版本评论，权限一致', async () => {
     const tools = app.get(McpToolsService);
     const user = (await app.get(AuthService).authenticate(owner))!;
-    expect(tools.listTools().some((t) => t.name === 'publish_site')).toBe(true);
-    const result = (await tools.call(user, 'list_site_comments', { site: 'demo' })) as any[];
+    expect(tools.listTools().some((t) => t.name === 'publish_folio')).toBe(true);
+    expect(tools.listTools().some((t) => /(?:^|_)sites?(?:_|$)/.test(t.name))).toBe(false);
+    const result = (await tools.call(user, 'list_folio_comments', { folio: 'demo' })) as any[];
     expect(result[0].versionId).toBe(v1);
     await expect(
-      tools.call(user, 'publish_site', { site: 'demo', files: [{ path: '../index.html', content: 'bad' }] }),
+      tools.call(user, 'publish_folio', { folio: 'demo', files: [{ path: '../index.html', content: 'bad' }] }),
     ).rejects.toThrow();
-    const created = (await tools.call(user, 'create_site_comment', {
-      site: 'demo',
+    const created = (await tools.call(user, 'create_folio_comment', {
+      folio: 'demo',
       page: '/',
       versionId: v2,
       content: 'from MCP',
@@ -660,13 +661,13 @@ describe('评论删除权限与占位', () => {
     const access = await api('POST', '/api/sites/demo/access', undefined, { password: 'delete-password' });
     const tools = app.get(McpToolsService);
     const actor = (await app.get(AuthService).authenticate(member))!;
-    expect(tools.listTools().some((t) => t.name === 'delete_site_comment')).toBe(true);
+    expect(tools.listTools().some((t) => t.name === 'delete_folio_comment')).toBe(true);
     await expect(
-      tools.call(actor, 'delete_site_comment', { site: 'second', commentId: id }),
+      tools.call(actor, 'delete_folio_comment', { folio: 'second', commentId: id }),
     ).rejects.toThrow();
     expect(
-      await tools.call(actor, 'delete_site_comment', {
-        site: 'demo',
+      await tools.call(actor, 'delete_folio_comment', {
+        folio: 'demo',
         commentId: id,
         accessToken: access.body.accessToken,
       }),

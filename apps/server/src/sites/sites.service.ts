@@ -75,14 +75,14 @@ export class SitesService {
   async get(slug: string): Promise<SiteRow> {
     await this.runtime.settings.enabled();
     const [site] = await this.db.select().from(sites).where(eq(sites.slug, slug)).limit(1);
-    if (!site) throw new NotFoundException('页面不存在');
+    if (!site) throw new NotFoundException('Folio 不存在');
     return site;
   }
   canManage(site: SiteRow, user?: AuthUser | null) {
     return !!user && (site.ownerId === user.id || user.role === 'admin');
   }
   manage(site: SiteRow, user: AuthUser) {
-    if (!this.canManage(site, user)) throw new ForbiddenException('仅页面所有者或管理员可以操作');
+    if (!this.canManage(site, user)) throw new ForbiddenException('仅 Folio 所有者或管理员可以操作');
   }
   async info(site: SiteRow, user: AuthUser): Promise<SiteInfo> {
     return {
@@ -129,7 +129,7 @@ export class SitesService {
         (e as { cause?: { code?: string }; code?: string }).cause?.code === '23505' ||
         (e as { code?: string }).code === '23505'
       )
-        throw new ConflictException('页面 slug 已被使用');
+        throw new ConflictException('Folio slug 已被使用');
       throw e;
     }
   }
@@ -137,7 +137,7 @@ export class SitesService {
     const site = await this.get(slug);
     this.manage(site, user);
     if (dto.access === 'password' && !dto.password && !site.passwordHash)
-      throw new BadRequestException('请设置页面密码');
+      throw new BadRequestException('请设置 Folio 密码');
     const passwordHash = dto.password ? await bcrypt.hash(dto.password, 10) : undefined;
     const [row] = await this.db
       .update(sites)
@@ -190,7 +190,7 @@ export class SitesService {
   }
   async version(site: SiteRow, id?: string, number?: number) {
     const versionId = id ?? site.currentVersionId;
-    if (number === undefined && !versionId) throw new NotFoundException('页面尚未发布');
+    if (number === undefined && !versionId) throw new NotFoundException('Folio 尚未发布');
     const [row] = await this.db
       .select()
       .from(siteVersions)
@@ -237,7 +237,7 @@ export class SitesService {
       for (const f of files) await this.storage.put(site.id, id, f.path, f.content, f.type);
       const row = await this.db.transaction(async (tx) => {
         const [capability] = await tx.select().from(siteSettings).where(eq(siteSettings.id, 1)).for('share');
-        if (capability?.status !== 'enabled') throw new ServiceUnavailableException('页面已停用，本次发布未生效');
+        if (capability?.status !== 'enabled') throw new ServiceUnavailableException('Folio 已停用，本次发布未生效');
         const [locked] = await tx.select().from(sites).where(eq(sites.id, site.id)).for('update');
         const [v] = await tx
           .insert(siteVersions)
@@ -346,10 +346,10 @@ export class SitesService {
       throw new UnauthorizedException('请先登录 EAT');
     }
     if (this.validProof(site, proof)) return;
-    throw new ForbiddenException({ error: 'SITE_PASSWORD_REQUIRED', message: '请先验证页面访问密码' });
+    throw new ForbiddenException({ error: 'SITE_PASSWORD_REQUIRED', message: '请先验证 Folio 访问密码' });
   }
   async unlock(site: SiteRow, password?: string, accessToken?: string, actor = 'anonymous') {
-    if (site.access !== 'password') throw new BadRequestException('页面当前不使用密码访问');
+    if (site.access !== 'password') throw new BadRequestException('Folio 当前不使用密码访问');
     if (this.validProof(site, accessToken)) return { accessToken: this.proof(site) };
     const key = `${site.id}:${actor}`;
     const now = Date.now();
@@ -361,14 +361,14 @@ export class SitesService {
       this.unlockAttempts.set(key, { count: 1, expires: now + 5 * 60_000 });
     }
     if (!(site.passwordHash && password && (await bcrypt.compare(password, site.passwordHash))))
-      throw new ForbiddenException('页面密码或分享链接无效');
+      throw new ForbiddenException('Folio 密码或分享链接无效');
     this.unlockAttempts.delete(key);
     return { accessToken: this.proof(site) };
   }
   async share(user: AuthUser, slug: string) {
     const site = await this.get(slug);
     this.manage(site, user);
-    if (site.access !== 'password') throw new BadRequestException('仅密码访问的页面需要免输密码链接');
+    if (site.access !== 'password') throw new BadRequestException('仅密码访问的 Folio 需要免输密码链接');
     return {
       url: `${await this.runtime.url(slug)}/?eat_access=${encodeURIComponent(this.proof(site, 'share'))}`,
       expiresInDays: 90,
@@ -387,7 +387,7 @@ export class SitesService {
       target.password ||
       target.pathname.startsWith('//')
     )
-      throw new BadRequestException('页面跳转地址不合法');
+      throw new BadRequestException('Folio 跳转地址不合法');
     const code = await this.newSession(
       site,
       'ticket',

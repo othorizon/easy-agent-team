@@ -24,8 +24,8 @@ import { EnvsService } from '../envs/envs.service';
 import { ExperiencesService } from '../help/experiences.service';
 import { HelpService } from '../help/help.service';
 import { HelpersService } from '../help/helpers.service';
-import { SiteToolsService } from '../sites/site-tools.service';
-import { isSiteTool } from '@eat/shared';
+import { FolioToolsService } from '../sites/folio-tools.service';
+import { isFolioTool } from '@eat/shared';
 
 /** 工具入参先过一遍 zod：模型给的参数什么形状都可能，错就回结构化的 VALIDATION_FAILED，别让它撞进服务层 */
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
@@ -81,7 +81,7 @@ export class McpToolsService {
     private readonly apps: AppsService,
     private readonly deploy: DeployService,
     private readonly dbs: DbsService,
-    private readonly siteTools: SiteToolsService,
+    private readonly folioTools: FolioToolsService,
   ) {}
 
   listTools(): EatToolDef[] {
@@ -90,7 +90,7 @@ export class McpToolsService {
 
   /** 逐个工具分发。抛出的异常由调用方转成 MCP 的 isError 结果 */
   async call(user: AuthUser, name: string, rawArgs: unknown, ip?: string): Promise<unknown> {
-    if (isSiteTool(name)) return this.siteTools.call(user, name, rawArgs);
+    if (isFolioTool(name)) return this.folioTools.call(user, name, rawArgs);
     const args = (rawArgs ?? {}) as Record<string, unknown>;
     switch (name) {
       // ---------- 平台指南（只有远程接入有：云端客户端没有 eat sync 那条路） ----------

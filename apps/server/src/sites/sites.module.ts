@@ -13,7 +13,7 @@ import { SiteGateway } from './site-gateway.service';
 import { SiteStorage } from './site-storage.service';
 import { SitesController } from './sites.controller';
 import { SitesService } from './sites.service';
-import { SiteToolsService } from './site-tools.service';
+import { FolioToolsService } from './folio-tools.service';
 
 @Module({
   imports: [AuthModule, DeployModule],
@@ -28,9 +28,9 @@ import { SiteToolsService } from './site-tools.service';
     SiteStorage,
     SiteCommentsService,
     SiteGateway,
-    SiteToolsService,
+    FolioToolsService,
   ],
-  exports: [SitesService, SiteCommentsService, SiteToolsService],
+  exports: [SitesService, SiteCommentsService, FolioToolsService],
 })
 export class SitesModule implements OnModuleInit, NestModule {
   constructor(
