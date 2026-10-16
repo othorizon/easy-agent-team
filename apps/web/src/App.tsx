@@ -17,6 +17,7 @@ import {
 import { useState } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { clearSession, getStoredUser, getToken } from './api';
+import { BrandIcon } from './components/brand-icon';
 import { Badge } from './components/ui/badge';
 import { Button } from './components/ui/button';
 import {
@@ -113,9 +114,7 @@ function isActive(item: NavItem, pathname: string): boolean {
 function Brand() {
   return (
     <Link to="/" className="flex items-center gap-2 px-2 outline-none">
-      <span className="flex size-7 items-center justify-center rounded-lg bg-primary font-mono text-sm font-bold text-primary-foreground">
-        e
-      </span>
+      <BrandIcon className="size-7 shrink-0" />
       <span className="text-[15px] font-semibold tracking-tight">easy-agent-team</span>
     </Link>
   );
