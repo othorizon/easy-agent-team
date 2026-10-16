@@ -236,7 +236,7 @@ describe('真实 HTTPS 客户端检查', () => {
     ).rejects.toThrow();
     await expect(infra.probeHttps(badUrl, 'marker', new AbortController().signal)).rejects.toThrow();
   });
-  it('路由限定单层站点子域名，保留 Host，并显式申请泛域名证书', () => {
+  it('路由限定单层页面子域名，保留 Host，并显式申请泛域名证书', () => {
     const config = siteRoutes(row(), 'http://eat:3000', 'resolver');
     const router = Object.values(config.http.routers)[1];
     expect(router.tls).toEqual({ certResolver: 'resolver', domains: [{ main: '*.sites.example.com' }] });

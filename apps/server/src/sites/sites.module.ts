@@ -46,7 +46,7 @@ export class SitesModule implements OnModuleInit, NestModule {
   }
   onModuleInit() {
     const instance = this.adapter.httpAdapter.getInstance();
-    // 必须在控制台静态资源、API 和 SPA 回退之前拦截站点域名，防止跨源身份泄露。
+    // 必须在控制台静态资源、API 和 SPA 回退之前拦截页面域名，防止跨源身份泄露。
     instance.addHook('onRequest', this.gateway.handle.bind(this.gateway));
   }
 }

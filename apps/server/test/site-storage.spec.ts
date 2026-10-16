@@ -44,7 +44,7 @@ describe('静态产物存储', () => {
     expect(oss.deleteMulti).toHaveBeenCalledWith(['sites/site/version/assets/a.js'], { quiet: true });
   });
   it('停用后拒绝写入和读取 OSS，仍可清理未完成的发布', async () => {
-    settings.enabled.mockRejectedValue(new Error('静态网站已停用'));
+    settings.enabled.mockRejectedValue(new Error('页面已停用'));
     const storage = new SiteStorage(settings as unknown as SiteSettingsStore);
     await expect(storage.put('site', 'version', 'index.html', Buffer.from('x'), 'text/html')).rejects.toThrow('已停用');
     await expect(storage.get('oss', 'site', 'version', 'index.html')).rejects.toThrow('已停用');

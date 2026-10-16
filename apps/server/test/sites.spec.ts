@@ -21,6 +21,8 @@ import { SiteStorage } from '../src/sites/site-storage.service';
 import { McpToolsService } from '../src/mcp-server/mcp-tools.service';
 import { AuthService } from '../src/auth/auth.service';
 import * as schema from '../src/db/schema';
+import { and, eq } from 'drizzle-orm';
+import { DB, type Db } from '../src/db/db.module';
 
 let app: NestFastifyApplication;
 let owner: string, other: string, admin: string, otherId: string, ownerId: string;
@@ -79,7 +81,9 @@ function content(
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'eat-sites-'));
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-  await pool.query('drop schema public cascade; create schema public; drop schema if exists drizzle cascade;');
+  await pool.query(
+    'drop schema public cascade; create schema public; drop schema if exists drizzle cascade;',
+  );
   await migrate(drizzle(pool), { migrationsFolder: resolve('drizzle') });
   const db = drizzle(pool, { schema });
   const passwordHash = await bcrypt.hash('password123', 4);
@@ -102,7 +106,10 @@ beforeAll(async () => {
   await pool.end();
   const module = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(SiteStorage)
-    .useFactory({ factory: (store: SiteSettingsStore) => new TestSiteStorage(store, dir), inject: [SiteSettingsStore] })
+    .useFactory({
+      factory: (store: SiteSettingsStore) => new TestSiteStorage(store, dir),
+      inject: [SiteSettingsStore],
+    })
     .overrideProvider(SiteRuntime)
     .useFactory({
       factory: (store: SiteSettingsStore) => {
@@ -138,7 +145,7 @@ afterAll(async () => {
 });
 
 describe('静态发布与不可变历史版本', () => {
-  it('普通成员创建网站无需审批，默认仅登录访问，并自动分配域名', async () => {
+  it('普通成员创建页面无需审批，默认仅登录访问，并自动分配域名', async () => {
     const r = await api('POST', '/api/sites', owner, { slug: 'demo', name: 'Demo' });
     expect(r.status).toBe(201);
     expect(r.body.access).toBe('authenticated');
@@ -189,8 +196,11 @@ describe('静态发布与不可变历史版本', () => {
   it('拒绝目录穿越、保留路由、重复文件、无首页和错误 Base64', async () => {
     for (const path of ['../secret', '/index.html', 'a/../../b', 'a\\b', '__eat/embed.js', '.env.local'])
       expect(
-        (await api('POST', '/api/sites/demo/releases', owner, { files: [...files('bad'), { path, content: 'bad' }] }))
-          .status,
+        (
+          await api('POST', '/api/sites/demo/releases', owner, {
+            files: [...files('bad'), { path, content: 'bad' }],
+          })
+        ).status,
       ).toBe(400);
     expect(
       (
@@ -200,8 +210,11 @@ describe('静态发布与不可变历史版本', () => {
       ).status,
     ).toBe(400);
     expect(
-      (await api('POST', '/api/sites/demo/releases', owner, { files: [{ path: 'readme.txt', content: 'no index' }] }))
-        .status,
+      (
+        await api('POST', '/api/sites/demo/releases', owner, {
+          files: [{ path: 'readme.txt', content: 'no index' }],
+        })
+      ).status,
     ).toBe(400);
     expect(
       (
@@ -264,9 +277,9 @@ describe('登录、公开、密码与域名隔离', () => {
     expect(r.body).not.toContain('owner@site.test');
   });
   it('登录兑换码绑定域名、单次使用，Cookie 不暴露平台 Token', async () => {
-    expect((await api('POST', '/api/sites/demo/authorize', other, { returnUrl: 'http://evil.test/' })).status).toBe(
-      400,
-    );
+    expect(
+      (await api('POST', '/api/sites/demo/authorize', other, { returnUrl: 'http://evil.test/' })).status,
+    ).toBe(400);
     expect(
       (
         await api('POST', '/api/sites/demo/authorize', other, {
@@ -296,8 +309,13 @@ describe('登录、公开、密码与域名隔离', () => {
     expect(latest.statusCode).toBe(200);
     expect(latest.headers.location).toBeUndefined();
     expect(
-      (await api('POST', '/api/sites/demo/threads', undefined, { versionId: v1, page: '/', content: 'anonymous' }))
-        .status,
+      (
+        await api('POST', '/api/sites/demo/threads', undefined, {
+          versionId: v1,
+          page: '/',
+          content: 'anonymous',
+        })
+      ).status,
     ).toBe(401);
   });
   it('固定域名登录后保持原域名，访问会话不能用于历史域名', async () => {
@@ -356,15 +374,21 @@ describe('登录、公开、密码与域名隔离', () => {
     const access = await api('POST', '/api/sites/demo/access', undefined, { password: 'site-password' });
     expect(access.status).toBe(201);
     expect(
-      (await api('GET', '/api/sites/demo/threads', other, undefined, { 'x-eat-site-access': access.body.accessToken }))
-        .status,
+      (
+        await api('GET', '/api/sites/demo/threads', other, undefined, {
+          'x-eat-site-access': access.body.accessToken,
+        })
+      ).status,
     ).toBe(200);
     await api('PATCH', '/api/sites/demo', owner, { password: 'new-password' });
     expect((await content('/app.js', { version: 1, cookie })).statusCode).toBe(403);
     expect((await content('/?eat_access=' + token, { version: 1 })).statusCode).toBe(403);
     expect(
-      (await api('GET', '/api/sites/demo/threads', other, undefined, { 'x-eat-site-access': access.body.accessToken }))
-        .status,
+      (
+        await api('GET', '/api/sites/demo/threads', other, undefined, {
+          'x-eat-site-access': access.body.accessToken,
+        })
+      ).status,
     ).toBe(403);
   });
 });
@@ -408,7 +432,7 @@ describe('版本评论、区域锚点、@ 与工具接入', () => {
     expect((await api('GET', '/api/sites/demo/threads?versionId=' + v2, owner)).body).toHaveLength(0);
     expect((await api('GET', '/api/sites/demo/threads', owner)).body).toHaveLength(1);
   });
-  it('拒绝其他网站的版本、讨论与不存在的 @ 用户', async () => {
+  it('拒绝其他页面的版本、讨论与不存在的 @ 用户', async () => {
     await api('POST', '/api/sites', owner, { slug: 'second', name: 'Second' });
     const release = await api('POST', '/api/sites/second/releases', owner, { files: files('second') });
     expect(
@@ -457,20 +481,26 @@ describe('版本评论、区域锚点、@ 与工具接入', () => {
     expect(JSON.stringify(args[3])).not.toContain('private comment text');
     expect(JSON.stringify(args[3])).toContain(threadId);
   });
-  it('仅发起人、站点所有者和管理员可解决讨论，发布与回滚不改变讨论状态', async () => {
-    expect((await api('PATCH', `/api/sites/demo/threads/${threadId}`, owner, { status: 'resolved' })).status).toBe(200);
+  it('仅发起人、页面所有者和管理员可解决讨论，发布与回滚不改变讨论状态', async () => {
+    expect(
+      (await api('PATCH', `/api/sites/demo/threads/${threadId}`, owner, { status: 'resolved' })).status,
+    ).toBe(200);
     await api('POST', '/api/sites/demo/activate', owner, { versionId: v2 });
     expect((await api('GET', '/api/sites/demo/threads?status=resolved', owner)).body).toHaveLength(1);
   });
   it('评论登录兑换码只能使用一次，受限会话不能调用平台其他 API，吊销原 Token 后立即失效', async () => {
     const ticket = await api('POST', '/api/sites/demo/comment-ticket', other, {});
-    const session = await api('POST', '/api/sites/demo/comment-session', undefined, { code: ticket.body.code });
+    const session = await api('POST', '/api/sites/demo/comment-session', undefined, {
+      code: ticket.body.code,
+    });
     expect(session.status).toBe(201);
-    expect((await api('POST', '/api/sites/demo/comment-session', undefined, { code: ticket.body.code })).status).toBe(
-      401,
-    );
+    expect(
+      (await api('POST', '/api/sites/demo/comment-session', undefined, { code: ticket.body.code })).status,
+    ).toBe(401);
     const headers = { 'x-eat-comment-session': session.body.token };
-    expect((await api('GET', '/api/sites/demo/mention-users', undefined, undefined, headers)).status).toBe(200);
+    expect((await api('GET', '/api/sites/demo/mention-users', undefined, undefined, headers)).status).toBe(
+      200,
+    );
     expect((await api('GET', '/api/users', undefined, undefined, headers)).status).toBe(401);
     expect(
       (
@@ -503,5 +533,144 @@ describe('版本评论、区域锚点、@ 与工具接入', () => {
       content: 'from MCP',
     })) as any;
     expect(created.comments[0].versionId).toBe(v2);
+  });
+});
+
+describe('评论删除权限与占位', () => {
+  let member: string;
+  const newThread = async (token: string, content = 'to delete') => {
+    const result = await api('POST', '/api/sites/demo/threads', token, {
+      versionId: v1,
+      page: '/deletion',
+      content,
+    });
+    expect(result.status).toBe(201);
+    return result.body;
+  };
+  beforeAll(async () => {
+    member = (
+      await api('POST', '/api/auth/login', undefined, { email: 'other@site.test', password: 'password123' })
+    ).body.token;
+  });
+  it('仅作者、页面所有者和管理员获得删除能力，访客和其他成员不能删除', async () => {
+    await api('PATCH', '/api/sites/demo', owner, { access: 'public' });
+    const t = await newThread(owner);
+    const id = t.comments[0].id;
+    expect(t.comments[0].canDelete).toBe(true);
+    const outsider = (await api('GET', '/api/sites/demo/threads?page=/deletion', member)).body.find(
+      (x: any) => x.id === t.id,
+    );
+    expect(outsider.comments[0].canDelete).toBe(false);
+    const anonymous = (await api('GET', '/api/sites/demo/threads?page=/deletion')).body.find(
+      (x: any) => x.id === t.id,
+    );
+    expect(anonymous.comments[0].canDelete).toBe(false);
+    expect((await api('DELETE', '/api/sites/demo/comments/' + id)).status).toBe(401);
+    expect((await api('DELETE', '/api/sites/demo/comments/' + id, member)).status).toBe(403);
+    expect(
+      (await api('GET', '/api/sites/demo/threads?page=/deletion', owner)).body.find((x: any) => x.id === t.id)
+        .comments[0].content,
+    ).toBe('to delete');
+  });
+  it('作者删除正文与提及，保留别人的回复、版本与锚点', async () => {
+    const t = await newThread(member, 'private deleted body');
+    const id = t.comments[0].id;
+    const reply = await api('POST', `/api/sites/demo/threads/${t.id}/replies`, owner, {
+      versionId: v2,
+      content: 'keep this reply',
+      mentions: [otherId],
+    });
+    const replyId = reply.body.comments[1].id;
+    expect((await api('DELETE', '/api/sites/demo/comments/' + id, member)).status).toBe(200);
+    const listed = (await api('GET', '/api/sites/demo/threads?page=/deletion', owner)).body.find(
+      (x: any) => x.id === t.id,
+    );
+    expect(listed.comments[0]).toMatchObject({ content: '', mentions: [], canDelete: false, versionId: v1 });
+    expect(listed.comments[0].deletedAt).toEqual(expect.any(String));
+    expect(listed.comments[1]).toMatchObject({ id: replyId, content: 'keep this reply', versionId: v2 });
+    expect(listed.anchor).toEqual(t.anchor);
+    expect(JSON.stringify(listed)).not.toContain('private deleted body');
+    expect((await api('DELETE', '/api/sites/demo/comments/' + replyId, member)).status).toBe(403);
+    expect((await api('DELETE', '/api/sites/demo/comments/' + replyId, owner)).status).toBe(200);
+    expect(
+      (await api('GET', '/api/sites/demo/threads?page=/deletion', owner)).body.some(
+        (x: any) => x.id === t.id,
+      ),
+    ).toBe(false);
+    const db = app.get<Db>(DB);
+    const saved = await db.select().from(schema.siteComments).where(eq(schema.siteComments.threadId, t.id));
+    expect(saved).toHaveLength(2);
+    expect(saved.every((c) => c.content === '' && c.mentions.length === 0 && c.deletedAt)).toBeTruthy();
+    const audit = await db
+      .select()
+      .from(schema.auditLogs)
+      .where(and(eq(schema.auditLogs.action, 'site.comment.deleted'), eq(schema.auditLogs.targetId, id)));
+    expect(audit).toHaveLength(1);
+    expect(audit[0].actorId).toBe(otherId);
+    expect(audit[0].meta).toMatchObject({ threadId: t.id });
+    expect(JSON.stringify(audit)).not.toContain('private deleted body');
+  });
+  it('页面所有者与管理员可以删除成员评论，支持受限评论会话', async () => {
+    for (const manager of [owner, admin]) {
+      const t = await newThread(member);
+      const listed = (await api('GET', '/api/sites/demo/threads?page=/deletion', manager)).body.find(
+        (x: any) => x.id === t.id,
+      );
+      expect(listed.comments[0].canDelete).toBe(true);
+      expect((await api('DELETE', '/api/sites/demo/comments/' + t.comments[0].id, manager)).status).toBe(200);
+    }
+    const t = await newThread(member);
+    const ticket = await api('POST', '/api/sites/demo/comment-ticket', member, {});
+    const session = await api('POST', '/api/sites/demo/comment-session', undefined, {
+      code: ticket.body.code,
+    });
+    expect(
+      (
+        await api('DELETE', '/api/sites/demo/comments/' + t.comments[0].id, undefined, undefined, {
+          'x-eat-comment-session': session.body.token,
+        })
+      ).status,
+    ).toBe(200);
+  });
+  it('跨页面、不合法 ID、重复和并发删除不会破坏其他评论', async () => {
+    const t = await newThread(member);
+    const path = '/api/sites/demo/comments/' + t.comments[0].id;
+    expect((await api('DELETE', '/api/sites/second/comments/' + t.comments[0].id, owner)).status).toBe(404);
+    expect((await api('DELETE', '/api/sites/demo/comments/not-a-uuid', owner)).status).toBe(400);
+    const result = await Promise.all([api('DELETE', path, member), api('DELETE', path, member)]);
+    expect(result.map((x) => x.status).sort()).toEqual([200, 404]);
+    expect((await api('DELETE', path, member)).status).toBe(404);
+    const audit = await app
+      .get<Db>(DB)
+      .select()
+      .from(schema.auditLogs)
+      .where(
+        and(
+          eq(schema.auditLogs.action, 'site.comment.deleted'),
+          eq(schema.auditLogs.targetId, t.comments[0].id),
+        ),
+      );
+    expect(audit).toHaveLength(1);
+  });
+  it('密码页面仍需验证访问权限，HTTP MCP 复用相同删除权限', async () => {
+    const t = await newThread(member);
+    const id = t.comments[0].id;
+    await api('PATCH', '/api/sites/demo', owner, { access: 'password', password: 'delete-password' });
+    expect((await api('DELETE', '/api/sites/demo/comments/' + id, member)).status).toBe(403);
+    const access = await api('POST', '/api/sites/demo/access', undefined, { password: 'delete-password' });
+    const tools = app.get(McpToolsService);
+    const actor = (await app.get(AuthService).authenticate(member))!;
+    expect(tools.listTools().some((t) => t.name === 'delete_site_comment')).toBe(true);
+    await expect(
+      tools.call(actor, 'delete_site_comment', { site: 'second', commentId: id }),
+    ).rejects.toThrow();
+    expect(
+      await tools.call(actor, 'delete_site_comment', {
+        site: 'demo',
+        commentId: id,
+        accessToken: access.body.accessToken,
+      }),
+    ).toEqual({ ok: true });
+    await api('PATCH', '/api/sites/demo', owner, { access: 'public' });
   });
 });

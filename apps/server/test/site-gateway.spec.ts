@@ -161,6 +161,6 @@ describe('评论 iframe 的固定域名与版本域名校验', () => {
       'http://demo.sites.example.com',
       'https://demo.sites.example.com/path',
     ])
-      await expect(controller.embedOrigin('demo', { versionId: versionId(1), origin })).rejects.toThrow('网站来源不合法');
+      await expect(controller.embedOrigin('demo', { versionId: versionId(1), origin })).rejects.toThrow('页面来源不合法');
   });
 });

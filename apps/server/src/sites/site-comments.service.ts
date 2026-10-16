@@ -1,5 +1,12 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { and, asc, desc, eq, exists, inArray, isNull } from 'drizzle-orm';
 import type { CreateSiteThread, SiteCommentBody, SiteThread, SiteThreadQuery } from '@eat/shared';
 import type { AuthUser } from '../auth/auth.decorators';
 import { AuditService } from '../audit/audit.service';
@@ -31,7 +38,12 @@ export class SiteCommentsService {
       .orderBy(asc(users.name));
   }
 
-  async list(user: AuthUser | null, slug: string, query: SiteThreadQuery = {}, proof?: string): Promise<SiteThread[]> {
+  async list(
+    user: AuthUser | null,
+    slug: string,
+    query: SiteThreadQuery = {},
+    proof?: string,
+  ): Promise<SiteThread[]> {
     const site = await this.sites.get(slug);
     this.sites.assertView(site, user, proof);
     const threads = await this.db
@@ -41,6 +53,12 @@ export class SiteCommentsService {
       .where(
         and(
           eq(siteThreads.siteId, site.id),
+          exists(
+            this.db
+              .select({ id: siteComments.id })
+              .from(siteComments)
+              .where(and(eq(siteComments.threadId, siteThreads.id), isNull(siteComments.deletedAt))),
+          ),
           query.page ? eq(siteThreads.page, query.page) : undefined,
           query.versionId ? eq(siteThreads.versionId, query.versionId) : undefined,
           query.status ? eq(siteThreads.status, query.status) : undefined,
@@ -78,10 +96,12 @@ export class SiteCommentsService {
             id: c.id,
             authorId: c.authorId,
             authorName,
-            content: c.content,
+            content: c.deletedAt ? '' : c.content,
             versionId: c.versionId,
             versionNumber: number,
-            mentions: c.mentions,
+            mentions: c.deletedAt ? [] : c.mentions,
+            canDelete: !!user && !c.deletedAt && (c.authorId === user.id || this.sites.canManage(site, user)),
+            deletedAt: c.deletedAt?.toISOString() ?? null,
             createdAt: c.createdAt.toISOString(),
           })),
       })),
@@ -110,11 +130,23 @@ export class SiteCommentsService {
     const { thread, comment } = await this.db.transaction(async (tx) => {
       const [thread] = await tx
         .insert(siteThreads)
-        .values({ siteId: site.id, versionId: version.id, page: dto.page, anchor: dto.anchor, authorId: user.id })
+        .values({
+          siteId: site.id,
+          versionId: version.id,
+          page: dto.page,
+          anchor: dto.anchor,
+          authorId: user.id,
+        })
         .returning();
       const [comment] = await tx
         .insert(siteComments)
-        .values({ threadId: thread.id, versionId: version.id, authorId: user.id, content: dto.content, mentions })
+        .values({
+          threadId: thread.id,
+          versionId: version.id,
+          authorId: user.id,
+          content: dto.content,
+          mentions,
+        })
         .returning();
       return { thread, comment };
     });
@@ -148,6 +180,39 @@ export class SiteCommentsService {
     this.notify(site, user, threadId, comment.id, version.number, mentions);
     return (await this.list(user, slug, { page: thread.page }, proof)).find((t) => t.id === threadId)!;
   }
+  async remove(user: AuthUser, slug: string, commentId: string, proof?: string) {
+    const site = await this.sites.get(slug);
+    this.sites.assertView(site, user, proof);
+    const [comment] = await this.db
+      .select({
+        id: siteComments.id,
+        threadId: siteComments.threadId,
+        authorId: siteComments.authorId,
+        deletedAt: siteComments.deletedAt,
+      })
+      .from(siteComments)
+      .innerJoin(siteThreads, eq(siteComments.threadId, siteThreads.id))
+      .where(and(eq(siteThreads.siteId, site.id), eq(siteComments.id, commentId)))
+      .limit(1);
+    if (!comment || comment.deletedAt) throw new NotFoundException('评论不存在或已删除');
+    if (comment.authorId !== user.id && !this.sites.canManage(site, user))
+      throw new ForbiddenException('仅评论作者、页面所有者或管理员可以删除评论');
+    // 清除正文与提及，只保留占位和回复关系；并发删除仅有一次成功。
+    const deleted = await this.db
+      .update(siteComments)
+      .set({ content: '', mentions: [], deletedAt: new Date() })
+      .where(and(eq(siteComments.id, commentId), isNull(siteComments.deletedAt)))
+      .returning({ id: siteComments.id });
+    if (!deleted.length) throw new NotFoundException('评论不存在或已删除');
+    await this.audit.record({
+      actorId: user.id,
+      action: 'site.comment.deleted',
+      targetType: 'site_comment',
+      targetId: commentId,
+      meta: { siteId: site.id, threadId: comment.threadId },
+    });
+    return { ok: true };
+  }
   private async thread(site: SiteRow, id: string) {
     const [thread] = await this.db
       .select()
@@ -162,7 +227,7 @@ export class SiteCommentsService {
     this.sites.assertView(site, user, proof);
     const thread = await this.thread(site, id);
     if (!this.sites.canManage(site, user) && thread.authorId !== user.id)
-      throw new ForbiddenException('仅讨论发起人、网站所有者或管理员可以变更状态');
+      throw new ForbiddenException('仅讨论发起人、页面所有者或管理员可以变更状态');
     await this.db.update(siteThreads).set({ status }).where(eq(siteThreads.id, id));
     await this.audit.record({
       actorId: user.id,
@@ -185,22 +250,31 @@ export class SiteCommentsService {
     void (async () => {
       for (const userId of mentions) {
         if (userId === author.id) continue;
-        const [profile] = await this.db.select().from(helperProfiles).where(eq(helperProfiles.userId, userId)).limit(1);
+        const [profile] = await this.db
+          .select()
+          .from(helperProfiles)
+          .where(eq(helperProfiles.userId, userId))
+          .limit(1);
         if (!profile?.webhookUrl) continue;
         const url = `${await this.runtime.platform()}/sites/${site.slug}?thread=${threadId}`;
         const card = {
-          header: { title: { tag: 'plain_text', content: `${author.name} 在网站评论中 @ 了你` }, template: 'blue' },
+          header: {
+            title: { tag: 'plain_text', content: `${author.name} 在页面评论中 @ 了你` },
+            template: 'blue',
+          },
           elements: [
             {
               tag: 'div',
               text: {
                 tag: 'plain_text',
-                content: `${site.name} · 评论浏览版本 v${version}\n登录 EAT 并通过网站访问验证后查看讨论。`,
+                content: `${site.name} · 评论浏览版本 v${version}\n登录 EAT 并通过页面访问验证后查看讨论。`,
               },
             },
             {
               tag: 'action',
-              actions: [{ tag: 'button', text: { tag: 'plain_text', content: '查看讨论' }, type: 'primary', url }],
+              actions: [
+                { tag: 'button', text: { tag: 'plain_text', content: '查看讨论' }, type: 'primary', url },
+              ],
             },
           ],
         };

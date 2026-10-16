@@ -85,7 +85,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/db', label: '数据库', icon: Database },
       { to: '/apps', label: '应用', icon: Rocket },
-      { to: '/sites', label: '静态网站', icon: LayoutGrid },
+      { to: '/sites', label: '页面', icon: LayoutGrid },
     ],
   },
   {

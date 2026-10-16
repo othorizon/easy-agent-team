@@ -95,24 +95,24 @@ export function siteComment(
 }
 
 export function registerSiteCommands(program: Command): void {
-  const site = program.command('site').description('静态网站：无需审批发布、版本、访问控制与评论');
+  const site = program.command('site').description('页面：无需审批发布、版本、访问控制与评论');
   site
     .command('list')
-    .description('列出网站')
+    .description('列出页面')
     .action(() => runSiteTool('list_sites', {}));
   site
     .command('create <slug>')
-    .description('创建网站并分配域名，默认仅登录用户可访问')
-    .option('--name <name>', '网站名称，默认同 slug')
+    .description('创建页面并分配域名，默认仅登录用户可访问')
+    .option('--name <name>', '页面名称，默认同 slug')
     .option('--description <text>', '说明')
     .option('--access <mode>', 'authenticated / public / password', 'authenticated')
-    .option('--password <password>', '网站访问密码')
+    .option('--password <password>', '页面访问密码')
     .option('--spa', '启用 SPA 路由回退')
     .action((slug, o) => runSiteTool('create_site', { ...o, slug, name: o.name ?? slug }));
   site
     .command('update <site>')
-    .description('更新网站设置；修改密码使旧免输密码链接失效')
-    .option('--name <name>', '网站名称')
+    .description('更新页面设置；修改密码使旧免输密码链接失效')
+    .option('--name <name>', '页面名称')
     .option('--description <text>', '说明')
     .option('--access <mode>', 'authenticated / public / password')
     .option('--password <password>', '新访问密码')
@@ -127,7 +127,7 @@ export function registerSiteCommands(program: Command): void {
   site
     .command('versions <site>')
     .description('列出历史版本及固定访问地址')
-    .option('--access-token <token>', '密码验证返回的网站访问凭据')
+    .option('--access-token <token>', '密码验证返回的页面访问凭据')
     .action((site, o) => runSiteTool('list_site_versions', { site, ...o }));
   site
     .command('activate <site> <version-id>')
@@ -139,7 +139,7 @@ export function registerSiteCommands(program: Command): void {
     .action((site) => runSiteTool('create_site_share_link', { site }));
   site
     .command('unlock <site> <password>')
-    .description('验证网站密码，获取仅限该网站的 accessToken')
+    .description('验证页面密码，获取仅限该页面的 accessToken')
     .action((site, password) => runSiteTool('unlock_site', { site, password }));
   site
     .command('comments <site>')
@@ -147,7 +147,7 @@ export function registerSiteCommands(program: Command): void {
     .option('--page <path>', '页面标识')
     .option('--version-id <id>', '讨论发起版本')
     .option('--status <status>', 'open / resolved')
-    .option('--access-token <token>', '网站访问凭据')
+    .option('--access-token <token>', '页面访问凭据')
     .action((site, o) => runSiteTool('list_site_comments', { site, ...o }));
   site
     .command('comment <site> <content>')
@@ -157,13 +157,18 @@ export function registerSiteCommands(program: Command): void {
     .option('--thread <id>', '回复的讨论 ID')
     .option('--anchor <json>', '元素或区域锚点 JSON')
     .option('--mention <user-id...>', '@ 的用户 ID')
-    .option('--access-token <token>', '网站访问凭据')
+    .option('--access-token <token>', '页面访问凭据')
     .action(siteComment);
+  site
+    .command('delete-comment <site> <comment-id>')
+    .description('删除一条评论或回复，仅作者、页面所有者或管理员可操作，不影响其他人的回复')
+    .option('--access-token <token>', '页面访问凭据')
+    .action((site, commentId, o) => runSiteTool('delete_site_comment', { site, commentId, ...o }));
   site
     .command('resolve <site> <thread-id>')
     .description('标记讨论已解决')
     .option('--reopen', '重新打开')
-    .option('--access-token <token>', '网站访问凭据')
+    .option('--access-token <token>', '页面访问凭据')
     .action((site, threadId, o) =>
       runSiteTool('set_site_thread_status', {
         site,
@@ -175,6 +180,6 @@ export function registerSiteCommands(program: Command): void {
   site
     .command('mention-users <site>')
     .description('列出可 @ 的用户及 ID')
-    .option('--access-token <token>', '网站访问凭据')
+    .option('--access-token <token>', '页面访问凭据')
     .action((site, o) => runSiteTool('list_site_mention_users', { site, ...o }));
 }

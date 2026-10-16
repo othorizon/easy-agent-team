@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 27;
+export const PLATFORM_GUIDE_VERSION = 28;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -64,13 +64,13 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 
 部署状态与历史实时来自部署后台：\`status\` 取值是 \`queued\`(排队中) / \`running\`(构建中) / \`done\`(成功) / \`error\`(失败) / \`cancelled\`(已取消) / \`archived\`(构建记录已被清理)。\`eat app deployments <slug>\` 列出的是还保留着的最近 10 次构建——**其中可能有绕开平台、在部署后台直接触发的部署**（\`platform\` 为 null），也可能有别人从控制台按钮或远程 MCP 触发的部署（\`platform.source=console\` 或 \`remote\`），排查问题时要把它们算进来；加 \`--all\` 看平台侧的完整历史。
 
-### 静态网站：直接推送产物与处理评论
+### 页面：直接推送产物与处理评论
 
-静态网站发布无需审批，管理员需先在系统设置中配置并启用（私有 OSS、域名与 HTTPS；共享入口由部署后台自动配置）。未启用时 CLI、MCP 和控制台均无法发布。先用 \`eat site create <slug>\` / \`create_site\` 建站，再用 \`eat site push <slug> <目录或 ZIP>\` / \`publish_site\` 上传构建好的静态文件，根目录需包含 index.html。每次最多 2000 个文件、50 MiB，历史发布产物完整保留；站点固定域名直接展示当前版本、地址栏不跳转，带版本域名用于固定快照，用 \`activate_site_version\` 可回滚。
+页面发布无需审批，管理员需先在系统设置中配置并启用（私有 OSS、域名与 HTTPS；共享入口由部署后台自动配置）。未启用时 CLI、MCP 和控制台均无法发布。先用 \`eat site create <slug>\` / \`create_site\` 创建页面，再用 \`eat site push <slug> <目录或 ZIP>\` / \`publish_site\` 上传构建好的静态文件，根目录需包含 index.html。每次最多 2000 个文件、50 MiB，历史发布产物完整保留；页面固定域名直接展示当前版本、地址栏不跳转，带版本域名用于固定快照，用 \`activate_site_version\` 可回滚。
 
-默认仅 EAT 登录用户访问，可设为 public 或 password。密码网站先 \`unlock_site\` 验证，后续调用携带返回的 accessToken；\`create_site_share_link\` 返回免输密码链接，它只授予网站访问能力，不代表用户身份。发表评论或回复始终需要 EAT 登录。
+默认仅 EAT 登录用户访问，可设为 public 或 password。密码页面先 \`unlock_site\` 验证，后续调用携带返回的 accessToken；\`create_site_share_link\` 返回免输密码链接，它只授予页面访问能力，不代表用户身份。发表评论或回复始终需要 EAT 登录。
 
-处理反馈用 \`list_site_comments\`（支持 page / versionId / status），每条评论与回复均附实际浏览版本，讨论还附元素或区域锚点及原版本链接。创建或回复时必须传实际查看的 versionId，不要拿当前最新版代替旧页面的版本。\`list_site_mention_users\` 查询用户 ID，在 mentions 中指定即可 @；配置过个人飞书 webhook 的用户会收到事件通知。修复后发布新版、回复说明，再按需 \`set_site_thread_status\` 标记解决；发布不会自动解决旧评论。
+处理反馈用 \`list_site_comments\`（支持 page / versionId / status），每条评论与回复均附实际浏览版本，讨论还附元素或区域锚点及原版本链接。创建或回复时必须传实际查看的 versionId，不要拿当前最新版代替旧页面的版本。\`list_site_mention_users\` 查询用户 ID，在 mentions 中指定即可 @；配置过个人飞书 webhook 的用户会收到事件通知。修复后发布新版、回复说明，再按需 \`set_site_thread_status\` 标记解决；发布不会自动解决旧评论。删除评论用 \`delete_site_comment\` / \`eat site delete-comment <site> <comment-id>\`，仅评论作者、页面所有者或管理员可操作；清除正文并保留其他人的回复。
 
 ### MCP 配置（连团队内部的 MCP 服务）
 

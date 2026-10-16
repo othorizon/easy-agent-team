@@ -301,7 +301,7 @@ export class SiteInfrastructure {
     await client.siteRequest('settings.updateTraefikFile', { ...query, traefikConfig: config });
     const actual = await client.siteRequest<string | null>('settings.readTraefikFile', undefined, query);
     if (actual?.trim() !== config.trim())
-      throw new SiteSetupError('站点路由写入后校验失败，请检查 Traefik 配置写入权限');
+      throw new SiteSetupError('页面路由写入后校验失败，请检查 Traefik 配置写入权限');
   }
   async withdraw(client: DokployClient, row: SiteSettingRow) {
     await this.writeRoute(

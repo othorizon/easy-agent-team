@@ -124,6 +124,8 @@ export interface SiteComment {
   versionId: string;
   versionNumber: number;
   mentions: string[];
+  canDelete: boolean;
+  deletedAt: string | null;
   createdAt: string;
 }
 export interface SiteThread {

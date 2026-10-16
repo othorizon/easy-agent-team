@@ -536,7 +536,7 @@ export class DokployClient {
     );
   }
 
-  /** 静态站点管理：错误只带端点与状态码，禁止把证书、密钥和环境变量回显到控制台。 */
+  /** 页面发布管理：错误只带端点与状态码，禁止把证书、密钥和环境变量回显到控制台。 */
   async siteRequest<T>(endpoint: string, body?: unknown, query?: Record<string, string>): Promise<T> {
     const url = new URL(`${this.base}/${endpoint}`);
     for (const [key, value] of Object.entries(query ?? {})) url.searchParams.set(key, value);
