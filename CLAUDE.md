@@ -10,6 +10,8 @@ easy-agent-team：面向团队的 AI 能力集中管理与分发平台（Skill /
 
 **已知环境行为**：云端容器会不定期回收后台进程（postgres、node server 都可能消失，无 OOM、日志无 shutdown 记录）——重跑 `scripts/dev-db.sh start` 和重启 server 即可，不必排查。
 
+新增独立静态网站发布：共享访问网关 + 私有 OSS / 持久化本地存储，无需审批、不创建 Dokploy 应用；保留全部不可变发布版本，默认仅登录，支持公开与密码分享。整页/元素/区域评论记录浏览版本，@ 复用个人飞书通知。三端入口为控制台「静态网站」、`eat site` 和 13 个同名 MCP 工具，配置与边界见 `docs/static-sites.md`、产品决策 68。CLI 0.6.0，平台指南 25。
+
 ## 常用命令
 
 ```bash
