@@ -122,7 +122,7 @@ export class Api {
     return new Api(cred.serverUrl, cred.token);
   }
 
-  private async send(method: string, url: string, body?: unknown): Promise<Response> {
+  private async send(method: string, url: string, body?: unknown, headers: Record<string, string> = {}): Promise<Response> {
     try {
       return await fetch(url, {
         method,
@@ -130,6 +130,7 @@ export class Api {
           ...(body === undefined ? {} : { 'content-type': 'application/json' }),
           ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
           [CLIENT_HEADER]: clientTag,
+          ...headers,
         },
         body: body === undefined ? undefined : JSON.stringify(body),
         // 跳转自己处理：交给 fetch 会静默丢掉 Authorization（跨源）、还会把 301/302 的 POST 降级成 GET
@@ -147,10 +148,10 @@ export class Api {
     }
   }
 
-  async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  async request<T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<T> {
     let url = `${this.serverUrl}${path}`;
     let upgraded = false;
-    let res = await this.send(method, url, body);
+    let res = await this.send(method, url, body, headers);
 
     for (let hop = 0; REDIRECT_STATUS.has(res.status); hop++) {
       const location = res.headers.get('location');
@@ -174,7 +175,7 @@ export class Api {
       url = to.toString();
       // 方法与 body 原样重发：这里跟的只是同主机的基础设施跳转，
       // 按 fetch 规范把 301/302 的 POST 降级成 GET，只会得到一句 Cannot GET /api/...
-      res = await this.send(method, url, body);
+      res = await this.send(method, url, body, headers);
     }
 
     if (upgraded) {

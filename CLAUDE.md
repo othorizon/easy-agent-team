@@ -10,6 +10,8 @@ easy-agent-team：面向团队的 AI 能力集中管理与分发平台（Skill /
 
 **已知环境行为**：云端容器会不定期回收后台进程（postgres、node server 都可能消失，无 OOM、日志无 shutdown 记录）——重跑 `scripts/dev-db.sh start` 和重启 server 即可，不必排查。
 
+新增独立静态网站发布：共享访问网关 + 私有 OSS / 持久化本地存储，无需审批、不创建 Dokploy 应用；保留全部不可变发布版本，默认仅登录，支持公开与密码分享。整页/元素/区域评论记录浏览版本，@ 复用个人飞书通知。三端入口为控制台「静态网站」、`eat site` 和 13 个同名 MCP 工具，配置与边界见 `docs/static-sites.md`、产品决策 68。CLI 0.6.0，平台指南 25。
+
 ## 常用命令
 
 ```bash
@@ -78,3 +80,5 @@ node scripts/demo/seed-demo.mjs  # 演示数据（截图 / 录屏用，见 scrip
 | P1 联调平台 AI | api_base_url / api_key / model（OpenAI 范式） |
 | P2 联调数据库账号分配 | 团队测试用 MySQL/PG 实例 |
 | P3 联调 Dokploy | ~~Dokploy API 地址与 token~~ 云端会话可用 `scripts/dev-dokploy.sh` 自建真机实例，不必等用户提供；只有要对**用户那套** Dokploy 验证时才需要 |
+
+静态网站控制台启用（决策 69）：配置存 `site_setting`，不再读取 `EAT_SITES_*`。默认关闭，系统设置支持 AliDNS / Cloudflare、已有 Dokploy 证书或 DNS resolver；EAT 通过 Dokploy Traefik 文件 API 写专用共享路由，OSS/DNS 实测与 HTTPS 精确探针全部通过后才置 enabled。失败回滚路由，停用保留历史；PostgreSQL 会话 advisory lock 保护多实例启停，中断标 failed。旧本地历史固定读取 ./data/static-sites，新发布仅 OSS。测试用 TestSiteStorage 替代本地存储，不恢复 env 后门。CLI 0.6.1 / 指南 26。详见 docs/static-sites.md。

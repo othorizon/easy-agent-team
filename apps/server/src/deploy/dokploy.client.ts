@@ -84,6 +84,8 @@ export interface DokployApplicationDetail {
   buildType: string;
   customGitUrl: string;
   customGitBranch: string;
+  serverId: string | null;
+  environmentId: string;
 }
 
 /** 自定义 Git 源（决策 31：平台自建的应用一律走这条，不走 GitHub/GitLab 等托管商集成） */
@@ -347,7 +349,11 @@ export class DokployClient {
       });
       // 4000+ 是 Dokploy 自己的拒绝码（参数非法 / 无权限），要如实报出来而不是当成正常收尾
       ws.on('close', (code: number, reason: Buffer) =>
-        finish(code >= 4000 ? new Error(`部署后台拒绝读取（${code} ${reason.toString() || '无权限或参数非法'}）`) : undefined),
+        finish(
+          code >= 4000
+            ? new Error(`部署后台拒绝读取（${code} ${reason.toString() || '无权限或参数非法'}）`)
+            : undefined,
+        ),
       );
       ws.on('error', (err: Error) => finish(err));
     });
@@ -465,6 +471,8 @@ export class DokployClient {
       buildType: str(raw.buildType),
       customGitUrl: str(raw.customGitUrl),
       customGitBranch: str(raw.customGitBranch),
+      serverId: str(raw.serverId) || null,
+      environmentId: str(raw.environmentId),
     };
   }
 
@@ -526,6 +534,30 @@ export class DokployClient {
       },
       '在部署后台更新域名失败',
     );
+  }
+
+  /** 静态站点管理：错误只带端点与状态码，禁止把证书、密钥和环境变量回显到控制台。 */
+  async siteRequest<T>(endpoint: string, body?: unknown, query?: Record<string, string>): Promise<T> {
+    const url = new URL(`${this.base}/${endpoint}`);
+    for (const [key, value] of Object.entries(query ?? {})) url.searchParams.set(key, value);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: body === undefined ? 'GET' : 'POST',
+        headers: this.headers(),
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        signal: AbortSignal.timeout(25_000),
+      });
+    } catch {
+      throw new Error(`Dokploy ${endpoint} 连接失败或超时`);
+    }
+    if (!res.ok) throw new Error(`Dokploy ${endpoint} 失败（HTTP ${res.status}），请检查 API 权限与版本支持`);
+    const text = await res.text();
+    try {
+      return (text ? JSON.parse(text) : undefined) as T;
+    } catch {
+      throw new Error(`Dokploy ${endpoint} 返回格式无效`);
+    }
   }
 
   private async postJson(url: string, body: unknown, failNote: string): Promise<unknown> {

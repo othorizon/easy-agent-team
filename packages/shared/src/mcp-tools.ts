@@ -1,4 +1,5 @@
 import { LOG_TAIL_DEFAULT, LOG_TAIL_MAX, STATIC_CONTAINER_PORT } from './deploy.js';
+import { buildSiteTools } from './site-tools.js';
 
 /**
  * eat 自身能力的 MCP 工具清单（三端唯一事实源）。
@@ -379,5 +380,6 @@ export function buildEatTools(mode: EatToolMode): EatToolDef[] {
     ...dbTools(),
     ...appTools(),
     ...deployTools(),
+    ...buildSiteTools(),
   ];
 }
