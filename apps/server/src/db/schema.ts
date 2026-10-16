@@ -9,6 +9,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
+import type { SiteAnchor } from '@eat/shared';
 
 export const users = pgTable('user', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -23,6 +24,71 @@ export const users = pgTable('user', {
     .default('active'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** 静态站点：访问策略属于站点，所有历史发布共用；文件快照保持不可变。 */
+export const sites = pgTable('site', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  slug: text('slug').notNull().unique(),
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  ownerId: uuid('owner_id').notNull().references(() => users.id),
+  access: text('access', { enum: ['authenticated', 'public', 'password'] }).notNull().default('authenticated'),
+  passwordHash: text('password_hash'),
+  accessRevision: integer('access_revision').notNull().default(1),
+  spa: boolean('spa').notNull().default(false),
+  currentVersionId: uuid('current_version_id'),
+  nextVersion: integer('next_version').notNull().default(1),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const siteVersions = pgTable('site_version', {
+  id: uuid('id').primaryKey(),
+  siteId: uuid('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
+  number: integer('number').notNull(),
+  message: text('message').notNull().default(''),
+  publisherId: uuid('publisher_id').notNull().references(() => users.id),
+  fileCount: integer('file_count').notNull(),
+  totalBytes: integer('total_bytes').notNull(),
+  /** 存储位置固化在版本上，切换存储配置不改变旧版本的查找方式。 */
+  storage: text('storage', { enum: ['local', 'oss'] }).notNull(),
+  manifest: jsonb('manifest').$type<Record<string, { size: number; type: string }>>().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('site_version_number_idx').on(t.siteId, t.number)]);
+
+/** 一次性登录兑换码与受限会话，始终绑定站点、域名和原始平台 Token。 */
+export const siteSessions = pgTable('site_session', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  siteId: uuid('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
+  tokenHash: text('token_hash').notNull().unique(),
+  purpose: text('purpose', { enum: ['ticket', 'view', 'comment', 'comment_ticket'] }).notNull(),
+  tokenId: uuid('token_id').references(() => apiTokens.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  host: text('host').notNull().default(''),
+  returnPath: text('return_path').notNull().default('/'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+}, (t) => [index('site_session_expiry_idx').on(t.expiresAt)]);
+
+export const siteThreads = pgTable('site_thread', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  siteId: uuid('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
+  versionId: uuid('version_id').notNull().references(() => siteVersions.id),
+  page: text('page').notNull(),
+  anchor: jsonb('anchor').$type<SiteAnchor>().notNull(),
+  authorId: uuid('author_id').notNull().references(() => users.id),
+  status: text('status', { enum: ['open', 'resolved'] }).notNull().default('open'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('site_thread_page_idx').on(t.siteId, t.page)]);
+
+export const siteComments = pgTable('site_comment', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  threadId: uuid('thread_id').notNull().references(() => siteThreads.id, { onDelete: 'cascade' }),
+  versionId: uuid('version_id').notNull().references(() => siteVersions.id),
+  authorId: uuid('author_id').notNull().references(() => users.id),
+  content: text('content').notNull(),
+  mentions: jsonb('mentions').$type<string[]>().notNull().default([]),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('site_comment_thread_idx').on(t.threadId)]);
 
 export const apiTokens = pgTable(
   'api_token',

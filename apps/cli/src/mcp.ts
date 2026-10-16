@@ -8,6 +8,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { buildEatTools, CLI_VERSION, resolveDbInstance, STATIC_CONTAINER_PORT } from '@eat/shared';
 import type { AppInfo, DbInstanceInfo } from '@eat/shared';
 import { Api, ApiError, setClientTag } from './client.js';
+import { isSiteTool, siteToolRequest } from '@eat/shared';
 import { takeUpdateNoticeForMcp } from './update.js';
 
 /** 工具定义在 packages/shared（决策 55：CLI stdio 与平台 HTTP 端点共用一份，避免描述漂移） */
@@ -94,6 +95,10 @@ export async function startMcpServer(): Promise<void> {
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const args = (req.params.arguments ?? {}) as Record<string, unknown>;
     try {
+      if (isSiteTool(req.params.name)) {
+        const request = siteToolRequest(req.params.name, args);
+        return jsonResult(await api.request(request.method, request.path, request.body, request.headers));
+      }
       switch (req.params.name) {
         case 'list_env_variables': {
           const catalog = await api.request<Array<{ environment: { slug: string } }>>('GET', '/api/catalog');

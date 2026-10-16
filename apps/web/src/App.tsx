@@ -47,6 +47,8 @@ import { SkillDetailPage } from './pages/SkillDetail';
 import { SkillsPage } from './pages/Skills';
 import { TemplatesPage } from './pages/Templates';
 import { UsersPage } from './pages/Users';
+import { SitesPage, SiteDetailPage, SiteAuthorizePage } from './pages/Sites';
+import { SiteCommentPanelPage, SiteCommentLoginPage } from './pages/SiteComments';
 
 interface NavItem {
   to: string;
@@ -83,6 +85,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/db', label: '数据库', icon: Database },
       { to: '/apps', label: '应用', icon: Rocket },
+      { to: '/sites', label: '静态网站', icon: LayoutGrid },
     ],
   },
   {
@@ -276,6 +279,11 @@ export function App() {
       <Route path="/db" element={<RequireAuth><DbsPage /></RequireAuth>} />
       <Route path="/db/:id" element={<RequireAuth><DbAssignmentDetailPage /></RequireAuth>} />
       <Route path="/apps" element={<RequireAuth><AppsPage /></RequireAuth>} />
+      <Route path="/sites" element={<RequireAuth><SitesPage /></RequireAuth>} />
+      <Route path="/sites/authorize" element={<RequireAuth><SiteAuthorizePage /></RequireAuth>} />
+      <Route path="/sites/:slug" element={<RequireAuth><SiteDetailPage /></RequireAuth>} />
+      <Route path="/site-comments/:slug" element={<SiteCommentPanelPage />} />
+      <Route path="/site-comment-login" element={<RequireAuth><SiteCommentLoginPage /></RequireAuth>} />
       <Route path="/requests" element={<RequireAuth><RequestsPage /></RequireAuth>} />
       <Route path="/help" element={<RequireAuth><HelpPage /></RequireAuth>} />
       <Route path="/help/:id" element={<RequireAuth><HelpDetailPage /></RequireAuth>} />

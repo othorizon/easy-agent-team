@@ -20,6 +20,7 @@ import { NotifyModule } from './notify/notify.module';
 import { SkillsModule } from './skills/skills.module';
 import { TemplatesModule } from './templates/templates.module';
 import { UsersModule } from './users/users.module';
+import { SitesModule } from './sites/sites.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { UsersModule } from './users/users.module';
     McpServerModule,
     DbsModule,
     DeployModule,
+    SitesModule,
   ],
   controllers: [HealthController],
   providers: [
