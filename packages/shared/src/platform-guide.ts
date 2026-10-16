@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 30;
+export const PLATFORM_GUIDE_VERSION = 31;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -66,9 +66,19 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 
 ### Folio：发布、分享与评论
 
-Folio 用于发布和分享网页、演示与报告，支持版本管理和评论。发布无需审批，管理员需先在系统设置中配置并启用（私有 OSS、域名与 HTTPS；共享入口由部署后台自动配置）。未启用时 CLI、MCP 和控制台均无法发布。先用 \`eat folio create <slug>\` / \`create_folio\` 创建 Folio，再用 \`eat folio push <slug> <目录或 ZIP>\` / \`publish_folio\` 上传构建好的静态文件，根目录需包含 index.html。每次最多 2000 个文件、50 MiB，历史发布产物完整保留；Folio 固定域名直接展示当前版本、地址栏不跳转，带版本域名用于固定快照，用 \`activate_folio_version\` 可回滚。
+Folio 用于发布和分享网页、演示与报告，支持版本管理和评论。发布无需审批，管理员需先在系统设置中配置并启用（私有 OSS、域名与 HTTPS；共享入口由部署后台自动配置）。未启用时 CLI、MCP 和控制台均无法发布。
 
-MCP 中通过 folio 参数指定 Folio 标识。默认仅 EAT 登录用户访问，可设为 public 或 password。密码访问的 Folio 先 \`unlock_folio\` 验证，后续调用携带返回的 accessToken；\`create_folio_share_link\` 返回免输密码链接，它只授予 Folio 访问能力，不代表用户身份。发表评论或回复始终需要 EAT 登录。
+**发布前询问访问权限**：使用 Folio 发布时，先询问用户“这个 Folio 希望谁可以访问？”，并说明三种选择：
+
+- \`authenticated\`：仅 EAT 登录用户可访问。
+- \`public\`：任何人可访问，无需登录。
+- \`password\`：凭访问密码查看；选择此项后，还需确认访问密码的设置。
+
+用户尚未明确选择时，先等待答复，再创建 Folio、修改访问权限或执行发布；不要把平台默认的 \`authenticated\` 当作用户已经选择，也不要自行设为公开。用户已在本次任务中明确选择时，按其选择执行，无需重复询问。发布已有 Folio 的新版本时，先用 \`eat folio list\` / \`list_folios\` 查看并告知当前权限，再询问沿用还是调整；用户确认沿用时保留原设置，不重设已有密码。
+
+明确访问权限后，用 \`eat folio create <slug> --access <模式>\` / \`create_folio\`（传 \`access\`）创建 Folio；已有 Folio 需要调整权限时用 \`eat folio update <folio> --access <模式>\` / \`update_folio\`，密码模式需按用户确认设置 \`password\`。再用 \`eat folio push <slug> <目录或 ZIP>\` / \`publish_folio\` 上传构建好的静态文件，根目录需包含 index.html。每次最多 2000 个文件、50 MiB，历史发布产物完整保留；Folio 固定域名直接展示当前版本、地址栏不跳转，带版本域名用于固定快照，用 \`activate_folio_version\` 可回滚。
+
+MCP 中通过 folio 参数指定 Folio 标识。读取密码访问的 Folio 时，先 \`unlock_folio\` 验证，后续调用携带返回的 accessToken；\`create_folio_share_link\` 返回免输密码链接，它只授予 Folio 访问能力，不代表用户身份。发表评论或回复始终需要 EAT 登录。
 
 处理反馈用 \`list_folio_comments\`（支持 page / versionId / status），每条评论与回复均附实际浏览版本，讨论还附元素或区域锚点及原版本链接。创建或回复时必须传实际查看的 versionId，不要拿当前最新版代替旧 Folio 的版本。\`list_folio_mention_users\` 查询用户 ID，在 mentions 中指定即可 @；配置过个人飞书 webhook 的用户会收到事件通知。修复后发布新版、回复说明，再按需 \`set_folio_thread_status\` 标记解决；发布不会自动解决旧评论。删除评论用 \`delete_folio_comment\` / \`eat folio delete-comment <folio> <comment-id>\`，仅评论作者、Folio 所有者或管理员可操作；清除正文并保留其他人的回复。
 

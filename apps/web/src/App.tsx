@@ -1,6 +1,7 @@
 import {
   Database,
   Download,
+  Files,
   KeyRound,
   LayoutGrid,
   LifeBuoy,
@@ -86,7 +87,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/db', label: '数据库', icon: Database },
       { to: '/apps', label: '应用', icon: Rocket },
-      { to: '/folios', label: 'Folio', icon: LayoutGrid },
+      { to: '/folios', label: 'Folio', icon: Files },
     ],
   },
   {
@@ -115,7 +116,7 @@ function Brand() {
   return (
     <Link to="/" className="flex items-center gap-2 px-2 outline-none">
       <BrandIcon className="size-7 shrink-0" />
-      <span className="text-[15px] font-semibold tracking-tight">easy-agent-team</span>
+      <span className="text-[15px] font-semibold tracking-tight">EASY AGENT TEAM</span>
     </Link>
   );
 }
