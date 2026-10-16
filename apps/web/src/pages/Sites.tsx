@@ -7,6 +7,7 @@ import {
   SITE_MAX_FILES,
   siteFileSchema,
   type SiteFile,
+  type SiteCapabilityInfo,
   type SiteInfo,
   type SiteVersion,
 } from '@eat/shared';
@@ -24,7 +25,16 @@ const modes: Record<string, string> = { authenticated: '仅登录用户', public
 
 export function SitesPage() {
   const cache = useQueryClient();
-  const list = useQuery({ queryKey: ['sites'], queryFn: () => api<SiteInfo[]>('GET', '/api/sites') });
+  const capability = useQuery({
+    queryKey: ['sites-capability'],
+    queryFn: () => api<SiteCapabilityInfo>('GET', '/api/sites/capability'),
+    refetchInterval: 15000,
+  });
+  const list = useQuery({
+    queryKey: ['sites'],
+    queryFn: () => api<SiteInfo[]>('GET', '/api/sites'),
+    enabled: capability.data?.enabled === true,
+  });
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [access, setAccess] = useState('authenticated');
@@ -33,9 +43,28 @@ export function SitesPage() {
       <PageHeader
         title="静态网站"
         description="推送静态文件即可发布，自动分配域名，保留历史版本。"
-        actions={<Button onClick={() => setCreating(!creating)}>创建网站</Button>}
+        actions={
+          <Button disabled={!capability.data?.enabled} onClick={() => setCreating(!creating)}>
+            创建网站
+          </Button>
+        }
       />
-      {creating && (
+      {capability.data && !capability.data.enabled && (
+        <Card>
+          <CardContent className="space-y-2 pt-5">
+            <p>静态网站尚未启用，或正在检查配置。</p>
+            <p className="text-sm text-muted-foreground">
+              请管理员在系统设置中配置 OSS、域名和 HTTPS，并完成启用检查。已有文件、历史版本与评论会保留。
+            </p>
+          </CardContent>
+        </Card>
+      )}
+      {capability.error && (
+        <p role="alert" className="text-destructive">
+          {capability.error.message}
+        </p>
+      )}
+      {creating && capability.data?.enabled && (
         <Card>
           <CardContent className="pt-5">
             <form
@@ -112,34 +141,35 @@ export function SitesPage() {
           {list.error.message}
         </p>
       )}
-      {!list.isLoading && !list.error && !list.data?.length && (
+      {capability.data?.enabled && !list.isLoading && !list.error && !list.data?.length && (
         <p className="py-12 text-center text-muted-foreground">创建网站后，即可上传目录或 ZIP 发布。</p>
       )}
       <div className="grid gap-4 sm:grid-cols-2">
-        {list.data?.map((s) => (
-          <Card key={s.id}>
-            <CardContent className="space-y-3 pt-5">
-              <div className="flex items-center justify-between gap-2">
-                <Link to={'/sites/' + s.slug} className="font-semibold hover:text-primary">
-                  {s.name}
-                </Link>
-                <Badge variant="secondary">{modes[s.access]}</Badge>
-              </div>
-              <p className="text-sm text-muted-foreground">{s.description || s.slug}</p>
-              <a
-                className="break-all text-sm text-primary hover:underline"
-                href={s.url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {s.url}
-              </a>
-              <div className="text-xs text-muted-foreground">
-                {s.currentVersionId ? '已发布' : '尚未发布'} · {s.canManage ? '你可以管理' : '可查看与评论'}
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+        {capability.data?.enabled &&
+          list.data?.map((s) => (
+            <Card key={s.id}>
+              <CardContent className="space-y-3 pt-5">
+                <div className="flex items-center justify-between gap-2">
+                  <Link to={'/sites/' + s.slug} className="font-semibold hover:text-primary">
+                    {s.name}
+                  </Link>
+                  <Badge variant="secondary">{modes[s.access]}</Badge>
+                </div>
+                <p className="text-sm text-muted-foreground">{s.description || s.slug}</p>
+                <a
+                  className="break-all text-sm text-primary hover:underline"
+                  href={s.url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {s.url}
+                </a>
+                <div className="text-xs text-muted-foreground">
+                  {s.currentVersionId ? '已发布' : '尚未发布'} · {s.canManage ? '你可以管理' : '可查看与评论'}
+                </div>
+              </CardContent>
+            </Card>
+          ))}
       </div>
     </div>
   );

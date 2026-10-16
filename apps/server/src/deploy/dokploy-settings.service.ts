@@ -1,4 +1,4 @@
-import { Inject, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { eq, sql } from 'drizzle-orm';
 import type {
   ConnectionTestResult,
@@ -11,7 +11,7 @@ import type {
 } from '@eat/shared';
 import { decryptSecret, encryptSecret } from '../common/crypto';
 import { DB, type Db } from '../db/db.module';
-import { dokploySettings } from '../db/schema';
+import { dokploySettings, siteSettings } from '../db/schema';
 import { DokployClient } from './dokploy.client';
 
 /** 自助建应用需要的 Dokploy 落点（决策 31）：建在哪个环境下、绑哪把 SSH key */
@@ -70,7 +70,17 @@ export class DokploySettingsService {
 
   async updateSettings(dto: UpdateDokploySettingsRequest): Promise<DokploySettingsInfo> {
     const row = await this.settingsRow();
-    const apiTokenEncrypted = dto.apiToken ? encryptSecret(dto.apiToken) : (row?.apiTokenEncrypted ?? encryptSecret(''));
+    if (row && (row.apiUrl !== dto.apiUrl || !dto.enabled)) {
+      const [sites] = await this.db.select().from(siteSettings).limit(1);
+      if (
+        sites &&
+        (sites.routeConfigured || ['checking', 'provisioning', 'verifying', 'disabling'].includes(sites.status))
+      )
+        throw new ConflictException('请先在静态网站设置中停用并清理入口，再更换或停用部署后台');
+    }
+    const apiTokenEncrypted = dto.apiToken
+      ? encryptSecret(dto.apiToken)
+      : (row?.apiTokenEncrypted ?? encryptSecret(''));
     const values = {
       apiUrl: dto.apiUrl,
       apiTokenEncrypted,
@@ -172,7 +182,10 @@ export class DokploySettingsService {
     try {
       return await fn();
     } catch (err) {
-      throw new ServiceUnavailableException({ error: 'DEPLOY_BACKEND_UNAVAILABLE', message: `${note}: ${describe(err)}` });
+      throw new ServiceUnavailableException({
+        error: 'DEPLOY_BACKEND_UNAVAILABLE',
+        message: `${note}: ${describe(err)}`,
+      });
     }
   }
 }

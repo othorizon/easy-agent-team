@@ -7,7 +7,7 @@ import { decryptSecret } from '../common/crypto';
 import { DB, type Db } from '../db/db.module';
 import { helperProfiles, siteComments, siteThreads, siteVersions, users } from '../db/schema';
 import { WebhookService } from '../notify/webhook.service';
-import { siteConfig, siteUrl } from './site-config';
+import { SiteRuntime } from './site-config';
 import { SitesService, type SiteRow } from './sites.service';
 
 @Injectable()
@@ -18,6 +18,7 @@ export class SiteCommentsService {
     private readonly sites: SitesService,
     private readonly webhook: WebhookService,
     private readonly audit: AuditService,
+    private readonly runtime: SiteRuntime,
   ) {}
 
   async mentionUsers(user: AuthUser, slug: string, proof?: string) {
@@ -59,33 +60,35 @@ export class SiteCommentsService {
         ),
       )
       .orderBy(asc(siteComments.createdAt), asc(siteComments.id));
-    return threads.map(({ thread: t, number }) => ({
-      id: t.id,
-      page: t.page,
-      versionId: t.versionId,
-      versionNumber: number,
-      anchor: t.anchor,
-      status: t.status,
-      authorId: t.authorId,
-      canResolve: !!user && (t.authorId === user.id || this.sites.canManage(site, user)),
-      createdAt: t.createdAt.toISOString(),
-      url: this.threadUrl(site, number, t.page, t.id),
-      comments: comments
-        .filter((c) => c.comment.threadId === t.id)
-        .map(({ comment: c, authorName, number }) => ({
-          id: c.id,
-          authorId: c.authorId,
-          authorName,
-          content: c.content,
-          versionId: c.versionId,
-          versionNumber: number,
-          mentions: c.mentions,
-          createdAt: c.createdAt.toISOString(),
-        })),
-    }));
+    return Promise.all(
+      threads.map(async ({ thread: t, number }) => ({
+        id: t.id,
+        page: t.page,
+        versionId: t.versionId,
+        versionNumber: number,
+        anchor: t.anchor,
+        status: t.status,
+        authorId: t.authorId,
+        canResolve: !!user && (t.authorId === user.id || this.sites.canManage(site, user)),
+        createdAt: t.createdAt.toISOString(),
+        url: await this.threadUrl(site, number, t.page, t.id),
+        comments: comments
+          .filter((c) => c.comment.threadId === t.id)
+          .map(({ comment: c, authorName, number }) => ({
+            id: c.id,
+            authorId: c.authorId,
+            authorName,
+            content: c.content,
+            versionId: c.versionId,
+            versionNumber: number,
+            mentions: c.mentions,
+            createdAt: c.createdAt.toISOString(),
+          })),
+      })),
+    );
   }
-  private threadUrl(site: SiteRow, version: number, page: string, threadId: string) {
-    const url = new URL(page, siteUrl(site.slug, version));
+  private async threadUrl(site: SiteRow, version: number, page: string, threadId: string) {
+    const url = new URL(page, await this.runtime.url(site.slug, version));
     url.searchParams.set('eat_thread', threadId);
     return url.href;
   }
@@ -184,7 +187,7 @@ export class SiteCommentsService {
         if (userId === author.id) continue;
         const [profile] = await this.db.select().from(helperProfiles).where(eq(helperProfiles.userId, userId)).limit(1);
         if (!profile?.webhookUrl) continue;
-        const url = `${siteConfig().platform}/sites/${site.slug}?thread=${threadId}`;
+        const url = `${await this.runtime.platform()}/sites/${site.slug}?thread=${threadId}`;
         const card = {
           header: { title: { tag: 'plain_text', content: `${author.name} 在网站评论中 @ 了你` }, template: 'blue' },
           elements: [

@@ -2,29 +2,51 @@
 
 静态网站使用共享访问网关与文件存储，不创建 Dokploy 应用、容器或部署审批。每个 EAT 成员都可以创建并更新自己的网站，所有者和平台管理员可修改设置、发布及回滚。三端共用 `packages/shared/src/site.ts` 契约。
 
-## 配置
+## 在系统设置中启用
 
-生产配置示例（凭据通过部署环境注入）：
+静态网站默认关闭。平台管理员进入「系统设置 → 静态网站发布」，完成配置并点击「检查并启用」。静态网站不再读取 `EAT_SITES_*` 环境变量，OSS 与 DNS 凭证加密存入 PostgreSQL。无需改部署环境或重启 EAT。
 
-```dotenv
-EAT_PUBLIC_URL=https://eat.example.com
-EAT_SITES_DOMAIN=eat-sites.example
-EAT_SITES_HTTPS=1
-EAT_SITES_STORAGE=oss
-EAT_SITES_OSS_REGION=oss-cn-hangzhou
-EAT_SITES_OSS_BUCKET=your-private-bucket
-EAT_SITES_OSS_ACCESS_KEY_ID=...
-EAT_SITES_OSS_ACCESS_KEY_SECRET=...
-```
+| 管理员准备 | EAT 自动处理 |
+| --- | --- |
+| 已在「部署后台接入」配置 Dokploy 地址和 API Token | 验证连接和 Traefik 配置读写权限 |
+| 选择 Dokploy 中运行 EAT 的应用，填写容器端口（默认 3000） | 识别应用所在服务器，生成内部转发地址；可手动覆盖为 Traefik 可达的 EAT 根地址 |
+| EAT 控制台的 HTTPS 地址（默认当前控制台地址） | 验证请求到达当前 EAT，并用于网站登录、评论和通知链接 |
+| 独立站点域名后缀、Dokploy 入口 IP 或主机名 | 验证域名隔离和随机子域名的通配解析 |
+| 私有 OSS Bucket、地域、AccessKey ID / Secret | 检查 Bucket ACL、实际上传/读回/删除测试对象及删除后不可读取；确认匿名访问被拒绝 |
+| 证书接入方式，见下表 | 配置共享 HTTP → HTTPS 跳转和站点转发，再验证 HTTPS 信任链、主机名、有效期和 EAT 探针 |
 
-1. 使用与 EAT 平台不同的主域名承载用户 HTML。站点域名不允许与平台域名相同，避免网站脚本接触平台的 localStorage 和身份凭据。
-2. 将通配 DNS `*.eat-sites.example` 指向 EAT 服务。前置代理配置该域名的通配证书、保留浏览器原始 `Host`，并将该域名下**所有路径**转到 EAT，包括 `/assets/`、`/api/` 和 `/__eat/`。站点网关会在控制台静态资源和平台 API 之前拦截此域名的流量。
-3. OSS bucket 保持私有，使用仅允许该 bucket 下 `sites/` 前缀读写和删除的服务身份。禁止使用 bucket 公共读或直接公开 OSS 源站绕过网关。
-4. 运行 `pnpm db:migrate`，构建并启动平台。前置代理需允许至少 72 MiB 的 JSON 请求体；服务端仅发布路由放宽到 72 MiB，解码后的文件总量仍最多 50 MiB。
+OSS 凭证需要目标 Bucket 的 `oss:GetBucketAcl`，以及 `sites/*` 下的 `oss:PutObject`、`oss:GetObject`、`oss:DeleteObject` 权限。Bucket 必须为私有读写，不得通过 Bucket Policy 或 OSS 源站公开文件。EAT 在 `sites/_checks/` 下创建随机临时对象，并在失败时也尝试清理；缺少删除权限会明确阻止启用并提示残留对象路径。
 
-开发默认使用 `EAT_SITES_DOMAIN=sites.localhost:3000`、HTTP 和本地存储。浏览器通常将 `*.localhost` 解析到回环地址；不支持时配置 hosts 或本地 DNS。本地存储默认 `./data/static-sites`，生产若选 local 必须指定并挂载持久化目录。版本记录保存存储类型；更换 bucket、region 或本地目录时，需要同步迁移历史文件。
+### HTTPS 与 DNS
 
-目前所有站点响应都使用 `private, no-store`，网关对每次文件访问重新校验站点策略。前置 CDN 不得绕过鉴权缓存私有文件。访问模式、密码变更对所有历史版本生效；Service Worker 注册被阻止，避免离线缓存越过后续访问策略。
+所有网站使用 `网站标识.sites.example.com`，不可变版本使用 `v版本号--网站标识.sites.example.com`，共用 `*.sites.example.com` 证书。该证书不覆盖 `sites.example.com` 本身或更深层域名。
+
+| 证书方式 | 管理员填写 | 签发和续期 |
+| --- | --- | --- |
+| 阿里云 DNS（AliDNS） | 证书联系邮箱、DNS AccessKey ID / Secret | EAT 配置 Dokploy Traefik 的 DNS resolver，Traefik 自动签发和续期 |
+| Cloudflare | 证书联系邮箱、目标区域的 API Token | 同上；Token 需要目标区域的 Zone Read 和 DNS Edit 权限 |
+| 已有泛域名证书 | 从 Dokploy 中选择同服务器的证书 | EAT 检查域名、有效期和私钥匹配；证书更新由原有流程负责 |
+| 已有 DNS 证书解析器 | 从目标服务器中选择已配置 DNS challenge 的 resolver | 复用已有凭证和自动续期流程，无需在 EAT 再填 DNS 凭证 |
+
+DNS 凭证与 OSS 凭证独立。AliDNS 需要 `DescribeDomains`、`DescribeDomainRecords`、`AddDomainRecord`、`DeleteDomainRecord` 权限；启用时用随机 TXT 记录实测创建、读取和删除。默认由管理员在 DNS 控制台添加 `*.sites.example.com → Dokploy 入口` 的 A / AAAA / CNAME。选择 AliDNS 或 Cloudflare 时可勾选「自动添加解析」，EAT 仅在通配记录不存在时创建；发现不同的现有记录会报错，绝不覆盖。自动创建后最多等待两分钟解析生效，失败时清理本次新增记录。Cloudflare 应使用 DNS only，关闭代理。
+
+流量走 Dokploy 已有的 Traefik，不为每个网站创建容器或申请证书。EAT 检查并复用正在运行的共享 Traefik；已安装但停止时自动请求启动并等待就绪。目标服务器需先完成 Dokploy 的标准初始化。EAT 写入单独的 `dynamic/eat-sites-<随机标识>.yml`，保留原始 Host，将所有路径交给 EAT 访问网关，包括资源、API 形状的路径与评论脚本。其他应用的配置不变。支持 Dokploy 标准生产 Traefik 布局（`/etc/dokploy/traefik/traefik.yml`、`dynamic` 文件 provider、`web`/`websecure` 入口）及本机/远程应用服务器；依赖配置读写、证书读取、Traefik 环境与重载 API 权限。
+
+首次设置自动证书时，EAT 自动将凭证写入 Traefik 的运行配置并重载共享 Traefik，可能短暂影响同入口的其他应用；管理员无需手改 env。后续相同配置启用不会重复重载。如果其他 resolver 已使用同一 DNS 服务商的不同凭证，EAT 拒绝覆盖，提示复用已有 resolver。已有 HTTP challenge resolver 不能用于申请泛域名证书。
+
+### 启用、停用与失败恢复
+
+启用按「连接与内部地址 → 专用入口写入权限 → OSS → 证书/DNS 权限 → 通配 DNS → 配置路由 → HTTPS 实际访问」执行。最后一步最多五分钟，检查证书受信任、主机名匹配、剩余有效期超过七天，站点域名和平台域名都返回当前 EAT 实例的随机探针，并确认 HTTP 正确跳转 HTTPS。只有全部通过才开放发布和访问。
+
+控制台逐项展示进度和失败原因。CLI、MCP、REST 与控制台共用能力开关；关闭或检查中不能绕过。启用失败撤下专用站点路由，保留诊断，可修正配置重试；如果入口清理失败，必须先点击停用重试清理，才能修改配置。证书文件、专用 ACME resolver 和续期凭证保留，便于恢复，不删除其他服务资源。
+
+停用立即关闭 EAT 网关访问，再撤下专用路由，保留网站、OSS 文件、历史版本、评论和证书。修改配置需先停用。存在网站后不能改变域名后缀，存在 OSS 历史版本后不能切换 Bucket 或地域，防止历史链接和文件失效；访问凭证可以轮换。进程重启时会识别并标记中断任务，管理员清理后重试，多实例用 PostgreSQL 锁避免重复启停。
+
+### 升级与访问边界
+
+运行数据库迁移、构建并启动 EAT 后，在系统设置重新保存原有域名和 OSS Bucket，再检查启用。旧环境变量不会自动导入数据库。旧 OSS 文件与版本记录不变；过去的本地历史文件仍从持久卷 `./data/static-sites` 读取，若曾使用自定义本地目录，需先搬到此路径。新发布统一写入 OSS。
+
+前置代理需允许至少 72 MiB 的 JSON 请求体；服务端仅发布路由放宽到 72 MiB，解码后的文件总量仍最多 50 MiB。所有站点响应使用 `private, no-store`，每次文件访问重新校验站点策略。前置 CDN 不得绕过鉴权缓存私有文件。访问模式、密码变更对全部历史版本生效；Service Worker 注册被阻止，避免离线缓存越过后续访问策略。
 
 ## 发布与版本
 
@@ -91,3 +113,11 @@ eat site resolve demo '<讨论 ID>' --reopen
 本机 stdio MCP 和平台 HTTP MCP 都提供：`list_sites`、`create_site`、`update_site`、`publish_site`、`list_site_versions`、`activate_site_version`、`create_site_share_link`、`unlock_site`、`list_site_comments`、`create_site_comment`、`reply_site_comment`、`set_site_thread_status`、`list_site_mention_users`。
 
 主要 REST 入口为 `/api/sites`、`/:slug/releases`、`/:slug/versions`、`/:slug/activate`、`/:slug/access`、`/:slug/share`、`/:slug/threads`、`/:slug/threads/:id/replies`。密码网站可先调用 access 端点，再通过 `x-eat-site-access` 携带返回的访问凭据；它不代替发表评论所需的 EAT 身份。按版本筛选讨论使用发起版本，回复保留各自的浏览版本。
+
+## 本次验证范围
+
+自动化覆盖系统配置加密与脱敏、默认关闭、成员权限、CLI/MCP 开关一致性、并发启停、OSS/DNS 权限探测、共享配置保留、失败回滚、停用与重启恢复；包含真实本地 HTTPS 服务对证书信任、主机名和 HTTP 跳转的检查。
+
+浏览器验证使用真实 Traefik v3.6.7、PostgreSQL 和 EAT，验证控制台保存/启用/停用、HTTPS 精确探针、静态版本与资源、登录、密码分享、评论登录、元素/区域批注、@ 与跨版本回复，并检查桌面和手机布局。该场景的 Dokploy 控制 API、OSS 和 DNS 使用测试替身，后端信任仅限测试证书；不能替代真实账号的云服务验收。
+
+本次未使用真实 OSS / AliDNS / Cloudflare 凭证申请公网证书。尝试启动完整 Dokploy v0.30.5 时，镜像解包受到测试环境磁盘限制，完整 Dokploy API 真机联调未完成；接口按其源码校对并通过 HTTP 模拟端点验证。生产启用会再次执行真实凭证和 HTTPS 检查，失败时保持能力关闭。

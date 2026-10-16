@@ -8,6 +8,7 @@ import {
   Logger,
   NotFoundException,
   UnauthorizedException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import * as bcrypt from 'bcryptjs';
@@ -23,11 +24,11 @@ import {
 } from '@eat/shared';
 import type { AuthUser } from '../auth/auth.decorators';
 import { DB, type Db } from '../db/db.module';
-import { apiTokens, sites, siteVersions, siteSessions, users } from '../db/schema';
+import { apiTokens, sites, siteVersions, siteSessions, users, siteSettings } from '../db/schema';
 import { sha256Hex } from '../common/crypto';
 import { loadConfig } from '../config';
 import { AuditService } from '../audit/audit.service';
-import { parseSiteHost, siteConfig, siteUrl } from './site-config';
+import { parseSiteHost, SiteRuntime } from './site-config';
 import { SiteStorage } from './site-storage.service';
 
 export type SiteRow = typeof sites.$inferSelect;
@@ -68,9 +69,11 @@ export class SitesService {
     @Inject(DB) private readonly db: Db,
     private readonly storage: SiteStorage,
     private readonly audit: AuditService,
+    private readonly runtime: SiteRuntime,
   ) {}
 
   async get(slug: string): Promise<SiteRow> {
+    await this.runtime.settings.enabled();
     const [site] = await this.db.select().from(sites).where(eq(sites.slug, slug)).limit(1);
     if (!site) throw new NotFoundException('网站不存在');
     return site;
@@ -81,7 +84,7 @@ export class SitesService {
   manage(site: SiteRow, user: AuthUser) {
     if (!this.canManage(site, user)) throw new ForbiddenException('仅网站所有者或管理员可以操作');
   }
-  info(site: SiteRow, user: AuthUser): SiteInfo {
+  async info(site: SiteRow, user: AuthUser): Promise<SiteInfo> {
     return {
       id: site.id,
       slug: site.slug,
@@ -91,17 +94,20 @@ export class SitesService {
       access: site.access,
       spa: site.spa,
       currentVersionId: site.currentVersionId,
-      url: siteUrl(site.slug),
+      url: await this.runtime.url(site.slug),
       canManage: this.canManage(site, user),
       createdAt: site.createdAt.toISOString(),
       updatedAt: site.updatedAt.toISOString(),
     };
   }
   async list(user: AuthUser) {
-    return (await this.db.select().from(sites).orderBy(desc(sites.updatedAt))).map((s) => this.info(s, user));
+    await this.runtime.settings.enabled();
+    return Promise.all(
+      (await this.db.select().from(sites).orderBy(desc(sites.updatedAt))).map((s) => this.info(s, user)),
+    );
   }
   async create(user: AuthUser, dto: CreateSite) {
-    siteUrl(dto.slug); // 发布前先验证网关已配置
+    await this.runtime.settings.enabled();
     const passwordHash = dto.password ? await bcrypt.hash(dto.password, 10) : null;
     try {
       const [site] = await this.db
@@ -157,7 +163,7 @@ export class SitesService {
     });
     return this.info(row, user);
   }
-  versionInfo(site: SiteRow, row: typeof siteVersions.$inferSelect): SiteVersion {
+  async versionInfo(site: SiteRow, row: typeof siteVersions.$inferSelect): Promise<SiteVersion> {
     return {
       id: row.id,
       number: row.number,
@@ -166,19 +172,21 @@ export class SitesService {
       totalBytes: row.totalBytes,
       publisherId: row.publisherId,
       createdAt: row.createdAt.toISOString(),
-      url: siteUrl(site.slug, row.number),
+      url: await this.runtime.url(site.slug, row.number),
     };
   }
   async versions(user: AuthUser, slug: string, proof?: string) {
     const site = await this.get(slug);
     this.assertView(site, user, proof);
-    return (
-      await this.db
-        .select()
-        .from(siteVersions)
-        .where(eq(siteVersions.siteId, site.id))
-        .orderBy(desc(siteVersions.number))
-    ).map((v) => this.versionInfo(site, v));
+    return Promise.all(
+      (
+        await this.db
+          .select()
+          .from(siteVersions)
+          .where(eq(siteVersions.siteId, site.id))
+          .orderBy(desc(siteVersions.number))
+      ).map((v) => this.versionInfo(site, v)),
+    );
   }
   async version(site: SiteRow, id?: string, number?: number) {
     const versionId = id ?? site.currentVersionId;
@@ -228,6 +236,8 @@ export class SitesService {
       // 先完整写入不可变快照，再在事务内分配版本号并激活；失败不改变线上版本。
       for (const f of files) await this.storage.put(site.id, id, f.path, f.content, f.type);
       const row = await this.db.transaction(async (tx) => {
+        const [capability] = await tx.select().from(siteSettings).where(eq(siteSettings.id, 1)).for('share');
+        if (capability?.status !== 'enabled') throw new ServiceUnavailableException('静态网站已停用，本次发布未生效');
         const [locked] = await tx.select().from(sites).where(eq(sites.id, site.id)).for('update');
         const [v] = await tx
           .insert(siteVersions)
@@ -359,17 +369,20 @@ export class SitesService {
     const site = await this.get(slug);
     this.manage(site, user);
     if (site.access !== 'password') throw new BadRequestException('仅密码访问的网站需要免输密码链接');
-    return { url: `${siteUrl(slug)}/?eat_access=${encodeURIComponent(this.proof(site, 'share'))}`, expiresInDays: 90 };
+    return {
+      url: `${await this.runtime.url(slug)}/?eat_access=${encodeURIComponent(this.proof(site, 'share'))}`,
+      expiresInDays: 90,
+    };
   }
   async ticket(user: AuthUser, slug: string, returnUrl: string) {
     const site = await this.get(slug);
     this.assertView(site, user);
     const target = new URL(returnUrl);
-    const parsed = parseSiteHost(target.host);
+    const parsed = parseSiteHost(target.host, (await this.runtime.config()).domain);
     if (
       !parsed ||
       parsed.slug !== slug ||
-      target.protocol !== `${siteConfig().protocol}:` ||
+      target.protocol !== `${(await this.runtime.config()).protocol}:` ||
       target.username ||
       target.password ||
       target.pathname.startsWith('//')

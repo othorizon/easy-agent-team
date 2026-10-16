@@ -9,7 +9,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import type { SiteAnchor } from '@eat/shared';
+import type { SiteAnchor, SiteCapabilityStatus, SiteSetupCheck } from '@eat/shared';
 
 export const users = pgTable('user', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -39,6 +39,37 @@ export const sites = pgTable('site', {
   currentVersionId: uuid('current_version_id'),
   nextVersion: integer('next_version').notNull().default(1),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** 静态发布能力配置：默认停用，由管理员在控制台保存并执行启用检查。 */
+export const siteSettings = pgTable('site_setting', {
+  id: integer('id').primaryKey().default(1),
+  status: text('status').$type<SiteCapabilityStatus>().notNull().default('disabled'),
+  domain: text('domain').notNull(),
+  platformUrl: text('platform_url').notNull().default(''),
+  ossRegion: text('oss_region').notNull(),
+  ossBucket: text('oss_bucket').notNull(),
+  ossAccessKeyIdEncrypted: text('oss_access_key_id_encrypted').notNull(),
+  ossAccessKeySecretEncrypted: text('oss_access_key_secret_encrypted').notNull(),
+  tlsMode: text('tls_mode').$type<'alidns' | 'cloudflare' | 'certificate' | 'resolver'>().notNull(),
+  acmeEmail: text('acme_email').notNull().default(''),
+  dnsAccessKeyIdEncrypted: text('dns_access_key_id_encrypted'),
+  dnsAccessKeySecretEncrypted: text('dns_access_key_secret_encrypted'),
+  certificateId: text('certificate_id').notNull().default(''),
+  resolverName: text('resolver_name').notNull().default(''),
+  platformApplicationId: text('platform_application_id').notNull(),
+  upstreamUrl: text('upstream_url').notNull().default(''),
+  upstreamPort: integer('upstream_port').notNull().default(3000),
+  gatewayTarget: text('gateway_target').notNull(),
+  autoDns: boolean('auto_dns').notNull().default(false),
+  routeConfigured: boolean('route_configured').notNull().default(false),
+  resourceKey: uuid('resource_key').notNull().defaultRandom(),
+  serverId: text('server_id'),
+  operationId: uuid('operation_id'),
+  operationStartedAt: timestamp('operation_started_at', { withTimezone: true }),
+  checks: jsonb('checks').$type<SiteSetupCheck[]>().notNull().default([]),
+  lastError: text('last_error').notNull().default(''),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

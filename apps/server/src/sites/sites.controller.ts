@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, UnauthorizedException } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  UnauthorizedException,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   createSiteSchema,
   createSiteThreadSchema,
@@ -20,7 +31,9 @@ import { CurrentUser, Public, type AuthUser } from '../auth/auth.decorators';
 import { ZodValidationPipe } from '../common/zod.pipe';
 import { SiteCommentsService } from './site-comments.service';
 import { SitesService } from './sites.service';
-import { siteUrl } from './site-config';
+import { SiteRuntime } from './site-config';
+
+import { siteProbeMarker } from './site-setup.service';
 
 const accessBody = z.object({ password: z.string().max(128).optional(), accessToken: z.string().max(4096).optional() });
 const proofOf = (req: FastifyRequest) =>
@@ -32,8 +45,19 @@ export class SitesController {
     private readonly sites: SitesService,
     private readonly comments: SiteCommentsService,
     private readonly auth: AuthService,
+    private readonly runtime: SiteRuntime,
   ) {}
 
+  @Public()
+  @Get('verification/:operationId')
+  async verification(@Param('operationId') operationId: string) {
+    const row = await this.runtime.settings.row();
+    if (!row || row.status !== 'verifying' || row.operationId !== operationId) throw new NotFoundException();
+    return siteProbeMarker(row);
+  }
+  @Get('capability') capability() {
+    return this.runtime.settings.capability();
+  }
   @Get() list(@CurrentUser() user: AuthUser) {
     return this.sites.list(user);
   }
@@ -65,7 +89,7 @@ export class SitesController {
   ) {
     const site = await this.sites.get(slug);
     const version = await this.sites.version(site, query.versionId);
-    return { origin: new URL(siteUrl(site.slug, version.number)).origin };
+    return { origin: new URL(await this.runtime.url(site.slug, version.number)).origin };
   }
   @Post(':slug/releases')
   @RouteConfig({ eatSiteUpload: true })

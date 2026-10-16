@@ -1,5 +1,12 @@
 import { Module, OnModuleInit, type NestModule } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
+import { DeployModule } from '../deploy/deploy.module';
+import { SiteSettingsController } from './site-settings.controller';
+import { SiteSettingsStore } from './site-settings.store';
+import { SiteRuntime } from './site-config';
+import { SiteSetupService } from './site-setup.service';
+import { SiteInfrastructure } from './site-infrastructure.service';
+import { SiteDns } from './site-dns.service';
 import { AuthModule } from '../auth/auth.module';
 import { SiteCommentsService } from './site-comments.service';
 import { SiteGateway } from './site-gateway.service';
@@ -9,9 +16,20 @@ import { SitesService } from './sites.service';
 import { SiteToolsService } from './site-tools.service';
 
 @Module({
-  imports: [AuthModule],
-  controllers: [SitesController],
-  providers: [SitesService, SiteStorage, SiteCommentsService, SiteGateway, SiteToolsService],
+  imports: [AuthModule, DeployModule],
+  controllers: [SitesController, SiteSettingsController],
+  providers: [
+    SiteSettingsStore,
+    SiteRuntime,
+    SiteSetupService,
+    SiteInfrastructure,
+    SiteDns,
+    SitesService,
+    SiteStorage,
+    SiteCommentsService,
+    SiteGateway,
+    SiteToolsService,
+  ],
   exports: [SitesService, SiteCommentsService, SiteToolsService],
 })
 export class SitesModule implements OnModuleInit, NestModule {

@@ -3,10 +3,13 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { sitePathSchema } from '@eat/shared';
 import { z } from 'zod';
 import { AuthService } from '../auth/auth.service';
-import { isSiteHost, parseSiteHost, siteConfig, siteUrl } from './site-config';
+import { parseSiteHost, SiteRuntime } from './site-config';
 import { SITE_EMBED_SCRIPT } from './site-embed';
 import { SiteStorage } from './site-storage.service';
 import { SitesService } from './sites.service';
+
+import { siteProbeHost } from './site-infrastructure.service';
+import { siteProbeMarker } from './site-setup.service';
 
 const COOKIE = 'eat_site';
 const escapeHtml = (s: string) =>
@@ -18,20 +21,31 @@ export class SiteGateway {
     private readonly sites: SitesService,
     private readonly storage: SiteStorage,
     private readonly auth: AuthService,
+    private readonly runtime: SiteRuntime,
   ) {}
 
   async handle(req: FastifyRequest, reply: FastifyReply) {
     const host = (req.headers.host ?? '').toLowerCase();
-    if (!isSiteHost(host)) return;
+    const setting = await this.runtime.settings.row();
+    if (!setting || !(host === setting.domain || host.endsWith(`.${setting.domain}`))) return;
     reply
       .header('cache-control', 'private, no-store')
       .header('referrer-policy', 'no-referrer')
       .header('x-content-type-options', 'nosniff');
     try {
-      const target = parseSiteHost(host);
+      if (
+        setting.operationId &&
+        setting.status === 'verifying' &&
+        host === siteProbeHost(setting) &&
+        req.method === 'GET' &&
+        req.raw.url === `/__eat/verify/${setting.operationId}`
+      )
+        return reply.type('text/plain').send(siteProbeMarker(setting));
+      if (setting.status !== 'enabled') return reply.status(503).send('静态网站尚未启用');
+      const target = parseSiteHost(host, setting.domain);
       if (!target) return reply.status(404).send('网站不存在');
       const site = await this.sites.get(target.slug);
-      const base = siteUrl(site.slug, target.version);
+      const base = await this.runtime.url(site.slug, target.version);
       const url = new URL(req.raw.url ?? '/', base);
       if (req.method === 'GET' && url.pathname === '/__eat/embed.js')
         return reply.type('text/javascript; charset=utf-8').send(SITE_EMBED_SCRIPT);
@@ -45,7 +59,9 @@ export class SiteGateway {
       const version = await this.sites.version(site, undefined, target.version);
       // 入口指向当前不可变域名，根路径资源、SPA 与多页链接始终落在同一版本。
       if (!target.version && (req.method === 'GET' || req.method === 'HEAD'))
-        return reply.redirect(`${siteUrl(site.slug, version.number)}${url.pathname}${url.search}${url.hash}`);
+        return reply.redirect(
+          `${await this.runtime.url(site.slug, version.number)}${url.pathname}${url.search}${url.hash}`,
+        );
       if (req.method === 'POST' && url.pathname === '/__eat/access') {
         const origin = req.headers.origin;
         if (origin !== new URL(base).origin) return reply.status(403).send({ message: '请求来源不合法' });
@@ -80,7 +96,7 @@ export class SiteGateway {
         this.sites.assertView(site, identity, proof);
       } catch (e) {
         if (site.access === 'authenticated') {
-          const authorize = `${siteConfig().platform}/sites/authorize?site=${encodeURIComponent(site.slug)}&returnUrl=${encodeURIComponent(base + url.pathname + url.search)}`;
+          const authorize = `${await this.runtime.platform()}/sites/authorize?site=${encodeURIComponent(site.slug)}&returnUrl=${encodeURIComponent(base + url.pathname + url.search)}`;
           if (req.headers['sec-fetch-dest'] && req.headers['sec-fetch-dest'] !== 'document')
             return reply.status(401).send('网站访问会话已失效');
           return reply.redirect(authorize);
@@ -109,7 +125,7 @@ export class SiteGateway {
       if (file.type.startsWith('text/html')) {
         const config = Buffer.from(
           JSON.stringify({
-            platform: siteConfig().platform,
+            platform: await this.runtime.platform(),
             slug: site.slug,
             versionId: version.id,
             versionNumber: version.number,
@@ -136,10 +152,7 @@ export class SiteGateway {
     }
   }
   private cookie(reply: FastifyReply, token: string) {
-    reply.header(
-      'set-cookie',
-      `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200${siteConfig().protocol === 'https' ? '; Secure' : ''}`,
-    );
+    reply.header('set-cookie', `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200; Secure`);
   }
   private async body(req: FastifyRequest) {
     const chunks: Buffer[] = [];

@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 25;
+export const PLATFORM_GUIDE_VERSION = 26;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -66,7 +66,7 @@ eat 是本团队的 AI 能力集中管理平台：环境变量与密钥、Skill�
 
 ### 静态网站：直接推送产物与处理评论
 
-静态网站不走 Dokploy，也不需要审批。先用 \`eat site create <slug>\` / \`create_site\` 建站，再用 \`eat site push <slug> <目录或 ZIP>\` / \`publish_site\` 上传构建好的静态文件，根目录需包含 index.html。每次最多 2000 个文件、50 MiB，历史发布产物完整保留；版本地址固定，站点入口跳转当前版本，用 \`activate_site_version\` 可回滚。
+静态网站发布无需审批，管理员需先在系统设置中配置并启用（私有 OSS、域名与 HTTPS；共享入口由部署后台自动配置）。未启用时 CLI、MCP 和控制台均无法发布。先用 \`eat site create <slug>\` / \`create_site\` 建站，再用 \`eat site push <slug> <目录或 ZIP>\` / \`publish_site\` 上传构建好的静态文件，根目录需包含 index.html。每次最多 2000 个文件、50 MiB，历史发布产物完整保留；版本地址固定，站点入口跳转当前版本，用 \`activate_site_version\` 可回滚。
 
 默认仅 EAT 登录用户访问，可设为 public 或 password。密码网站先 \`unlock_site\` 验证，后续调用携带返回的 accessToken；\`create_site_share_link\` 返回免输密码链接，它只授予网站访问能力，不代表用户身份。发表评论或回复始终需要 EAT 登录。
 

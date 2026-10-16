@@ -1,8 +1,5 @@
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? 'postgres://dev:dev@127.0.0.1:5433/eat_test';
-process.env.EAT_SITES_DOMAIN = 'sites.test:3000';
-process.env.EAT_SITES_HTTPS = '0';
 process.env.EAT_PUBLIC_URL = 'http://eat.test:3000';
-process.env.EAT_SITES_STORAGE = 'local';
 
 import { Test } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -16,6 +13,10 @@ import { resolve, join } from 'node:path';
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module';
 import { WebhookService } from '../src/notify/webhook.service';
+import { SiteRuntime } from '../src/sites/site-config';
+import { SiteSettingsStore } from '../src/sites/site-settings.store';
+import { TestSiteStorage } from './site-fixture';
+import { encryptSecret } from '../src/common/crypto';
 import { SiteStorage } from '../src/sites/site-storage.service';
 import { McpToolsService } from '../src/mcp-server/mcp-tools.service';
 import { AuthService } from '../src/auth/auth.service';
@@ -77,7 +78,6 @@ function content(
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'eat-sites-'));
-  process.env.EAT_SITES_LOCAL_DIR = dir;
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
   await pool.query('drop schema public cascade; create schema public; drop schema if exists drizzle cascade;');
   await migrate(drizzle(pool), { migrationsFolder: resolve('drizzle') });
@@ -88,8 +88,34 @@ beforeAll(async () => {
     { name: 'Other', email: 'other@site.test', passwordHash },
     { name: 'Admin', email: 'admin@site.test', role: 'admin', passwordHash },
   ]);
+  await db.insert(schema.siteSettings).values({
+    status: 'enabled',
+    domain: 'sites.test:3000',
+    ossRegion: 'oss-cn-hangzhou',
+    ossBucket: 'test-bucket',
+    ossAccessKeyIdEncrypted: encryptSecret('test-key'),
+    ossAccessKeySecretEncrypted: encryptSecret('test-secret'),
+    tlsMode: 'alidns',
+    platformApplicationId: 'eat',
+    gatewayTarget: '127.0.0.1',
+  });
   await pool.end();
   const module = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(SiteStorage)
+    .useFactory({ factory: (store: SiteSettingsStore) => new TestSiteStorage(store, dir), inject: [SiteSettingsStore] })
+    .overrideProvider(SiteRuntime)
+    .useFactory({
+      factory: (store: SiteSettingsStore) => {
+        const runtime = new SiteRuntime(store);
+        runtime.config = async () => ({
+          domain: 'sites.test:3000',
+          protocol: 'http' as const,
+          platform: await runtime.platform(),
+        });
+        return runtime;
+      },
+      inject: [SiteSettingsStore],
+    })
     .overrideProvider(WebhookService)
     .useValue({ notify })
     .compile();
