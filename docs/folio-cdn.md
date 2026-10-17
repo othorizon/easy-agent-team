@@ -83,6 +83,10 @@ CDN 域名已有但没有本实例标签时，不接管、不删除。DNS 类型
 
 阿里云新建域名会返回 HTTPS、TLS、IPv6、调度、防护等服务默认配置，EAT 保留已识别且未绑定条件的这些配置，不将其计入内容规则指纹。除此之外的未知配置、EAT 回源 / 鉴权 / 缓存规则被修改或绑定条件时仍暂停，不覆盖外部设置。实际响应中无绑定条件的 `ParentId=0` 与省略参数、`-1` 按相同语义比较。域名归属验证完成后会清除 TXT 指引；自动管理模式只显示自动处理提示，手动模式才要求添加记录。阿里云控制台的「CNAME 待配置」在证书、鉴权与链路检查完成前属于尚未切换阶段，不能提前手动切 DNS 绕过这些检查。
 
+开启时先验证源站，再验证 CDN，最后切换 DNS 并验证实际解析。前两步直接连接独立源站和阿里云分配 CNAME 解析出的地址，同时保留 Folio Host/SNI，不要求 Folio 通配 CNAME 已存在。控制台中的 CDN CNAME 是解析目标，通常在自己的 DNS 区域创建 `*.sites.example.com CNAME <阿里云分配的目标>`，无需再创建一条名为 `all` 的记录。自动管理模式会在检查通过后迁移记录。
+
+探测逐次建立独立 HTTPS 连接，避免源站与 CDN 使用相同 Host/SNI 时被 Node.js 默认 Keep-Alive 连接池复用到错误目标。失败时分别提示源站 / CDN 阶段、HTTP 状态、实例标记或浏览器缓存头问题，不回显上游响应正文。证书上传成功但边缘证书与链路尚未验证时显示「已上传，等待边缘验证」；同步时间只在边缘检查通过后记录。遇到链路失败应按具体阶段排查并点击「重新检查 / 恢复」，不能通过提前切 DNS 解决。
+
 传播等待时间是对遵守 DNS TTL 的客户端的保护，不是对所有不遵守 TTL 的递归解析器的全网保证。等待期间浏览器曾收到的缓存资源路径也可在源站直接访问，但源站每次重新鉴权且返回 no-store。
 
 ## 缓存与访问权限
@@ -109,6 +113,7 @@ CDN 域名已有但没有本实例标签时，不接管、不删除。DNS 类型
 - [远程鉴权](https://help.aliyun.com/zh/cdn/user-guide/configure-remote-authentication)：每次请求先鉴权，再访问缓存；异常默认可能放行，故显式配置 reject。最多 3000ms，故障时缓存路径也拒绝访问，不使用陈旧允许结果。[规则引擎](https://help.aliyun.com/zh/cdn/user-guide/rules-engine) 不支持按条件绑定远程鉴权，因此在 EAT 内区分正常路径和缓存路径。
 - [添加域名](https://help.aliyun.com/zh/cdn/developer-reference/api-cdn-2018-05-10-addcdndomain)：泛域名为前导点，创建及配置下发是异步的。[查询配置](https://help.aliyun.com/zh/cdn/developer-reference/api-cdn-2018-05-10-describecdndomainconfigs) 提供 success / configuring / failed 状态；HTTP API 成功不能代替下发完成。
 - [HTTPS 配置](https://help.aliyun.com/zh/cdn/user-guide/configure-an-ssl-certificate/) 与 [泛域名证书限制](https://help.aliyun.com/zh/cdn/support/configure-an-ssl-certificate-for-a-wildcard-domain-name)：CDN 控制台免费证书不支持泛域名，因此上传现有 Traefik / Let's Encrypt 证书，不调用 CDN 免费证书申请，也不购买证书。[Let's Encrypt FAQ](https://letsencrypt.org/docs/faq/) 明确泛域名需 DNS-01；[Traefik ACME](https://doc.traefik.io/traefik/v3.5/reference/install-configuration/tls/certificate-resolvers/acme/) 负责存储与续期。
+- [Node.js 22 HTTPS](https://nodejs.org/docs/latest-v22.x/api/https.html#httpsglobalagent)：默认全局 Agent 启用 Keep-Alive；探测设置 `agent: false`，每次按指定目标建立连接并保留 TLS 校验。
 
 `origin_certificate_verification` 的官方参数表使用 `enabled`，同页示例使用 `enable`，二者有文档不一致。当前优先使用示例中的 `enable=on`；只有该功能明确返回 `InvalidArgName.ValueNotSupported` 时，才尝试另一种 `enabled=on` 并记录采用的参数名。不会通过关闭证书校验绕过失败，两种写法均不支持时保留直连解析。已有部分配置可按原参数名继续恢复，无需重建 CDN。配置逐功能提交，按照官方每用户每秒 3 次的限制节流；中断后只提交缺失的规则。错误显示当前功能及可安全识别的参数名，不回显云端原始错误正文、请求头值或凭证。参数接受与全网生效仍需真实云验收。
 
@@ -124,14 +129,14 @@ CDN 域名已有但没有本实例标签时，不接管、不删除。DNS 类型
 
 | 验证 | 结果与范围 |
 | --- | --- |
-| `pnpm test` | 服务端 374 项、CLI 222 项通过；Web 使用下列浏览器脚本另行验证 |
-| CDN / 网关回归（包含于全量测试） | 46 项通过，覆盖独立 API 参数契约、证书校验参数变体、逐功能恢复、限流和错误脱敏、阿里云默认配置和 `ParentId=0`、旧冲突及 TXT 指引恢复、HTTP 200 验证未通过、30 天 TTL、版本隔离 / 历史缓存命中 / 权限收紧 / 删除、签名、证书读取、缓存别名、重启和 DNS 恢复 |
+| `pnpm test` | 服务端 384 项、CLI 222 项通过；Web 使用下列浏览器脚本另行验证 |
+| CDN / 网关回归（包含于全量测试） | 56 项通过，覆盖本地双 HTTPS 服务确认指定 IP / Host、不复用错误目标连接，源站 / CDN 分段诊断与错误脱敏，证书上传与同步分离，独立 API 参数契约、证书校验参数变体、逐功能恢复、限流、阿里云默认配置和 `ParentId=0`、旧冲突及 TXT 指引恢复、HTTP 200 验证未通过、30 天 TTL、版本隔离 / 历史缓存命中 / 权限收紧 / 删除、签名、证书读取、缓存别名、重启和 DNS 恢复 |
 | `pnpm typecheck`、`pnpm build` | 最终变更全工作区通过 |
 | `pnpm db:migrate` | 在独立本地 PostgreSQL 测试库执行两次均成功；另有旧配置升级保持不变、已有刷新任务和触发器清除且 Folio / CDN 状态保留的真实迁移测试 |
-| `node scripts/test-folio-cdn-ui.mjs` | 浏览器 API 替身；桌面及手机配置、等待、失败恢复、DNS 指引、密钥输入清空、无横向溢出通过 |
+| `node scripts/test-folio-cdn-ui.mjs` | 浏览器 API 替身；桌面及手机配置、等待、证书已上传但尚未验证的状态、分段诊断、失败恢复、DNS 指引、密钥输入清空、无横向溢出通过 |
 | `node scripts/test-site-ui.mjs` | 原 Folio 发布、上传恢复、评论、登录/密码提示、删除及手机布局回归通过 |
 | 真实云 API 与隔离 DNS | 生产适配器验证 CDN 服务及域名验证接口；AliDNS 随机测试记录的 TXT 创建 / 读取 / 更新 / TTL 恢复 / 删除、A → CNAME → A 切换及记录 ID 保持通过。全部临时记录已清理，未创建 CDN |
-| 默认配置兼容诊断 | 只读查询确认云端域名已 online、HTTPS 已 on；修复代码重放实际返回的 10 项服务默认配置通过，没有为此修改云资源或 DNS，也不代表完整 CDN 链路验收已通过 |
+| 云端配置只读诊断 | 只读查询确认云端域名已 online、HTTPS 已 on、目标规则均为 success；修复代码重放实际返回的 10 项服务默认配置通过，没有为此修改云资源或 DNS，也不代表完整 CDN 链路验收已通过 |
 | 仓库隐私检查 | 检查全部改动及新增文件，没有发现真实 AccessKey、Secret 或个人域名 |
 
 公网测试因缺少隔离公网部署入口及环境网络访问条件，按要求暂缓。尚未完成公网 CDN 接入、真实 ACME 续期、证书全网下发、跨节点权限竞态、多区域及跨运营商 DNS 传播验收。当前结果不能替代这些真实云服务验收。生产部署及生产 DNS 变更未执行。

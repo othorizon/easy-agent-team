@@ -360,7 +360,11 @@ describe('Folio CDN control and durable reconciliation (cloud substitutes)', () 
     await save();
     fail = 'BatchSetCdnDomainConfig';
     expect((await tick()).status).toBe('failed');
-    expect((await store.info()).dnsInstructions).toEqual([]);
+    expect(await store.info()).toMatchObject({
+      dnsInstructions: [],
+      certificateUploaded: true,
+      certificateSyncedAt: null,
+    });
     await store.patch({
       status: 'conflict',
       dnsInstructions: [{ name: 'verification.example.com', type: 'TXT', value: 'verify_testvalue' }],

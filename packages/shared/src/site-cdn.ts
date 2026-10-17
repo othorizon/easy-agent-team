@@ -34,6 +34,7 @@ export interface SiteCdnInfo extends Omit<UpdateSiteCdn, 'accessKeyId' | 'access
   cname: string;
   dnsInstructions: { name: string; type: string; value: string }[];
   certificateExpiresAt: string | null;
+  certificateUploaded: boolean;
   originCertificateCheckedAt: string | null;
   certificateSyncedAt: string | null;
   certificateSyncError: string;

@@ -185,7 +185,11 @@ export function FolioCdnSettings({ folio }: { folio?: SiteSettingsInfo }) {
           </p>
           <p>
             CDN 证书同步：
-            {r.certificateSyncedAt ? new Date(r.certificateSyncedAt).toLocaleString() : '尚未同步'}
+            {r.certificateSyncedAt
+              ? new Date(r.certificateSyncedAt).toLocaleString()
+              : r.certificateUploaded
+                ? '已上传，等待边缘验证'
+                : '尚未上传'}
           </p>
           {r.certificateSyncError && (
             <p role="alert" className="break-words text-destructive">

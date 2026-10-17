@@ -4,6 +4,8 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { X509Certificate } from 'node:crypto';
+import https from 'node:https';
+import { syncBuiltinESMExports } from 'node:module';
 import { SiteCdnClient } from '../src/sites/site-cdn.client';
 import {
   SiteCdnInfrastructure,
@@ -12,6 +14,7 @@ import {
   checkCdnOrigin,
   configDigest,
   cdnConfigsToCheck,
+  cdnProbeHost,
 } from '../src/sites/site-cdn.infrastructure';
 import { SiteDns } from '../src/sites/site-dns.service';
 import { encryptSecret } from '../src/common/crypto';
@@ -79,7 +82,7 @@ function fixture() {
   );
   const client = { siteRequest: read };
   const infra = {
-    addresses: async () => ['203.0.113.20'],
+    addresses: async (_address: string) => ['203.0.113.20'],
     readMain: vi.fn(async () => ({
       config: {
         certificatesResolvers: {
@@ -145,6 +148,84 @@ describe('CDN certificate, signing and DNS adapter contracts', () => {
       };
     });
     await expect(f.service.verify(base, row, 'cdn.example.net', true)).rejects.toThrow('缓存命中');
+  });
+  it('connects to each pinned destination instead of reusing the source socket for the CDN host', async () => {
+    const realRequest = https.request;
+    const agent = new https.Agent({ keepAlive: true });
+    const received: string[] = [];
+    const server = (label: string) =>
+      https.createServer({ cert: pem, key }, (req, res) => {
+        received.push(label);
+        expect(req.headers.host).toBe(cdnProbeHost(base));
+        res.setHeader('cache-control', 'private, no-store');
+        res.end(label);
+      });
+    const source = server('source'),
+      edge = server('cdn');
+    const listen = (s: https.Server, port: number, host: string) =>
+      new Promise<void>((resolve, reject) => {
+        s.once('error', reject);
+        s.listen(port, host, () => {
+          s.off('error', reject);
+          resolve();
+        });
+      });
+    try {
+      await listen(source, 0, '127.0.0.1');
+      const port = (source.address() as { port: number }).port;
+      await listen(edge, port, '127.0.0.2');
+      vi.spyOn(https, 'request').mockImplementation(
+        ((options: https.RequestOptions, callback: Parameters<typeof realRequest>[2]) =>
+          realRequest(
+            { ...options, port, ca: pem, agent: options.agent === false ? false : agent },
+            callback,
+          )) as typeof https.request,
+      );
+      syncBuiltinESMExports();
+      const f = fixture();
+      f.infra.addresses = async (address) => [address];
+      const host = cdnProbeHost(base);
+      expect((await f.service.probe(host, '127.0.0.1', '/probe')).body).toBe('source');
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect((await f.service.probe(host, '127.0.0.2', '/probe')).body).toBe('cdn');
+      expect((await f.service.probe(host, '127.0.0.1', '/probe')).body).toBe('source');
+      expect(received).toEqual(['source', 'cdn', 'source']);
+    } finally {
+      agent.destroy();
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
+      await Promise.all(
+        [source, edge].map((s) => new Promise<void>((resolve) => s.close(() => resolve()))),
+      );
+    }
+  });
+  it.each([
+    { edge: false, status: 404, body: 'private upstream response', noStore: true, error: '源站直连检查失败：HTTP 404' },
+    { edge: true, status: 403, body: 'private upstream response', noStore: true, error: 'CDN 接入检查失败：HTTP 403，请检查远程鉴权' },
+    { edge: true, status: 502, body: 'private upstream response', noStore: true, error: 'CDN 接入检查失败：HTTP 502，请检查 HTTPS 回源' },
+    { edge: false, status: 200, body: 'private upstream response', noStore: true, error: '源站直连检查失败：HTTP 200，但 EAT 实例标记不匹配' },
+    { edge: true, status: 200, body: 'private upstream response', noStore: true, error: 'CDN 接入检查失败：HTTP 200，但 EAT 实例标记不匹配' },
+    { edge: false, status: 200, body: '', noStore: false, error: '源站直连检查失败：HTTP 200，但客户端响应缺少 Cache-Control: no-store' },
+    { edge: true, status: 200, body: '', noStore: false, error: 'CDN 接入检查失败：HTTP 200，但客户端响应缺少 Cache-Control: no-store' },
+  ])('reports the failing verification stage without echoing upstream content: $error', async (test) => {
+    const f = fixture();
+    vi.spyOn(f.service, 'probe').mockResolvedValue({
+      status: test.status,
+      body: test.body || cdnMarker(row, `/__eat/cdn-probe/${base.resourceKey}`),
+      headers: test.noStore ? { 'cache-control': 'private, no-store' } : {},
+      fingerprint: '',
+    });
+    const error = await f.service.verify(base, row, 'cdn.example.net', test.edge).catch((e) => e);
+    expect(error.message).toContain(test.error);
+    expect(error.message).not.toContain('private upstream response');
+    expect(error.message).not.toContain('isolated-origin-secret');
+  });
+  it.each([false, true])('identifies the stage of a failed TLS connection (edge=%s)', async (edge) => {
+    const f = fixture();
+    vi.spyOn(f.service, 'probe').mockRejectedValue(new Error('private TLS details'));
+    const error = await f.service.verify(base, row, 'cdn.example.net', edge).catch((e) => e);
+    expect(error.message).toContain(`${edge ? 'CDN 接入' : '源站直连'}检查失败：HTTPS 连接未完成`);
+    expect(error.message).not.toContain('private TLS details');
   });
   it('rejects indirect CNAME loops before DNS cutover while allowing independent origins', async () => {
     const origin = { ...base, gatewayTarget: 'origin.example.net' };

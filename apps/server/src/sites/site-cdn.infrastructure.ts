@@ -217,6 +217,9 @@ export class SiteCdnInfrastructure {
             hostname: host,
             servername: host,
             port: 443,
+            // Source and edge share Host/SNI but have different pinned addresses.
+            // Node's default keep-alive agent pools by hostname, ignoring lookup changes.
+            agent: false,
             path,
             method: 'GET',
             headers: { ...headers, host },
@@ -253,22 +256,34 @@ export class SiteCdnInfrastructure {
     );
   }
   async verify(base: SiteSettingRow, row: SiteCdnRow, address: string, edge: boolean) {
+    const stage = edge ? 'CDN 接入检查' : '源站直连检查';
     const destinations = await this.infra.addresses(address);
-    if (!destinations.length) throw new SiteSetupError('链路检查目标无法解析');
+    if (!destinations.length) throw new SiteSetupError(`${stage}失败：目标地址无法解析`);
     const targetAddress = destinations[0];
     const path = `/__eat/cdn-probe/${base.resourceKey}`;
-    const res = await this.probe(
-      cdnProbeHost(base),
-      targetAddress,
-      path,
-      edge ? {} : { 'x-eat-cdn-origin': decryptSecret(row.originSecretEncrypted) },
-    );
-    if (
-      res.status !== 200 ||
-      res.body !== cdnMarker(row, path) ||
-      !String(res.headers['cache-control']).includes('no-store')
-    )
-      throw new SiteSetupError('HTTPS 链路尚未到达当前 EAT，或客户端缓存策略不正确');
+    let res: Awaited<ReturnType<SiteCdnInfrastructure['probe']>>;
+    try {
+      res = await this.probe(
+        cdnProbeHost(base),
+        targetAddress,
+        path,
+        edge ? {} : { 'x-eat-cdn-origin': decryptSecret(row.originSecretEncrypted) },
+      );
+    } catch {
+      throw new SiteSetupError(`${stage}失败：HTTPS 连接未完成，请检查证书、Host/SNI、443 端口及目标可达性`);
+    }
+    if (res.status !== 200) {
+      const hint = edge && res.status === 403
+        ? '请检查远程鉴权地址是否可达及鉴权请求是否被正确转发'
+        : edge && [502, 504].includes(res.status)
+          ? '请检查 HTTPS 回源地址、Host/SNI 与源站证书'
+          : '请检查 Dokploy 泛域名路由及代理是否转发到当前 EAT';
+      throw new SiteSetupError(`${stage}失败：HTTP ${res.status}，${hint}`);
+    }
+    if (res.body !== cdnMarker(row, path))
+      throw new SiteSetupError(`${stage}失败：HTTP 200，但 EAT 实例标记不匹配，请检查路由、实例与回源密钥转发`);
+    if (!String(res.headers['cache-control']).includes('no-store'))
+      throw new SiteSetupError(`${stage}失败：HTTP 200，但客户端响应缺少 Cache-Control: no-store`);
     if (edge) {
       if (res.fingerprint !== row.resources.certificateFingerprint)
         throw new SiteSetupError('CDN 边缘证书尚未与源站同步，禁止切换 DNS');

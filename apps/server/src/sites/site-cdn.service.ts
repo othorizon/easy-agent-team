@@ -359,9 +359,10 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
       (await this.detail(c, domain))?.DomainStatus !== 'online'
     )
       throw new SiteSetupError('等待 CDN 全网配置下发完成，尚未开放缓存或切换 DNS');
-    await this.phase(row, '验证直连源站、CDN Host/SNI 和鉴权拒绝', 'verifying');
+    await this.phase(row, '验证直连源站 HTTPS、Host/SNI 和 EAT 实例标记', 'verifying');
     await this.infra.verify(base, row, base.gatewayTarget, false);
     guard();
+    await this.phase(row, '验证 CDN HTTPS、回源、实时鉴权和缓存命中', 'verifying');
     await this.infra.verify(base, row, cname, true);
     guard();
     await this.store.patch({ certificateSyncedAt: new Date() });
@@ -369,6 +370,7 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
     await this.switchDns(row, base, true, guard);
     await this.exactDns(row, base, true, guard);
     guard();
+    await this.phase(row, '验证 DNS 切换后的 CDN 实际访问', 'verifying');
     await this.infra.verify(base, row, `eat-cdn-${base.resourceKey.slice(0, 8)}.${base.domain}`, true);
     await this.store.patch({
       status: 'enabled',

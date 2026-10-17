@@ -23,6 +23,7 @@ let state = {
   cname: '',
   dnsInstructions: [],
   certificateExpiresAt: null,
+  certificateUploaded: false,
   originCertificateCheckedAt: null,
   certificateSyncedAt: null,
   certificateSyncError: '',
@@ -103,6 +104,7 @@ try {
           phase: 'CDN 已接入；公开静态资源可缓存',
           dnsInstructions: [],
           certificateExpiresAt: '2026-12-17T00:00:00Z',
+          certificateUploaded: true,
           certificateSyncedAt: new Date().toISOString(),
         };
         body = state;
@@ -135,6 +137,7 @@ try {
     await section.waitFor();
     assert.equal(await section.getByText('缓存维护：', { exact: false }).count(), 0);
     if (viewport.width === 1440) {
+      await section.getByText('CDN 证书同步：尚未上传', { exact: true }).waitFor();
       await section.getByRole('checkbox', { name: '启用 CDN' }).check();
       await section.getByLabel('CDN 加速区域').selectOption('global');
       await section.getByLabel('CDN AccessKey ID', { exact: true }).fill('ui-test-key');
@@ -163,6 +166,18 @@ try {
         await section.getByText('请在 DNS 服务商完成以下记录后点击“重新检查 / 恢复”：', { exact: true }).count(),
         0,
       );
+      state = {
+        ...state,
+        status: 'failed',
+        phase: '验证 CDN HTTPS、回源、实时鉴权和缓存命中',
+        lastError: 'CDN 接入检查失败：HTTP 502，请检查 HTTPS 回源地址、Host/SNI 与源站证书',
+        certificateUploaded: true,
+        dnsInstructions: [],
+      };
+      await page.reload();
+      await section.getByText('CDN 证书同步：已上传，等待边缘验证', { exact: true }).waitFor();
+      await section.getByText(state.lastError, { exact: true }).waitFor();
+      await section.screenshot({ path: output + '/edge-verification-desktop.png' });
       await section.getByRole('button', { name: '重新检查 / 恢复' }).click();
       await section.getByText('配置意愿：开启 · 实际接入：已验证接入').waitFor();
       await section.screenshot({ path: output + '/enabled-desktop.png' });
@@ -192,7 +207,7 @@ try {
   assert.equal(retries, 2);
   assert.deepEqual(errors, []);
   console.log(
-    'CDN browser checks passed: configuration, pending state, DNS guidance, recovery, credential clearing, mobile layout',
+    'CDN browser checks passed: configuration, pending state, DNS guidance, upload versus edge verification, recovery, credential clearing, mobile layout',
   );
 } finally {
   await browser.close();

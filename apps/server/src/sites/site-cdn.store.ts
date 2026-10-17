@@ -45,6 +45,7 @@ export class SiteCdnStore {
       cname: r?.cname ?? '',
       dnsInstructions: r?.dnsInstructions ?? [],
       certificateExpiresAt: r?.certificateExpiresAt?.toISOString() ?? null,
+      certificateUploaded: !!r?.resources.certificateFingerprint,
       originCertificateCheckedAt: r?.originCertificateCheckedAt?.toISOString() ?? null,
       certificateSyncedAt: r?.certificateSyncedAt?.toISOString() ?? null,
       certificateSyncError: r?.certificateSyncError ?? '',
