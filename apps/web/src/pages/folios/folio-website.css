@@ -1,0 +1,501 @@
+.folio-website-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+  background: var(--background);
+  color: var(--foreground);
+}
+.folio-website-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.folio-website-header > div:first-child {
+  min-width: 0;
+}
+.folio-website-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.folio-website-header h2 > span {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--muted);
+  color: #71717a;
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.folio-website-header p {
+  margin-top: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: #71717a;
+  font-size: 11px;
+}
+.folio-website-header-actions {
+  display: flex;
+  gap: 2px;
+}
+.folio-website-panel .folio-website-header-actions button,
+.folio-website-panel .folio-website-more {
+  width: 30px;
+  min-height: 30px;
+  height: 30px;
+  color: #71717a;
+  border-radius: 6px;
+}
+.folio-website-header-actions svg,
+.folio-website-more svg {
+  width: 16px;
+  height: 16px;
+}
+.folio-website-list {
+  flex: 1;
+  min-height: 0;
+  padding: 8px 10px 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scroll-padding-block: 8px;
+}
+.folio-website-thread {
+  position: relative;
+  margin-bottom: 4px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  transition:
+    background-color 150ms,
+    border-color 150ms;
+}
+.folio-website-thread::after {
+  content: '';
+  position: absolute;
+  bottom: -3px;
+  left: 48px;
+  right: 12px;
+  height: 1px;
+  background: #f0f0f2;
+}
+.folio-website-thread:hover {
+  background: #fafafa;
+}
+.folio-website-thread[data-active='true'] {
+  border-color: #e5e5eb;
+  background: #fafafb;
+  box-shadow: 0 1px 3px #18181b03;
+}
+.folio-website-thread[data-active='true']::after {
+  display: none;
+}
+.folio-website-comment {
+  position: relative;
+  min-width: 0;
+}
+.folio-website-panel button.folio-website-select {
+  display: grid;
+  grid-template-columns: 27px minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  min-height: 0;
+  padding: 17px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  user-select: text;
+}
+.folio-website-select:focus-visible {
+  outline: 2px solid #a4a7c4;
+  outline-offset: -2px;
+}
+.folio-website-select .folio-avatar {
+  width: 27px;
+  height: 27px;
+  font-size: 11px;
+}
+.folio-website-comment-content {
+  display: block;
+  min-width: 0;
+}
+.folio-website-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-height: 27px;
+  padding-right: 22px;
+}
+.folio-website-meta .folio-author {
+  font-size: 12px;
+}
+.folio-website-meta time {
+  font-size: 10px;
+  color: #71717a;
+}
+.folio-website-quote {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 6px 0 8px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  background: #f0f0f3;
+  color: #71717a;
+  font-size: 11px;
+}
+.folio-website-quote > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folio-website-quote > svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+.folio-website-select .folio-comment-text,
+.folio-website-select .folio-comment-deleted {
+  display: block;
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.75;
+}
+.folio-website-reply-count {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 10px;
+  color: #71717a;
+  font-size: 11px;
+}
+.folio-website-reply-count svg {
+  width: 12px;
+  height: 12px;
+}
+.folio-website-panel .folio-website-more {
+  position: absolute;
+  top: 13px;
+  right: 7px;
+  opacity: 0;
+  transition:
+    opacity 150ms,
+    background-color 150ms;
+}
+.folio-website-comment:hover > .folio-website-more,
+.folio-website-comment:focus-within > .folio-website-more,
+.folio-website-more[aria-expanded='true'] {
+  opacity: 1;
+}
+.folio-website-resolved-icon {
+  width: 12px;
+  height: 12px;
+  margin-left: auto;
+  color: var(--success);
+}
+.folio-website-comment[data-reply='true'] {
+  margin-left: 37px;
+}
+.folio-website-comment[data-reply='true']::before {
+  content: '';
+  position: absolute;
+  left: -12px;
+  top: 12px;
+  bottom: 8px;
+  width: 1px;
+  background: var(--border);
+}
+.folio-website-panel .folio-website-comment[data-reply='true'] > .folio-website-select {
+  grid-template-columns: 23px minmax(0, 1fr);
+  padding-block: 8px;
+  gap: 9px;
+}
+.folio-website-comment[data-reply='true'] .folio-avatar {
+  width: 23px;
+  height: 23px;
+  background: #eeeef1;
+  color: #71717a;
+  font-size: 10px;
+}
+.folio-website-comment[data-reply='true'] > .folio-website-more {
+  top: 8px;
+}
+.folio-website-discussion {
+  padding: 4px 12px 12px 49px;
+}
+.folio-discussion .folio-website-panel .folio-editor {
+  margin: 0;
+  padding: 9px 9px 7px;
+  border-radius: 8px;
+  box-shadow: none;
+}
+.folio-discussion .folio-website-panel .folio-editor:focus-within {
+  border-color: #bcbcc8;
+  box-shadow: 0 0 0 2px #18181b04;
+}
+.folio-discussion .folio-website-panel .folio-editor-input {
+  min-height: 64px;
+  font-size: 13px;
+}
+.folio-discussion .folio-website-panel .folio-editor-tools > button,
+.folio-discussion .folio-website-panel .folio-editor-send > button[type='submit'] {
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+}
+.folio-website-panel .folio-editor-send kbd {
+  font-size: 10px;
+}
+.folio-website-menu {
+  min-width: 196px;
+  max-width: calc(100vw - 16px);
+  border-color: #e6e6eb;
+  border-radius: 9px;
+  box-shadow:
+    0 10px 32px #18181b12,
+    0 2px 6px #18181b05;
+}
+.folio-website-menu [role='menuitem'] {
+  min-height: 34px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.folio-website-menu [role='menuitem'] > svg {
+  width: 14px;
+  height: 14px;
+}
+.folio-website-context {
+  margin: 0 12px 12px 49px;
+  padding: 9px;
+  border-radius: 6px;
+  background: #f0f0f3;
+  color: #71717a;
+  font-size: 11px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.folio-website-location-error {
+  padding-bottom: 10px;
+  color: #71717a;
+  font-size: 11px;
+  line-height: 1.7;
+}
+.folio-website-location-error a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.folio-website-resolved {
+  margin: 18px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.folio-website-panel .folio-website-resolved-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 13px;
+  border-radius: 6px;
+  color: #71717a;
+  text-align: left;
+  font-size: 12px;
+  cursor: pointer;
+}
+.folio-website-resolved-toggle:hover {
+  background: #fafafa;
+}
+.folio-website-resolved-toggle svg {
+  width: 13px;
+  height: 13px;
+  transform: rotate(-90deg);
+}
+.folio-website-resolved-toggle svg[data-open='true'] {
+  transform: none;
+}
+.folio-website-resolved-toggle > span:last-child {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.folio-website-empty {
+  padding: 44px 20px 32px;
+  color: #71717a;
+  text-align: center;
+  font-size: 13px;
+}
+.folio-website-empty > svg {
+  width: 25px;
+  height: 25px;
+  margin: 0 auto 12px;
+  color: #9b9ba5;
+  stroke-width: 1.3;
+}
+.folio-website-empty > p {
+  color: #52525b;
+  font-weight: 500;
+}
+.folio-website-empty > span {
+  display: block;
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.8;
+}
+.folio-website-new {
+  flex-shrink: 0;
+  padding: 12px 16px 16px;
+  border-top: 1px solid #f0f0f2;
+}
+.folio-website-panel .folio-website-new-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 12px;
+  border: 1px solid #e6e6eb;
+  border-radius: 9px;
+  color: #8a8a95;
+  background: white;
+  font-size: 13px;
+  text-align: left;
+  cursor: text;
+}
+.folio-website-new-trigger:hover {
+  border-color: #c9c9d1;
+}
+.folio-website-new-trigger svg {
+  width: 14px;
+  height: 14px;
+}
+.folio-website-new-trigger > svg:last-child {
+  margin-left: auto;
+}
+.folio-website-anchor {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: #71717a;
+  font-size: 11px;
+}
+.folio-website-anchor > svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+.folio-website-anchor > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folio-website-anchor > button {
+  margin-left: auto;
+}
+.folio-website-panel .folio-website-new > button:not(.folio-website-new-trigger) {
+  width: 100%;
+}
+.folio-website-signin {
+  min-height: 36px;
+  color: #71717a;
+  font-size: 12px;
+  cursor: pointer;
+}
+.folio-website-notice {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin: 0 16px 10px;
+  padding: 8px 10px;
+  border: 1px solid #e6e6eb;
+  border-radius: 8px;
+  color: #52525b;
+  font-size: 12px;
+}
+.folio-website-notice > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.folio-website-notice svg {
+  width: 14px;
+  height: 14px;
+  color: var(--success);
+  flex-shrink: 0;
+}
+.folio-website-notice button {
+  font-size: 12px;
+  font-weight: 500;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.folio-website-notice button:hover {
+  text-decoration: underline;
+}
+.folio-website-notice[role='alert'] {
+  color: var(--destructive);
+}
+@media (pointer: coarse) {
+  .folio-website-panel .folio-website-header-actions button,
+  .folio-website-panel .folio-website-more,
+  .folio-discussion .folio-website-panel .folio-editor-tools > button,
+  .folio-discussion .folio-website-panel .folio-editor-send > button[type='submit'] {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+  .folio-website-panel .folio-website-more {
+    top: 5px;
+    right: 2px;
+    opacity: 1;
+  }
+  .folio-website-meta {
+    padding-right: 30px;
+  }
+  .folio-website-header {
+    padding: 16px 12px 12px 20px;
+  }
+  .folio-website-menu [role='menuitem'] {
+    min-height: 44px;
+  }
+  .folio-website-notice button {
+    min-height: 44px;
+  }
+  .folio-website-comment[data-reply='true'] {
+    margin-left: 29px;
+  }
+  .folio-website-comment[data-reply='true']::before {
+    left: -8px;
+  }
+  .folio-website-discussion {
+    padding-left: 41px;
+  }
+  .folio-website-resolved-toggle {
+    min-height: 44px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .folio-website-menu,
+  .folio-mention-popover {
+    animation: none;
+    transition: none;
+  }
+}

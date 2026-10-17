@@ -9,6 +9,7 @@ import { cn } from '../lib/utils';
 import { FolioConnectionState } from './folios/folio-ui';
 import { FolioComposer as Composer, type MentionUser } from './folios/FolioComposer';
 import { FolioThread } from './folios/FolioThread';
+import { FolioWebsitePanel } from './folios/FolioWebsitePanel';
 import './folios/folio.css';
 import './folios/folio-discussion.css';
 import {
@@ -298,6 +299,53 @@ export function FolioDiscussion({
     setAnchor({ type: 'page' });
     send('eat:clear-anchor');
   }
+  const accessPrompt = error && (
+    <div className="space-y-3 rounded-xl border p-3">
+      <p role="alert" className="text-sm text-destructive">
+        {error}
+      </p>
+      {needsAccess ? (
+        <form
+          className="flex gap-2"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setVerifying(true);
+            try {
+              const data = await request<{ accessToken: string }>('POST', '/access', { password });
+              setProof(data.accessToken);
+              onAccessVerified?.(data.accessToken);
+              setPassword('');
+            } catch (e) {
+              setError((e as Error).message);
+            } finally {
+              setVerifying(false);
+            }
+          }}
+        >
+          <Input
+            type="password"
+            aria-label="Folio 访问密码"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="输入 Folio 访问密码"
+          />
+          <Button type="submit" loading={verifying}>
+            验证
+          </Button>
+        </form>
+      ) : (
+        <Button variant="outline" onClick={() => void reload()}>
+          重试
+        </Button>
+      )}
+      {!user && (
+        <Button variant="outline" onClick={login}>
+          登录 EAT
+        </Button>
+      )}
+    </div>
+  );
   const composer = versionId && !needsAccess && (
     <div className="folio-composer">
       {user ? (
@@ -394,230 +442,251 @@ export function FolioDiscussion({
       )}
       aria-label="Folio 评论"
     >
-      <div
-        className={cn('folio-discussion-heading space-y-4', embedded && 'shrink-0 border-b px-4 pb-3 pt-4')}
-      >
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <h2 className="folio-discussion-title">
-              {embedded ? '评论' : '讨论'}
-              <span>{threads.length}</span>
-            </h2>
-            {embedded && <p className="folio-discussion-page">{page || '/'}</p>}
+      {embedded ? (
+        <FolioWebsitePanel
+          key={JSON.stringify([slug, versionId, page, user?.id])}
+          threads={threads}
+          loading={loading}
+          page={page || '/'}
+          users={users}
+          signedIn={!!user}
+          anchor={anchor}
+          targetThread={targetThread}
+          missingThreadId={missingLocation?.id}
+          errorContent={accessPrompt}
+          needsAccess={needsAccess}
+          canCompose={!!versionId}
+          disabled={deleting || !!updating}
+          onSelect={(thread) => {
+            setLocateMessage('');
+            setMissingLocation(null);
+            if (thread.anchor.type === 'page') send('eat:clear-anchor');
+            else send('eat:locate', { anchor: thread.anchor, threadId: thread.id });
+          }}
+          onClearLocation={() => {
+            send('eat:clear-anchor');
+            setLocateMessage('');
+            setMissingLocation(null);
+          }}
+          onSelectAnchor={(mode) => send('eat:select', { mode })}
+          onClearAnchor={clearAnchor}
+          onCreate={async (content, mentions) => {
+            await request('POST', '/threads', { content, mentions, versionId, page: page || '/', anchor });
+            if (contextKey === contextRef.current) {
+              clearAnchor();
+              await reload();
+            }
+          }}
+          onReply={async (thread, content, mentions) => {
+            await request('POST', '/threads/' + thread.id + '/replies', { content, mentions, versionId });
+            if (contextKey === contextRef.current) await reload();
+          }}
+          onStatus={async (thread, status) => {
+            setUpdating(thread.id);
+            try {
+              await request('PATCH', '/threads/' + thread.id, { status });
+              if (contextKey === contextRef.current) await reload();
+            } finally {
+              setUpdating('');
+            }
+          }}
+          onDelete={(comment) => {
+            setDeleteTarget(comment);
+            setDeleteError('');
+          }}
+          onRefresh={() => void reload()}
+          onClose={() => {
+            send('eat:clear-anchor');
+            setMissingLocation(null);
+            send('eat:close');
+          }}
+          onLogin={login}
+        />
+      ) : (
+        <>
+          <div
+            className={cn(
+              'folio-discussion-heading space-y-4',
+              embedded && 'shrink-0 border-b px-4 pb-3 pt-4',
+            )}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h2 className="folio-discussion-title">
+                  {embedded ? '评论' : '讨论'}
+                  <span>{threads.length}</span>
+                </h2>
+                {embedded && <p className="folio-discussion-page">{page || '/'}</p>}
+              </div>
+              <div className="flex gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="刷新评论"
+                  disabled={loading}
+                  onClick={() => void reload()}
+                >
+                  <RefreshCw className={cn(loading && 'animate-spin')} />
+                </Button>
+                {embedded && (
+                  <Button variant="ghost" size="icon" aria-label="关闭评论" onClick={() => send('eat:close')}>
+                    <X />
+                  </Button>
+                )}
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="folio-comment-filters" role="group" aria-label="评论状态">
+                {(
+                  [
+                    ['', '全部'],
+                    ['open', '待处理'],
+                    ['resolved', '已解决'],
+                  ] as const
+                ).map(([value, label]) => (
+                  <Button
+                    key={value}
+                    variant={status === value ? 'outline' : 'ghost'}
+                    size="sm"
+                    aria-pressed={status === value}
+                    onClick={() => setStatus(value)}
+                  >
+                    {label}
+                    <span className="ml-1 tabular-nums text-muted-foreground">
+                      {threads.filter((t) => !value || t.status === value).length}
+                    </span>
+                  </Button>
+                ))}
+              </div>
+              {!embedded && (
+                <label className="folio-comment-search">
+                  <Search aria-hidden="true" />
+                  <Input
+                    aria-label="按页面筛选评论"
+                    placeholder="筛选页面，如 /about"
+                    value={page}
+                    onChange={(e) => setPage(e.target.value)}
+                  />
+                </label>
+              )}
+            </div>
           </div>
-          <div className="flex gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="刷新评论"
-              disabled={loading}
-              onClick={() => void reload()}
+          {locateMessage && (
+            <div
+              className={cn(
+                'flex shrink-0 items-start gap-2 rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground',
+                embedded && 'mx-4 mt-3',
+              )}
             >
-              <RefreshCw className={cn(loading && 'animate-spin')} />
-            </Button>
-            {embedded && (
-              <Button variant="ghost" size="icon" aria-label="关闭评论" onClick={() => send('eat:close')}>
+              <div role="status" className="min-w-0 flex-1">
+                {locateMessage}
+                {missingLocation && (
+                  <a
+                    className="ml-1 text-primary underline"
+                    href={missingLocation.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    查看评论时的页面
+                  </a>
+                )}
+              </div>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="关闭定位提示"
+                onClick={() => {
+                  setLocateMessage('');
+                  setMissingLocation(null);
+                }}
+              >
                 <X />
               </Button>
-            )}
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="folio-comment-filters" role="group" aria-label="评论状态">
-            {(
-              [
-                ['', '全部'],
-                ['open', '待处理'],
-                ['resolved', '已解决'],
-              ] as const
-            ).map(([value, label]) => (
-              <Button
-                key={value}
-                variant={status === value ? 'outline' : 'ghost'}
-                size="sm"
-                aria-pressed={status === value}
-                onClick={() => setStatus(value)}
-              >
-                {label}
-                <span className="ml-1 tabular-nums text-muted-foreground">
-                  {threads.filter((t) => !value || t.status === value).length}
-                </span>
-              </Button>
-            ))}
-          </div>
-          {!embedded && (
-            <label className="folio-comment-search">
-              <Search aria-hidden="true" />
-              <Input
-                aria-label="按页面筛选评论"
-                placeholder="筛选页面，如 /about"
-                value={page}
-                onChange={(e) => setPage(e.target.value)}
-              />
-            </label>
+            </div>
           )}
-        </div>
-      </div>
-      {locateMessage && (
-        <div
-          className={cn(
-            'flex shrink-0 items-start gap-2 rounded-lg bg-muted/50 p-3 text-xs text-muted-foreground',
-            embedded && 'mx-4 mt-3',
-          )}
-        >
-          <div role="status" className="min-w-0 flex-1">
-            {locateMessage}
-            {missingLocation && (
-              <a
-                className="ml-1 text-primary underline"
-                href={missingLocation.url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                查看评论时的页面
-              </a>
+          <div
+            className={cn(
+              'folio-thread-list space-y-3',
+              embedded && 'min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3',
             )}
-          </div>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="关闭定位提示"
-            onClick={() => {
-              setLocateMessage('');
-              setMissingLocation(null);
-            }}
+            aria-busy={loading}
           >
-            <X />
-          </Button>
-        </div>
-      )}
-      <div
-        className={cn(
-          'folio-thread-list space-y-3',
-          embedded && 'min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3',
-        )}
-        aria-busy={loading}
-      >
-        {error && (
-          <div className="space-y-3 rounded-xl border p-3">
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-            {needsAccess ? (
-              <form
-                className="flex gap-2"
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  setVerifying(true);
-                  try {
-                    const data = await request<{ accessToken: string }>('POST', '/access', { password });
-                    setProof(data.accessToken);
-                    onAccessVerified?.(data.accessToken);
-                    setPassword('');
-                  } catch (e) {
-                    setError((e as Error).message);
-                  } finally {
-                    setVerifying(false);
-                  }
-                }}
-              >
-                <Input
-                  type="password"
-                  aria-label="Folio 访问密码"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="输入 Folio 访问密码"
-                />
-                <Button type="submit" loading={verifying}>
-                  验证
-                </Button>
-              </form>
+            {accessPrompt}
+            {loading ? (
+              <p role="status" className="py-6 text-center text-sm text-muted-foreground">
+                正在读取评论…
+              </p>
             ) : (
-              <Button variant="outline" onClick={() => void reload()}>
-                重试
-              </Button>
-            )}
-            {!user && (
-              <Button variant="outline" onClick={login}>
-                登录 EAT
-              </Button>
+              <>
+                {!error && !visibleThreads.length && (
+                  <div className="space-y-2 py-8 text-center">
+                    <MessageSquare className="mx-auto size-7 text-muted-foreground/60" />
+                    <p className="text-sm font-medium">
+                      {status ? '暂无' + (status === 'open' ? '待处理' : '已解决') + '的评论' : '还没有评论'}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {status ? '切换到全部，查看其他讨论。' : '写下第一条反馈，让讨论从这里开始。'}
+                    </p>
+                  </div>
+                )}
+                {visibleThreads.map((t) => (
+                  <FolioThread
+                    key={t.id}
+                    thread={t}
+                    canReply={!!user}
+                    embedded={embedded}
+                    siteUrl={siteUrl}
+                    targeted={t.id === targetThread}
+                    replying={replyTo === t.id}
+                    updating={updating === t.id}
+                    deleting={deleting}
+                    onReply={() => setReplyTo(replyTo === t.id ? '' : t.id)}
+                    onLocate={() => send('eat:locate', { anchor: t.anchor, threadId: t.id })}
+                    onDelete={(comment) => {
+                      setDeleteTarget(comment);
+                      setDeleteError('');
+                    }}
+                    onResolve={async () => {
+                      if (updating) return;
+                      setUpdating(t.id);
+                      try {
+                        await request('PATCH', '/threads/' + t.id, {
+                          status: t.status === 'open' ? 'resolved' : 'open',
+                        });
+                        await reload();
+                      } catch (e) {
+                        setError((e as Error).message);
+                      } finally {
+                        setUpdating('');
+                      }
+                    }}
+                  >
+                    {replyTo === t.id && user && (
+                      <Composer
+                        key={t.id + versionId}
+                        users={users}
+                        label="发送回复"
+                        autoFocus
+                        onCancel={() => setReplyTo('')}
+                        submit={async (content, mentions) => {
+                          await request('POST', '/threads/' + t.id + '/replies', {
+                            content,
+                            mentions,
+                            versionId,
+                          });
+                          setReplyTo('');
+                          await reload();
+                        }}
+                      />
+                    )}
+                  </FolioThread>
+                ))}
+              </>
             )}
           </div>
-        )}
-        {loading ? (
-          <p role="status" className="py-6 text-center text-sm text-muted-foreground">
-            正在读取评论…
-          </p>
-        ) : (
-          <>
-            {!error && !visibleThreads.length && (
-              <div className="space-y-2 py-8 text-center">
-                <MessageSquare className="mx-auto size-7 text-muted-foreground/60" />
-                <p className="text-sm font-medium">
-                  {status ? '暂无' + (status === 'open' ? '待处理' : '已解决') + '的评论' : '还没有评论'}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {status ? '切换到全部，查看其他讨论。' : '写下第一条反馈，让讨论从这里开始。'}
-                </p>
-              </div>
-            )}
-            {visibleThreads.map((t) => (
-              <FolioThread
-                key={t.id}
-                thread={t}
-                canReply={!!user}
-                embedded={embedded}
-                siteUrl={siteUrl}
-                targeted={t.id === targetThread}
-                replying={replyTo === t.id}
-                updating={updating === t.id}
-                deleting={deleting}
-                onReply={() => setReplyTo(replyTo === t.id ? '' : t.id)}
-                onLocate={() => send('eat:locate', { anchor: t.anchor, threadId: t.id })}
-                onDelete={(comment) => {
-                  setDeleteTarget(comment);
-                  setDeleteError('');
-                }}
-                onResolve={async () => {
-                  if (updating) return;
-                  setUpdating(t.id);
-                  try {
-                    await request('PATCH', '/threads/' + t.id, {
-                      status: t.status === 'open' ? 'resolved' : 'open',
-                    });
-                    await reload();
-                  } catch (e) {
-                    setError((e as Error).message);
-                  } finally {
-                    setUpdating('');
-                  }
-                }}
-              >
-                {replyTo === t.id && user && (
-                  <Composer
-                    key={t.id + versionId}
-                    users={users}
-                    label="发送回复"
-                    autoFocus
-                    onCancel={() => setReplyTo('')}
-                    submit={async (content, mentions) => {
-                      await request('POST', '/threads/' + t.id + '/replies', {
-                        content,
-                        mentions,
-                        versionId,
-                      });
-                      setReplyTo('');
-                      await reload();
-                    }}
-                  />
-                )}
-              </FolioThread>
-            ))}
-          </>
-        )}
-      </div>
-      {(!embedded || !replyTo) && composer}
+          {(!embedded || !replyTo) && composer}
+        </>
+      )}
       <AlertDialog
         open={!!deleteTarget}
         onOpenChange={(open) => {

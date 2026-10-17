@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { createServer } from 'node:http';
 import { captureFolioUI } from './folio-ui-evidence.mjs';
+import { captureWebsiteUI } from './folio-website-evidence.mjs';
 
 const platform = process.env.EAT_UI_URL ?? 'http://127.0.0.1:5173';
 const output = process.env.EAT_UI_SHOTS ?? '/tmp/eat-site-ui';
@@ -39,6 +40,9 @@ const writes = [];
 let failThreads = false;
 let denyAccess = false;
 let failDelete = false;
+let failReply = false;
+let delayReply = false;
+let pendingReply;
 let pendingDelete;
 let delayDelete = false;
 let delayAbout = false;
@@ -122,8 +126,13 @@ function publishedHtml() {
   ).toString('base64');
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font:16px system-ui;margin:0;background:#faf9f6}main{padding:60px 36px;max-width:680px}h1{font-size:48px;line-height:1.2}p{line-height:1.8;color:#666}button,iframe{display:none!important}#region{height:180px;background:#eee;border-radius:20px;padding:24px}</style></head><body><main><p>STUDIO / 让创造发生</p><h1 id="hero-title">让灵感成为作品</h1><p>一个轻盈的空间，用于分享正在构建的想法。你可以留下反馈，也可以直接标注你关注的地方。</p><div id="region">一起打磨更好的体验</div></main><script data-eat="${config}">${embed}</script></body></html>`;
 }
-async function context(authenticated = true, viewport = { width: 1440, height: 1000 }) {
-  const ctx = await browser.newContext({ viewport, locale: 'zh-CN', timezoneId: 'Asia/Shanghai' });
+async function context(authenticated = true, viewport = { width: 1440, height: 1000 }, options = {}) {
+  const ctx = await browser.newContext({
+    viewport,
+    locale: 'zh-CN',
+    timezoneId: 'Asia/Shanghai',
+    ...options,
+  });
   if (authenticated)
     await ctx.addInitScript(
       ({ user, platform }) => {
@@ -221,7 +230,12 @@ async function context(authenticated = true, viewport = { width: 1440, height: 1
     const match = /^\/threads\/([^/]+)(\/replies)?$/.exec(path);
     if (match) {
       const t = threads.find((t) => t.id === match[1]);
-      if (match[2])
+      if (match[2]) {
+        if (delayReply)
+          await new Promise((resolve) => {
+            pendingReply = resolve;
+          });
+        if (failReply) return json({ message: '回复发送失败，请重试' }, 503);
         t.comments.push({
           ...t.comments[0],
           id: 'reply-' + writes.length,
@@ -229,7 +243,7 @@ async function context(authenticated = true, viewport = { width: 1440, height: 1
           versionId: data.versionId,
           versionNumber: data.versionId === v1 ? 1 : 2,
         });
-      else t.status = data.status;
+      } else t.status = data.status;
       return json(t);
     }
     throw new Error('Unhandled API ' + request.method() + ' ' + request.url());
@@ -238,10 +252,28 @@ async function context(authenticated = true, viewport = { width: 1440, height: 1
 }
 const waitText = (page, text) => page.getByText(text, { exact: true }).first().waitFor({ state: 'visible' });
 const shot = (page, name) => page.screenshot({ path: output + '/' + name + '.png', fullPage: true });
+async function refreshWebsite(frame) {
+  await frame.getByRole('button', { name: '评论面板操作', exact: true }).click();
+  await frame.getByRole('menuitem', { name: '刷新评论', exact: true }).click();
+}
+async function startWebsiteComment(frame) {
+  if (!(await frame.getByRole('textbox', { name: '评论内容', exact: true }).count()))
+    await frame.getByRole('button', { name: /^(添加评论…|继续编辑新评论…)$/ }).click();
+}
+async function chooseAnnotation(frame, name) {
+  await frame.getByRole('button', { name: '选择标注位置', exact: true }).click();
+  await frame.getByRole('menuitem', { name, exact: true }).click();
+}
+async function deleteWebsiteComment(frame, scope) {
+  await scope.getByRole('button', { name: /^(讨论操作|回复操作)$/ }).click();
+  await frame.getByRole('menuitem', { name: '删除评论', exact: true }).click();
+}
 try {
   await mkdir(output, { recursive: true });
   if (process.env.EAT_UI_CAPTURE === '1')
     await captureFolioUI({ context, platform, published, output, site, user });
+  if (process.env.EAT_UI_CAPTURE === '1')
+    await captureWebsiteUI({ context, platform, published, output, threads });
   const ctx = await context();
   const page = await ctx.newPage();
   await page.goto(platform + '/folios');
@@ -357,26 +389,143 @@ try {
   await toggle.click();
   assert.equal(await badge.isVisible(), false);
   const frame = sitePage.frameLocator('iframe[title="Folio 评论"]');
-  await frame.getByRole('textbox', { name: '评论内容', exact: true }).waitFor();
   await frame.getByText('首页标题可以更清楚地表达产品价值。', { exact: true }).waitFor();
   assert.equal(await frame.getByRole('combobox').count(), 0);
+  assert.equal(await frame.getByRole('textbox').count(), 0, 'composer starts collapsed');
+  assert.equal(
+    await frame.getByText('移动端布局已经很舒服了。', { exact: true }).count(),
+    0,
+    'resolved discussions start folded',
+  );
+  assert.equal(await frame.getByRole('button', { name: '回复', exact: true }).count(), 0);
+  assert.equal(await frame.getByRole('button', { name: '定位标注', exact: true }).count(), 0);
+  await sitePage.evaluate(() => {
+    window.__eatLocations = [];
+    window.addEventListener('message', (e) => {
+      if (e.data?.type === 'eat:locate') window.__eatLocations.push(e.data.threadId);
+    });
+  });
+  const embeddedOld = frame.locator('#thread-old');
+  const selectedText = await embeddedOld
+    .getByText('首页标题可以更清楚地表达产品价值。', { exact: true })
+    .boundingBox();
+  await sitePage.mouse.move(selectedText.x + 2, selectedText.y + selectedText.height / 2);
+  await sitePage.mouse.down();
+  await sitePage.mouse.move(selectedText.x + 90, selectedText.y + selectedText.height / 2, { steps: 8 });
+  await sitePage.mouse.up();
+  assert.equal(
+    await embeddedOld.getAttribute('data-active'),
+    'false',
+    'selecting text must not activate discussion',
+  );
+  await sitePage
+    .frames()
+    .find((f) => f.url().startsWith(platform))
+    .evaluate(() => window.getSelection()?.removeAllRanges());
+  await embeddedOld.getByRole('button', { name: '展开讨论并定位标注' }).click();
+  await embeddedOld.getByRole('textbox', { name: '回复内容' }).fill('第一组保留的草稿');
+  await embeddedOld.getByText('当前页面已调整', { exact: true }).waitFor();
+  await sitePage.locator('#__eat_highlight').waitFor({ state: 'visible' });
+  const another = frame.locator('article').filter({ hasText: '切换 tab 仍保留的草稿' });
+  await another.getByRole('button', { name: '展开讨论并定位标注' }).click();
+  await another.getByRole('button', { name: '提及同事' }).click();
+  const mentionPopover = frame.getByRole('dialog', { name: '提及同事' });
+  await mentionPopover.waitFor();
+  const mentionBounds = await mentionPopover.boundingBox();
+  const embedBounds = await sitePage.locator('iframe[title="Folio 评论"]').boundingBox();
+  assert.ok(
+    mentionBounds.y >= embedBounds.y &&
+      mentionBounds.y + mentionBounds.height <= embedBounds.y + embedBounds.height,
+    'mention suggestions remain inside iframe',
+  );
+  await frame.getByRole('button', { name: '陈沐 chen@example.test' }).click();
+  assert.equal(await another.getByRole('textbox', { name: '回复内容' }).inputValue(), '@陈沐 ');
+  await another.getByRole('textbox', { name: '回复内容' }).fill('第二组保留的草稿');
+  await embeddedOld.getByRole('button', { name: '展开讨论并定位标注' }).click();
+  assert.equal(await embeddedOld.getByRole('textbox', { name: '回复内容' }).inputValue(), '第一组保留的草稿');
+  assert.equal(await frame.getByRole('textbox').count(), 1, 'only one active editor');
+  const locationCount = await sitePage.evaluate(() => window.__eatLocations.length);
+  await embeddedOld.getByRole('button', { name: '讨论操作' }).click();
+  await frame.getByRole('menuitem', { name: '详细信息' }).click();
+  await embeddedOld.getByText('页面：/ · 发起于 v1', { exact: true }).waitFor();
+  assert.equal(
+    await sitePage.evaluate(() => window.__eatLocations.length),
+    locationCount,
+    'menu action must not locate',
+  );
+  await embeddedOld.getByRole('button', { name: '讨论操作' }).click();
+  await frame.getByRole('menuitem', { name: '复制讨论链接' }).click();
+  await frame.getByText('讨论链接已复制', { exact: true }).waitFor();
+  await embeddedOld.getByRole('button', { name: '讨论操作' }).click();
+  await frame.getByRole('menuitem', { name: '标记解决' }).click();
+  await frame.getByText('讨论已解决', { exact: true }).waitFor();
+  assert.equal(await embeddedOld.count(), 0, 'resolved thread moves into folded section');
+  await frame.getByRole('button', { name: '撤销', exact: true }).click();
+  await embeddedOld.getByRole('textbox', { name: '回复内容' }).waitFor();
+  assert.equal(await embeddedOld.getByRole('textbox', { name: '回复内容' }).inputValue(), '第一组保留的草稿');
+  failReply = true;
+  delayReply = true;
+  const pendingReplyRequest = sitePage.waitForRequest(
+    (r) => r.url().includes('/threads/old/replies') && r.method() === 'POST',
+  );
+  await embeddedOld.getByRole('button', { name: '发送回复' }).click();
+  await pendingReplyRequest;
+  await another.getByRole('button', { name: '展开讨论并定位标注' }).click();
+  await embeddedOld.getByRole('button', { name: '展开讨论并定位标注' }).click();
+  assert.equal(
+    await embeddedOld.getByRole('button', { name: '发送回复' }).isDisabled(),
+    true,
+    'in-flight send survives thread switching',
+  );
+  assert.equal(typeof pendingReply, 'function');
+  pendingReply();
+  await embeddedOld.getByRole('alert').getByText('回复发送失败，请重试').waitFor();
+  assert.equal(await embeddedOld.getByRole('textbox', { name: '回复内容' }).inputValue(), '第一组保留的草稿');
+  failReply = false;
+  delayReply = false;
+  await embeddedOld.getByRole('button', { name: '发送回复' }).click();
+  await embeddedOld.getByText('第一组保留的草稿', { exact: true }).waitFor();
+  assert.equal(writes.at(-1).data.versionId, v1, 'reply belongs to actual embedded version');
+  const resolvedToggle = frame.getByRole('button', { name: /^已解决/ });
+  await resolvedToggle.click();
+  await frame.locator('#thread-new').getByRole('button', { name: '展开讨论并定位标注' }).click();
+  await frame.locator('#thread-new').getByRole('textbox', { name: '回复内容' }).waitFor();
+  assert.equal(
+    await sitePage.locator('#__eat_highlight').isVisible(),
+    false,
+    'page feedback clears anchor highlight',
+  );
+  await resolvedToggle.click();
+
+  await startWebsiteComment(frame);
   await frame.getByRole('textbox', { name: '评论内容', exact: true }).fill('元素批注草稿');
-  await frame.getByRole('button', { name: '标注元素', exact: true }).click();
+  const beforeSelection = writes.length;
+  await chooseAnnotation(frame, '标注元素');
   await sitePage.getByRole('button', { name: '取消标注', exact: true }).waitFor();
   await sitePage.keyboard.press('Escape');
+  assert.equal(writes.length, beforeSelection, 'annotation tool must not submit draft');
   assert.equal(
     await frame.getByRole('textbox', { name: '评论内容', exact: true }).inputValue(),
     '元素批注草稿',
   );
-  await frame.getByRole('button', { name: '标注元素', exact: true }).click();
+  await chooseAnnotation(frame, '标注元素');
   await sitePage.locator('#__eat_widget').getByRole('button', { name: '取消标注', exact: true }).waitFor();
   await sitePage.locator('#hero-title').click();
   await frame.getByRole('button', { name: '取消标注', exact: true }).waitFor();
+  await embeddedOld.getByRole('button', { name: '展开讨论并定位标注' }).click();
+  await startWebsiteComment(frame);
+  await frame.getByRole('button', { name: '取消标注', exact: true }).waitFor();
+  assert.equal(
+    await frame.getByRole('textbox', { name: '评论内容', exact: true }).inputValue(),
+    '元素批注草稿',
+    'new comment keeps content and anchor across discussion selection',
+  );
   await frame.getByRole('button', { name: '发送评论', exact: true }).click();
   await frame.getByText('元素批注草稿', { exact: true }).waitFor();
-  assert.equal(writes.at(-1).data.versionId, v1); // 固定页面实际浏览 v1，不能替换成当前在线 v2。
+  assert.equal(writes.at(-1).data.versionId, v1);
   assert.equal(writes.at(-1).data.anchor.elementId, 'hero-title');
-  await frame.getByRole('button', { name: '框选区域', exact: true }).click();
+  await startWebsiteComment(frame);
+  await chooseAnnotation(frame, '框选区域');
   await sitePage.locator('#__eat_widget').getByRole('button', { name: '取消标注', exact: true }).waitFor();
   const bounds = await sitePage.locator('#region').boundingBox();
   await sitePage.mouse.move(bounds.x + 12, bounds.y + 12);
@@ -389,14 +538,15 @@ try {
   await frame.getByText('区域批注', { exact: true }).waitFor();
   assert.equal(writes.at(-1).data.anchor.type, 'region');
   assert.ok(writes.at(-1).data.anchor.rect.width > 0);
-  await frame.locator('#thread-old').getByRole('button', { name: '定位标注' }).click();
-  await frame.getByText('已定位到页面位置', { exact: true }).waitFor();
+  await embeddedOld.getByRole('button', { name: '展开讨论并定位标注' }).click();
+  await sitePage.locator('#__eat_highlight').waitFor({ state: 'visible' });
   await sitePage.locator('#hero-title').evaluate((el) => el.remove());
-  await frame.locator('#thread-old').getByRole('button', { name: '定位标注' }).click();
-  await frame.getByText('页面内容已变化，可查看评论时的页面。', { exact: false }).waitFor();
-  await frame.getByRole('link', { name: '查看评论时的页面' }).first().waitFor();
+  await embeddedOld.getByRole('button', { name: '展开讨论并定位标注' }).click();
+  await embeddedOld.getByText('页面内容已变化，可查看评论时的页面。', { exact: false }).waitFor();
+  await embeddedOld.getByRole('link', { name: '查看评论时的页面' }).waitFor();
   await shot(sitePage, 'embedded-desktop');
   await sitePage.setViewportSize({ width: 390, height: 844 });
+  await startWebsiteComment(frame);
   const sendBounds = await frame.getByRole('button', { name: '发送评论', exact: true }).boundingBox();
   assert.ok(sendBounds.y + sendBounds.height < 844);
   await shot(sitePage, 'embedded-mobile');
@@ -404,13 +554,43 @@ try {
   assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
   await badge.waitFor({ state: 'visible' });
   await toggle.click();
+  await startWebsiteComment(frame);
   await frame.getByRole('textbox', { name: '评论内容', exact: true }).fill('切页前草稿');
   await sitePage.evaluate(() => history.pushState({}, '', '/about'));
   await frame.getByText('关于页面的反馈', { exact: true }).waitFor();
+  await startWebsiteComment(frame);
   assert.equal(await frame.getByRole('textbox', { name: '评论内容', exact: true }).inputValue(), '');
   assert.equal(await frame.getByRole('button', { name: '取消标注', exact: true }).count(), 0);
+
+  const linked = await ctx.newPage();
+  await linked.goto(published + '?eat_thread=new');
+  const linkedFrame = linked.frameLocator('iframe[title="Folio 评论"]');
+  await linkedFrame.locator('#thread-new[data-active="true"]').waitFor();
+  assert.equal(
+    await linkedFrame.getByRole('button', { name: /^已解决/ }).getAttribute('aria-expanded'),
+    'true',
+  );
+  await linked.close();
+  const touchContext = await context(true, { width: 390, height: 844 }, { hasTouch: true, isMobile: true });
+  const touchPage = await touchContext.newPage();
+  await touchPage.goto(published);
+  await touchPage.locator('#__eat_widget').getByRole('button', { name: '评论', exact: true }).click();
+  const touchFrame = touchPage.frameLocator('iframe[title="Folio 评论"]');
+  await touchFrame.locator('#thread-old').getByRole('button', { name: '展开讨论并定位标注' }).click();
+  assert.equal(
+    await touchFrame
+      .getByRole('textbox', { name: '回复内容' })
+      .evaluate((el) => el === document.activeElement),
+    false,
+    'touch selection must not autofocus keyboard',
+  );
+  assert.equal(
+    await touchPage.locator('iframe[title="Folio 评论"]').evaluate((el) => el.contentWindow !== null),
+    true,
+  );
+  await touchContext.close();
   console.log(
-    'PASS embed: style isolation, old-page attribution, selection cancel, element/region anchors, locate/fallback, close, navigation, mobile fixed composer',
+    'PASS embed: grouped replies, single editor, drafts, menus, resolve/undo, folded history/deep link, locate/fallback, annotation tools, actual version, navigation and touch focus',
   );
 
   const anonymous = await context(false);
@@ -424,7 +604,7 @@ try {
   await waitText(anon, '首页标题可以更清楚地表达产品价值。');
   await anon.getByRole('button', { name: '登录后评论', exact: true }).waitFor();
   denyAccess = true;
-  await anon.getByRole('button', { name: '刷新评论' }).click();
+  await refreshWebsite(anon);
   await anon.getByLabel('Folio 访问密码').fill('password');
   await anon.getByRole('button', { name: '验证', exact: true }).click();
   await waitText(anon, '首页标题可以更清楚地表达产品价值。');
@@ -497,12 +677,9 @@ try {
     0,
   );
   threads.unshift(thread('delete-embedded', '页面内删除的评论', v1, '/about'));
-  await frame.getByRole('button', { name: '刷新评论' }).click();
+  await refreshWebsite(frame);
   await frame.getByText('页面内删除的评论', { exact: true }).waitFor();
-  await frame
-    .locator('#comment-delete-embedded-first')
-    .getByRole('button', { name: '删除评论', exact: true })
-    .click();
+  await deleteWebsiteComment(frame, frame.locator('#comment-delete-embedded-first'));
   await frame.getByRole('alertdialog').getByRole('button', { name: '取消', exact: true }).focus();
   await sitePage.keyboard.press('Escape');
   await frame.getByRole('textbox', { name: '评论内容', exact: true }).waitFor();
@@ -513,10 +690,7 @@ try {
       .getAttribute('aria-expanded'),
     'true',
   );
-  await frame
-    .locator('#comment-delete-embedded-first')
-    .getByRole('button', { name: '删除评论', exact: true })
-    .click();
+  await deleteWebsiteComment(frame, frame.locator('#comment-delete-embedded-first'));
   await frame.getByRole('alertdialog').getByRole('button', { name: '删除评论', exact: true }).click();
   await frame.locator('#thread-delete-embedded').waitFor({ state: 'detached' });
   console.log(
@@ -540,6 +714,7 @@ try {
   );
   assert.equal(await badge.isVisible(), false);
   await toggle.click();
+  await startWebsiteComment(frame);
   await frame.getByRole('textbox', { name: '评论内容', exact: true }).fill('当前路径的新反馈');
   await frame.getByRole('button', { name: '发送评论', exact: true }).click();
   const indicatorThread = frame.locator('article').filter({ hasText: '当前路径的新反馈' });
@@ -547,7 +722,7 @@ try {
   await frame.getByRole('button', { name: '关闭评论', exact: true }).click();
   await badge.waitFor({ state: 'visible' });
   await toggle.click();
-  await indicatorThread.getByRole('button', { name: '删除评论', exact: true }).click();
+  await deleteWebsiteComment(frame, indicatorThread);
   await frame.getByRole('alertdialog').getByRole('button', { name: '删除评论', exact: true }).click();
   await frame.getByText('还没有评论', { exact: true }).waitFor();
   await frame.getByRole('button', { name: '关闭评论', exact: true }).click();

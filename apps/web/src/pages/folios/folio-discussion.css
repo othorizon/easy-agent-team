@@ -546,18 +546,17 @@
   width: 13px;
   height: 13px;
 }
-.folio-mention-menu {
-  position: absolute;
-  inset-inline: 0;
-  bottom: calc(100% + 14px);
+.folio-mention-popover {
   z-index: 20;
-  max-height: 220px;
+  width: var(--radix-popover-trigger-width);
+  max-height: min(220px, var(--radix-popover-content-available-height));
   overflow-y: auto;
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: 9px;
   background: var(--popover);
   box-shadow: 0 8px 30px #18181b14;
+  outline: none;
 }
 .folio-mention-option {
   display: flex;

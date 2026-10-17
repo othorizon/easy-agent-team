@@ -3,8 +3,10 @@ import { ArrowUp, AtSign } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Textarea } from '../../components/ui/input';
 import { Badge } from '../../components/ui/badge';
+import * as Popover from '@radix-ui/react-popover';
 
 export type MentionUser = { id: string; name: string; email: string };
+export type FolioDraft = { content: string; mentions: MentionUser[] };
 
 export function FolioComposer({
   users,
@@ -13,6 +15,12 @@ export function FolioComposer({
   onCancel,
   autoFocus = false,
   toolbar,
+  reply = !!onCancel,
+  draft,
+  onDraftChange,
+  onEscape,
+  submitting = false,
+  submitError,
 }: {
   users: MentionUser[];
   submit: (content: string, mentions: string[]) => Promise<void>;
@@ -20,12 +28,24 @@ export function FolioComposer({
   onCancel?: () => void;
   autoFocus?: boolean;
   toolbar?: ReactNode;
+  reply?: boolean;
+  draft?: FolioDraft;
+  onDraftChange?: (value: FolioDraft) => void;
+  onEscape?: () => void;
+  submitting?: boolean;
+  submitError?: string;
 }) {
-  const [content, setContent] = useState('');
-  const [mentions, setMentions] = useState<MentionUser[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [localDraft, setLocalDraft] = useState<FolioDraft>({ content: '', mentions: [] });
+  const { content, mentions } = draft ?? localDraft;
+  const updateDraft = onDraftChange ?? setLocalDraft;
+  const [sending, setBusy] = useState(false);
+  const busy = sending || submitting;
   const [error, setError] = useState('');
+  const [mentionDismissed, setMentionDismissed] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (autoFocus) input.current?.focus({ preventScroll: true });
+  }, [autoFocus]);
   useEffect(() => {
     if (!input.current) return;
     input.current.style.height = '0px';
@@ -49,8 +69,7 @@ export function FolioComposer({
             content,
             mentions.map((u) => u.id),
           );
-          setContent('');
-          setMentions([]);
+          updateDraft({ content: '', mentions: [] });
         } catch (e) {
           setError((e as Error).message);
         } finally {
@@ -61,52 +80,86 @@ export function FolioComposer({
       <div className="relative">
         <Textarea
           ref={input}
-          aria-label={onCancel ? '回复内容' : '评论内容'}
-          autoFocus={autoFocus}
+          aria-label={reply ? '回复内容' : '评论内容'}
           required
           maxLength={10000}
           disabled={busy}
           className="folio-editor-input"
           value={content}
-          placeholder={onCancel ? '回复，或 @ 提及同事…' : '写下你的想法，@ 提及同事…'}
+          placeholder={reply ? '回复，或 @ 提及同事…' : '写下你的想法，@ 提及同事…'}
           onKeyDown={(e) => {
+            if (e.key === 'Escape' && query !== undefined && !mentionDismissed) {
+              e.preventDefault();
+              setMentionDismissed(true);
+            } else if (e.key === 'Escape' && onEscape) {
+              e.preventDefault();
+              onEscape();
+            }
             if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && !e.nativeEvent.isComposing) {
               e.preventDefault();
               e.currentTarget.form?.requestSubmit();
             }
           }}
           onChange={(e) => {
-            setContent(e.target.value);
-            setMentions(mentions.filter((u) => e.target.value.includes('@' + u.name)));
+            setMentionDismissed(false);
+            updateDraft({
+              content: e.target.value,
+              mentions: mentions.filter((u) => e.target.value.includes('@' + u.name)),
+            });
           }}
         />
-        {query !== undefined && (
-          <div className="folio-mention-menu" aria-label="提及同事">
-            {matches.length ? (
-              matches.map((u) => (
-                <button
-                  key={u.id}
-                  type="button"
-                  className="folio-mention-option"
-                  onClick={() => {
-                    setContent(content.replace(/@[^\s@]*$/, '@' + u.name + ' '));
-                    setMentions([...mentions.filter((m) => m.id !== u.id), u]);
-                    input.current?.focus();
-                  }}
-                >
-                  <span className="folio-avatar" aria-hidden="true">
-                    {u.name.slice(0, 1)}
-                  </span>
-                  <span>
-                    {u.name} <small>{u.email}</small>
-                  </span>
-                </button>
-              ))
-            ) : (
-              <p className="p-3 text-xs text-muted-foreground">没有匹配的同事</p>
-            )}
-          </div>
-        )}
+        <Popover.Root
+          open={query !== undefined && !mentionDismissed}
+          onOpenChange={(open) => {
+            if (!open) setMentionDismissed(true);
+          }}
+        >
+          <Popover.Anchor asChild>
+            <span className="pointer-events-none absolute inset-0" aria-hidden="true" />
+          </Popover.Anchor>
+          <Popover.Portal>
+            <Popover.Content
+              className="folio-mention-popover"
+              aria-label="提及同事"
+              side="top"
+              align="start"
+              sideOffset={8}
+              collisionPadding={8}
+              onOpenAutoFocus={(event) => event.preventDefault()}
+              onCloseAutoFocus={(event) => event.preventDefault()}
+              onInteractOutside={(event) => {
+                if (event.target === input.current) event.preventDefault();
+              }}
+              onEscapeKeyDown={(event) => event.stopPropagation()}
+            >
+              {matches.length ? (
+                matches.map((u) => (
+                  <button
+                    key={u.id}
+                    type="button"
+                    className="folio-mention-option"
+                    onClick={() => {
+                      updateDraft({
+                        content: content.replace(/@[^\s@]*$/, '@' + u.name + ' '),
+                        mentions: [...mentions.filter((m) => m.id !== u.id), u],
+                      });
+                      input.current?.focus();
+                    }}
+                  >
+                    <span className="folio-avatar" aria-hidden="true">
+                      {u.name.slice(0, 1)}
+                    </span>
+                    <span>
+                      {u.name} <small>{u.email}</small>
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <p className="p-3 text-xs text-muted-foreground">没有匹配的同事</p>
+              )}
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
       </div>
       {!!mentions.length && (
         <div className="flex flex-wrap gap-1">
@@ -117,9 +170,9 @@ export function FolioComposer({
           ))}
         </div>
       )}
-      {error && (
+      {(error || submitError) && (
         <p role="alert" className="text-sm text-destructive">
-          {error}
+          {error || submitError}
         </p>
       )}
       <div className="folio-editor-footer">
@@ -132,7 +185,11 @@ export function FolioComposer({
             title="提及同事"
             disabled={busy}
             onClick={() => {
-              setContent((value) => value + (value && !/\s$/.test(value) ? ' ' : '') + '@');
+              setMentionDismissed(false);
+              updateDraft({
+                content: content + (content && !/\s$/.test(content) ? ' ' : '') + '@',
+                mentions,
+              });
               input.current?.focus();
             }}
           >

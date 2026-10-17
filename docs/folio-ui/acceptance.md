@@ -38,3 +38,15 @@ pnpm --filter @eat/web build
 ## 评论区视觉迭代
 
 平台与发布网站的评论改为轻量讨论流后，重新执行完整浏览器回归、Web 类型检查与生产构建、Server 类型检查。新版截图位于 /workspace/folio-comments-v2；18-discussion-closeup.png 和 19-embedded-closeup.png 为两处近景，13-comments-mobile.png 和 16-embedded-mobile.png 为手机版。
+
+## 网站讨论组交互
+
+- 默认只显示未解决讨论；已解决折叠，深链接可自动展开目标组。
+- 点击讨论自动定位、展开回复；切换组保留草稿；菜单和文字选择不会触发定位。
+- 解决、撤销、详情和复制链接通过菜单操作；删除继续校验权限并保留确认。
+- 跨讨论切换保留发送中的保护状态；回复失败后保留内容并可重试。
+- 新评论的元素 / 区域选择及取消、切换讨论后保留正文和标注、实际浏览版本归属通过。
+- @ 候选在 iframe 内自动避让边缘；触屏选择讨论不自动聚焦输入框；每张截图检查 iframe 横向溢出。
+- 原有控制台、发布、错误恢复、访问权限、评论蓝点和删除回归通过；Web 类型检查和生产构建通过。
+
+运行 `EAT_UI_CAPTURE=1 EAT_UI_SHOTS=/workspace/folio-website-v3 node scripts/test-site-ui.mjs`。网站专项截图位于输出目录的 `website/`，涵盖默认、组内回复、操作菜单、已解决展开、新评论、位置选择及触屏布局；使用隔离 API 测试数据。右下角入口按钮的样式保持原样。
