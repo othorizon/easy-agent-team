@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="从 Changelog、研究成果到想法和交互演示，找到适合你的 Folio 使用场景。了解何时选择 Folio，何时使用共享文档。">
+  <title>让好成果，被看见。— Folio 使用指南</title>
+  <link rel="icon" href="assets/eat-brand/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="guide.css">
+  <script src="guide.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到正文</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="#top" aria-label="eat Folio 指南首页"><img src="assets/eat-brand/icon.svg" width="32" height="32" alt="eat"><span class="brand-divider" aria-hidden="true">/</span><span>Folio <span class="brand-note">使用指南</span></span></a>
+      <nav aria-label="指南目录"><a href="#scenarios">使用场景</a><a href="#choose">为什么用</a><a href="#start">从哪开始 <span aria-hidden="true">↗</span></a></nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero wrap" id="top" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="short-line" aria-hidden="true"></span> 给每一位有东西想分享的人</p>
+        <h1 id="hero-title" data-eat-id="guide-hero-title">让好成果，<br>被看见。</h1>
+        <p class="hero-lead">把值得分享的工作，<br class="desktop-break">变成一个 <strong>Folio</strong>。</p>
+        <p class="hero-description">一份更新、一个发现、一个还在生长的想法。<br>用网页、演示或报告，把它讲清楚，再邀请大家一起讨论。</p>
+        <a class="button button-dark" href="#scenarios">找到我的使用场景 <span aria-hidden="true">↓</span></a>
+      </div>
+      <div class="hero-index" aria-label="六个分享起点">
+        <div class="index-heading"><span>你想分享什么？</span><span class="mono">FOLIO</span></div>
+        <a href="#scenarios" data-scene="updates"><span class="index-number">01</span><span>我的新进展<small>Changelog</small></span><span class="index-arrow" aria-hidden="true">↗</span></a>
+        <a href="#scenarios" data-scene="research"><span class="index-number">02</span><span>一个研究发现<small>Research</small></span><span class="index-arrow" aria-hidden="true">↗</span></a>
+        <a href="#scenarios" data-scene="ideas"><span class="index-number">03</span><span>值得聊的想法<small>Ideas</small></span><span class="index-arrow" aria-hidden="true">↗</span></a>
+        <a href="#scenarios" data-scene="demos"><span class="index-number">04</span><span>能亲手试的东西<small>Interactive demo</small></span><span class="index-arrow" aria-hidden="true">↗</span></a>
+        <a href="#scenarios" data-scene="retros"><span class="index-number">05</span><span>一次项目的经验<small>Retrospective</small></span><span class="index-arrow" aria-hidden="true">↗</span></a>
+        <a href="#scenarios" data-scene="guides"><span class="index-number">06</span><span>可反复使用的知识<small>Guidebook</small></span><span class="index-arrow" aria-hidden="true">↗</span></a>
+      </div>
+    </section>
+
+    <section class="definition wrap" aria-labelledby="definition-title">
+      <h2 id="definition-title">Folio 是什么？</h2>
+      <div><p class="definition-lead">在 eat 里，给一份成果一个可持续分享的网页入口。</p><p>它可以是一页说明、一组演示，也可以是一份带交互的报告。读者打开链接即可阅读和体验，并围绕页面内容留下反馈；你可以持续发布新版，也可以保留某次发布的快照。</p></div>
+    </section>
+
+    <section class="section wrap" id="scenarios" aria-labelledby="scenarios-title">
+      <div class="section-heading"><span class="section-number" aria-hidden="true">01 /</span><div><h2 id="scenarios-title">从你想分享的事开始。</h2><p>不必等到“做完一个大项目”。一个值得让别人知道的进展，就可以成为起点。</p></div></div>
+      <div class="scene-layout">
+        <div class="scene-tabs" aria-label="选择使用场景" hidden>
+          <button type="button" id="tab-updates" data-tab="updates"><span>01</span>Changelog<span class="tab-arrow" aria-hidden="true">→</span></button>
+          <button type="button" id="tab-research" data-tab="research"><span>02</span>研究成果<span class="tab-arrow" aria-hidden="true">→</span></button>
+          <button type="button" id="tab-ideas" data-tab="ideas"><span>03</span>想法分享<span class="tab-arrow" aria-hidden="true">→</span></button>
+          <button type="button" id="tab-demos" data-tab="demos"><span>04</span>交互演示<span class="tab-arrow" aria-hidden="true">→</span></button>
+          <button type="button" id="tab-retros" data-tab="retros"><span>05</span>项目复盘<span class="tab-arrow" aria-hidden="true">→</span></button>
+          <button type="button" id="tab-guides" data-tab="guides"><span>06</span>团队指南<span class="tab-arrow" aria-hidden="true">→</span></button>
+        </div>
+        <div class="scene-panels">
+          <article class="scene-panel" id="panel-updates" data-panel="updates" data-eat-id="scenario-updates">
+            <div class="scene-topline"><span class="mono">CHANGELOG</span><span>适合持续更新</span></div>
+            <h3>让变化，被真正理解。</h3>
+            <p class="scene-intro">上线一个功能、改进一段流程、完成一次迭代。把“我做了什么”写成“这对你有什么用”，让同事知道发生了什么，也知道接下来能做什么。</p>
+            <div class="scene-body"><div class="scene-recipe"><h4>一份有用的更新，可以讲清楚</h4><ol><li><strong>变化</strong><span>这次新增、改进或修复了什么？</span></li><li><strong>影响</strong><span>谁会受益？使用方式有什么变化？</span></li><li><strong>下一步</strong><span>在哪里体验？希望收到哪方面反馈？</span></li></ol><p class="scene-fit">适用例子：个人工作进展、产品更新、内部工具迭代、团队月度成果。</p></div>
+              <div class="specimen"><p class="specimen-label">内容结构示例</p><h4>这次更新，让什么更好了？</h4><div class="sample-update"><span>改进</span><p>用一张前后对比，说明这次变化。</p></div><div class="sample-update"><span>影响</span><p>告诉使用者：这会怎样改变你的工作。</p></div><div class="sample-update"><span>体验</span><p>附上入口，并提出一个具体的反馈问题。</p></div><p class="specimen-caption">同一个 Folio 持续更新；发布历史保留每次交付的样子。</p></div></div>
+            <div class="scene-footer"><p><strong>Folio 在这里的价值</strong>：让进展拥有固定入口，配上截图、演示和可追踪的反馈。</p><button class="text-button copy-prompt" type="button" data-prompt="updates" hidden>复制起草提示 <span aria-hidden="true">↗</span></button></div>
+          </article>
+
+          <article class="scene-panel" id="panel-research" data-panel="research" data-eat-id="scenario-research">
+            <div class="scene-topline"><span class="mono">RESEARCH</span><span>适合结论与证据一起呈现</span></div>
+            <h3>让发现，走出研究过程。</h3>
+            <p class="scene-intro">做完一次用户访谈、技术调研、竞品比较或数据分析，把零散材料整理成别人能快速理解的结论。读者先看到判断，再按需要深入证据。</p>
+            <div class="scene-body"><div class="scene-recipe"><h4>把研究写成别人能用的成果</h4><ol><li><strong>问题与结论</strong><span>研究了什么？最重要的发现是什么？</span></li><li><strong>证据与边界</strong><span>依据来自哪里？哪些情况还不能下结论？</span></li><li><strong>建议与材料</strong><span>建议采取什么行动？如何查阅原始来源？</span></li></ol><p class="scene-fit">适用例子：技术选型报告、实验结果、用户洞察、行业专题研究。</p></div>
+              <div class="specimen research-specimen"><p class="specimen-label">推荐阅读层次</p><div class="research-level"><span>先读</span><h4>一个核心结论</h4><p>让读者先知道，这份研究回答了什么。</p></div><div class="research-level"><span>再看</span><h4>支持它的证据</h4><p>图表、方法、样本说明与来源链接。</p></div><div class="research-level"><span>最后</span><h4>可以怎么行动</h4><p>建议、限制，以及还需要验证的问题。</p></div></div></div>
+            <div class="scene-footer"><p><strong>Folio 在这里的价值</strong>：把长报告组织成分层阅读的页面，让图表和结论在同一处被讨论。</p><button class="text-button copy-prompt" type="button" data-prompt="research" hidden>复制起草提示 <span aria-hidden="true">↗</span></button></div>
+          </article>
+
+          <article class="scene-panel" id="panel-ideas" data-panel="ideas" data-eat-id="scenario-ideas">
+            <div class="scene-topline"><span class="mono">IDEAS</span><span>适合有上下文的异步讨论</span></div>
+            <h3>让想法，有被接住的机会。</h3>
+            <p class="scene-intro">当一条群消息讲不清你的观察，给想法留一个完整的空间。它可以尚未成熟，但需要说明问题、你的判断，以及你希望大家一起思考什么。</p>
+            <div class="scene-body"><div class="scene-recipe"><h4>一个值得讨论的想法，需要</h4><ol><li><strong>背景</strong><span>你观察到了什么？为什么值得关注？</span></li><li><strong>主张</strong><span>你的判断或提议是什么？有哪些假设？</span></li><li><strong>讨论入口</strong><span>希望大家挑战哪个点，或补充哪类例子？</span></li></ol><p class="scene-fit">适用例子：流程改进建议、产品方向思考、工作方法、一次阅读后的观点。</p></div>
+              <div class="specimen idea-specimen"><p class="specimen-label">提问方式示例</p><p class="idea-before">“大家觉得怎么样？”</p><span class="idea-direction" aria-hidden="true">↓</span><blockquote>“如果把这一步移到更早，<br>会减少哪些等待，<br>又可能增加什么成本？”</blockquote><p class="specimen-caption">让问题具体一点，让读者更容易参与。明确标注“探索中”，不把假设写成定论。</p></div></div>
+            <div class="scene-footer"><p><strong>Folio 在这里的价值</strong>：让想法保留上下文，讨论能够关联到具体段落和当时的版本。</p><button class="text-button copy-prompt" type="button" data-prompt="ideas" hidden>复制起草提示 <span aria-hidden="true">↗</span></button></div>
+          </article>
+
+          <article class="scene-panel" id="panel-demos" data-panel="demos" data-eat-id="scenario-demos">
+            <div class="scene-topline"><span class="mono">INTERACTIVE DEMO</span><span>适合让人亲手体验</span></div>
+            <h3>有些事，试一下更明白。</h3>
+            <p class="scene-intro">分享一个界面原型、一个计算器，或一张能切换条件的图表。让读者自己点一点、改一改参数，比用多张截图解释状态变化更直接。</p>
+            <div class="scene-body"><div class="scene-recipe"><h4>一次可理解的体验，应该包含</h4><ol><li><strong>体验目标</strong><span>请读者尝试哪个任务或问题？</span></li><li><strong>可操作内容</strong><span>哪些地方可以点击、输入或切换？</span></li><li><strong>演示边界</strong><span>哪些是假设参数，哪些能力还没实现？</span></li></ol><p class="scene-fit">适用例子：设计原型、方案比较器、静态数据可视化、轻量教学工具。</p></div>
+              <div class="specimen demo-specimen"><p class="specimen-label">可交互示例 · 假设参数</p><h4>小改进，能省多少重复工作？</h4><label for="repeat-count">每周重复次数 <output id="repeat-label" for="repeat-count">8</output></label><input id="repeat-count" type="range" min="1" max="20" value="8"><div class="demo-result"><output id="saved-minutes" for="repeat-count">40</output><span>分钟 / 周</span></div><p class="specimen-caption">假设每次节省 5 分钟，仅演示交互。拖动滑块，观察结果变化。它不是业务数据。</p></div></div>
+            <div class="scene-footer"><p><strong>Folio 在这里的价值</strong>：直接交付可运行的静态网页体验。需要后端、数据库或长期业务服务时，使用 eat 应用部署。</p><button class="text-button copy-prompt" type="button" data-prompt="demos" hidden>复制起草提示 <span aria-hidden="true">↗</span></button></div>
+          </article>
+
+          <article class="scene-panel" id="panel-retros" data-panel="retros" data-eat-id="scenario-retros">
+            <div class="scene-topline"><span class="mono">RETROSPECTIVE</span><span>适合留下可复用的经验</span></div>
+            <h3>让一次经历，帮助下一次。</h3>
+            <p class="scene-intro">项目结束、实验收尾，或解决了一个复杂问题后，把当时的判断和取舍留下来。比“我们做完了”更有价值的是：后来的人能从中学到什么。</p>
+            <div class="scene-body"><div class="scene-recipe"><h4>让复盘超越工作流水账</h4><ol><li><strong>目标与结果</strong><span>想解决什么？实际发生了什么？</span></li><li><strong>关键取舍</strong><span>当时知道什么？为什么这样选择？</span></li><li><strong>可复用经验</strong><span>哪些方法值得保留？下次会怎样改变？</span></li></ol><p class="scene-fit">适用例子：项目回顾、一次排障的经验、活动总结、试验复盘。</p></div>
+              <div class="specimen retro-specimen"><p class="specimen-label">复盘叙事示例</p><div><span>起点</span><p>我们遇到了什么问题</p></div><div><span>选择</span><p>有哪些方案，为什么选这一条</p></div><div><span>结果</span><p>哪些有效，哪些没有达到预期</p></div><div><span>带走</span><p>给下一位实践者的具体建议</p></div><p class="specimen-caption">把“当时的上下文”一起留下，经验才有适用边界。</p></div></div>
+            <div class="scene-footer"><p><strong>Folio 在这里的价值</strong>：把过程、材料与经验编排成可回看的成果；需要引用当时交付时，可分享版本地址。</p><button class="text-button copy-prompt" type="button" data-prompt="retros" hidden>复制起草提示 <span aria-hidden="true">↗</span></button></div>
+          </article>
+
+          <article class="scene-panel" id="panel-guides" data-panel="guides" data-eat-id="scenario-guides">
+            <div class="scene-topline"><span class="mono">GUIDEBOOK</span><span>适合反复被问到的知识</span></div>
+            <h3>把反复解释，变成一次好说明。</h3>
+            <p class="scene-intro">当同一个问题需要一遍遍回答，整理成能自助理解的指南。围绕读者遇到的任务组织内容，必要时加入演示、对照表或自查问题。</p>
+            <div class="scene-body"><div class="scene-recipe"><h4>从读者的问题组织一份指南</h4><ol><li><strong>谁会用到</strong><span>面向什么人，解决哪一种困惑？</span></li><li><strong>如何判断</strong><span>遇到不同情况，应该怎么选择？</span></li><li><strong>遇到问题</strong><span>去哪里查更多材料、反馈或找负责人？</span></li></ol><p class="scene-fit">适用例子：新人入门、工具使用场景、团队方法、常见问题说明。</p></div>
+              <div class="specimen guide-specimen"><p class="specimen-label">眼前就是一个例子</p><h4>这份指南，<br>本身就是一个 Folio。</h4><p>你可以按场景阅读、切换示例，甚至操作一个小演示。内容更新后，入口仍然保持不变。</p><p class="specimen-caption">如果你有建议，也可以通过页面上的评论入口提出。</p></div></div>
+            <div class="scene-footer"><p><strong>Folio 在这里的价值</strong>：为常用知识提供经过组织的阅读入口，让每次转发都指向持续维护的内容。</p><button class="text-button copy-prompt" type="button" data-prompt="guides" hidden>复制起草提示 <span aria-hidden="true">↗</span></button></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="why-section" id="choose" aria-labelledby="choose-title">
+      <div class="wrap">
+        <div class="section-heading"><span class="section-number" aria-hidden="true">02 /</span><div><h2 id="choose-title">已经能发文档，<br>为什么还用 Folio？</h2><p>选择的关键，是你希望别人如何理解和使用这份内容。</p></div></div>
+        <div class="why-intro"><p>当你需要<strong>自由安排阅读顺序、把内容做成可操作的体验、交付一个可以持续更新的页面</strong>，Folio 就有了价值。</p><p>共享文档也能发链接、评论和保留版本。Folio 的吸引力，在于以网页的形式呈现成果：文字、图表、演示和交互，可以围绕读者的需要一起设计。</p></div>
+        <div class="comparison-scroll" tabindex="0" role="region" aria-label="Folio 与共享文档对照表，可横向滚动">
+          <table data-eat-id="medium-comparison"><caption class="sr-only">按读者需求选择 Folio 或共享文档</caption><thead><tr><th scope="col">你现在需要……</th><th scope="col">Folio</th><th scope="col">共享文档</th></tr></thead><tbody>
+            <tr><th scope="row">呈现一份成果</th><td>自定义页面、演示和分层阅读，适合组织好的交付。</td><td>快速整理和阅读文字，适合日常说明与协作材料。</td></tr>
+            <tr><th scope="row">让别人亲手体验</th><td>可以承载静态原型、参数切换、图表和轻量工具。</td><td>通常通过截图、附件或外部链接辅助说明。</td></tr>
+            <tr><th scope="row">多人一起改正文</th><td>由作者修改内容并发布新版，适合收集反馈后迭代。</td><td>实时共同起草、逐句修改通常更方便。</td></tr>
+            <tr><th scope="row">持续分享和回看</th><td>固定入口展示当前版，版本地址保留某次发布快照。</td><td>共享链接和版本历史也能满足日常协作需要。</td></tr>
+            <tr><th scope="row">围绕内容讨论</th><td>可评论页面、元素或区域；评论关联浏览时的版本。</td><td>适合文字批注与编辑讨论，具体能力取决于工具。</td></tr>
+          </tbody></table>
+        </div>
+        <div class="medium-verdict"><p><span>一起把内容写出来</span><strong>先用共享文档。</strong></p><span class="verdict-connector" aria-hidden="true">→</span><p><span>把成果讲清楚、交给别人体验</span><strong>可以做成 Folio。</strong></p></div>
+        <p class="medium-note">两者可以配合：文档保留协作过程和详细材料，Folio 呈现结论、关键证据和体验入口。简单的文字通知，直接发消息或文档就足够。</p>
+      </div>
+    </section>
+
+    <section class="section wrap" aria-labelledby="lasting-title">
+      <div class="section-heading"><span class="section-number" aria-hidden="true">03 /</span><div><h2 id="lasting-title">分享之后，交流才开始。</h2><p>给读者一个入口，也为后续的讨论与更新留下位置。</p></div></div>
+      <div class="continuity-grid">
+        <article data-eat-id="capability-links"><span class="capability-symbol" aria-hidden="true">↗</span><h3>一个入口，持续更新</h3><p>用固定地址分享当前内容。开会、复盘或引用某次交付时，可以改用版本地址，让大家看到同一份快照。</p></article>
+        <article data-eat-id="capability-comments"><span class="capability-symbol" aria-hidden="true">↳</span><h3>对着内容，具体讨论</h3><p>读者可以评论整页、某个元素或一块区域。每条评论保留浏览版本，后续仍能回到当时的上下文。</p></article>
+        <article data-eat-id="capability-access"><span class="capability-symbol" aria-hidden="true">◎</span><h3>分享给合适的人</h3><p>默认仅 eat 登录用户可看，也可选择公开或密码访问。公开和密码访问降低阅读门槛，发表评论仍需 eat 登录。</p></article>
+      </div>
+      <div class="expectation"><strong>先有合适的内容，再选择载体。</strong><p>Folio 发布的是静态网页成果；它不会自动替你完成研究、生成可信数据或保存源工程。需要持续维护时，请保留自己的内容和工程文件。</p></div>
+    </section>
+
+    <section class="start-section" id="start" aria-labelledby="start-title">
+      <div class="wrap start-grid"><div><p class="eyebrow">从一件小事开始</p><h2 id="start-title">你最近做的哪件事，<br>值得让别人知道？</h2><p>不必先追求复杂的页面。让读者知道你发现了什么、为什么与他有关，以及可以怎样参与，就已经是一份有用的 Folio。</p><p class="console-note">在你所在团队的 eat 控制台中，打开「资源 → Folio」即可开始。</p></div>
+        <div class="starter"><div class="starter-heading"><h3>把想法交给 AI，先起一个稿。</h3><span class="mono">START HERE</span></div><p id="starter-prompt">帮我把【最近的一项成果】做成一份 Folio，面向【谁来看】。先讲清【核心结论或变化】，再呈现【证据或演示】，最后邀请读者反馈【一个具体问题】。使用我提供的真实材料，缺失信息先标注，不编造数据。</p><button class="button starter-copy" type="button" id="copy-starter" hidden>复制这段提示 <span aria-hidden="true">↗</span></button><p class="starter-note">也可以回到上方，复制与你场景对应的起草提示。</p></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="wrap footer"><a class="brand" href="#top"><img src="assets/eat-brand/icon.svg" width="28" height="28" alt="eat"><span>Folio 使用指南</span></a><p>把成果讲清楚，让交流继续。</p><div><button class="text-button" type="button" id="open-tweaks" hidden>Tweaks</button><a href="#top">回到顶部 ↑</a></div></footer>
+
+  <div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
+  <dialog id="prompt-dialog" aria-labelledby="prompt-dialog-title"><div class="dialog-heading"><h2 id="prompt-dialog-title">复制起草提示</h2><button class="icon-button" type="button" data-close-dialog aria-label="关闭提示">×</button></div><p>暂时无法自动复制。你可以选中下方文字，手动复制。</p><textarea id="prompt-fallback" aria-label="可手动复制的起草提示" readonly rows="9"></textarea><button class="button button-dark" type="button" id="select-prompt">全选文字</button></dialog>
+  <dialog id="tweaks-dialog" aria-labelledby="tweaks-title"><div class="dialog-heading"><h2 id="tweaks-title">Tweaks</h2><button class="icon-button" type="button" data-close-dialog aria-label="关闭阅读设置">×</button></div><p>按你的习惯调整阅读体验。</p><label class="setting-row" for="reading-size"><span>正文字号</span><select id="reading-size"><option value="standard">标准</option><option value="large">较大</option></select></label><label class="setting-row" for="reading-density"><span>内容间距</span><select id="reading-density"><option value="comfortable">舒展</option><option value="compact">紧凑</option></select></label></dialog>
+  <noscript><p class="noscript-note">当前未启用 JavaScript，所有场景内容仍可阅读；场景切换、演示和复制功能需要启用 JavaScript。</p></noscript>
+</body>
+</html>
