@@ -1,7 +1,7 @@
 import { ConflictException, Injectable } from '@nestjs/common';
 import { eq, sql } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
-import type { SiteCdnInfo, UpdateSiteCdn } from '@eat/shared';
+import { CDN_WILDCARD_CAPABILITY_WARNING, type SiteCdnInfo, type UpdateSiteCdn } from '@eat/shared';
 import { siteCdn, siteSettings, auditLogs } from '../db/schema';
 import { decryptSecret, encryptSecret } from '../common/crypto';
 import { SiteCdnClient } from './site-cdn.client';
@@ -38,6 +38,7 @@ export class SiteCdnStore {
       autoDns: r?.autoDns ?? false,
       status: r?.status ?? 'disabled',
       connected: r?.connected ?? false,
+      capabilityWarning: CDN_WILDCARD_CAPABILITY_WARNING,
       accessKeyIdMasked: key ? (key.length > 8 ? `${key.slice(0, 4)}****${key.slice(-4)}` : '****') : '',
       hasSecret: !!r?.accessKeySecretEncrypted,
       phase: r?.phase ?? '',

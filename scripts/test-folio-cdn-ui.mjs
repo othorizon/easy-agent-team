@@ -16,6 +16,7 @@ let state = {
   autoDns: false,
   status: 'disabled',
   connected: false,
+  capabilityWarning: '普通阿里云 CDN 官方不支持泛域名自定义回源请求头和出站响应头。当前方案依赖这两项，尚未满足普通 CDN 泛域名接入条件；请保持直连 DNS，不要手动切换解析绕过检查。',
   accessKeyIdMasked: '',
   hasSecret: false,
   phase: '',
@@ -135,6 +136,9 @@ try {
     await page.goto(base + '/settings');
     const section = page.getByRole('region', { name: '阿里云 CDN' });
     await section.waitFor();
+    await section.getByText(state.capabilityWarning, { exact: false }).waitFor();
+    await section.getByRole('link', { name: '官方回源请求头限制' }).waitFor();
+    await section.getByRole('link', { name: '官方响应头限制' }).waitFor();
     assert.equal(await section.getByText('缓存维护：', { exact: false }).count(), 0);
     if (viewport.width === 1440) {
       await section.getByText('CDN 证书同步：尚未上传', { exact: true }).waitFor();
@@ -207,7 +211,7 @@ try {
   assert.equal(retries, 2);
   assert.deepEqual(errors, []);
   console.log(
-    'CDN browser checks passed: configuration, pending state, DNS guidance, upload versus edge verification, recovery, credential clearing, mobile layout',
+    'CDN browser checks passed: capability limitation warning, configuration, pending state, DNS guidance, upload versus edge verification, recovery, credential clearing, mobile layout',
   );
 } finally {
   await browser.close();

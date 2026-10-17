@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   updateSiteCdnSchema,
+  CDN_WILDCARD_CAPABILITY_WARNING,
   type SiteCdnInfo,
   type UpdateSiteCdn,
   type SiteSettingsInfo,
@@ -77,7 +78,27 @@ export function FolioCdnSettings({ folio }: { folio?: SiteSettingsInfo }) {
       </div>
       <p className="text-sm text-muted-foreground">
         复用 Folio
-        域名、部署入口与源站证书。仅公开静态资源进入共享缓存，每次命中前重新检查访问权限；普通成员发布无需增加操作。
+        域名、部署入口与源站证书。通过全部验证后，仅公开静态资源进入共享缓存，每次命中前重新检查访问权限。
+      </p>
+      <p role="alert" className="break-words rounded-md border p-3 text-sm text-destructive">
+        {r?.capabilityWarning || CDN_WILDCARD_CAPABILITY_WARNING}{' '}
+        <a
+          className="underline"
+          href="https://help.aliyun.com/zh/cdn/user-guide/configure-custom-request-headers/"
+          target="_blank"
+          rel="noreferrer"
+        >
+          官方回源请求头限制
+        </a>
+        {' · '}
+        <a
+          className="underline"
+          href="https://help.aliyun.com/zh/cdn/user-guide/create-a-custom-http-response-header"
+          target="_blank"
+          rel="noreferrer"
+        >
+          官方响应头限制
+        </a>
       </p>
       {query.error && (
         <p role="alert" className="text-sm text-destructive">

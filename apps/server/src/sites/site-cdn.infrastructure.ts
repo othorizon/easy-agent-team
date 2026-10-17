@@ -311,11 +311,16 @@ export class SiteCdnInfrastructure {
       throw new SiteSetupError(`${stage}失败：${e instanceof CdnProbeError ? e.message : probeConnectionError()}`);
     }
     if (res.status !== 200) {
-      const hint = edge && res.status === 403
-        ? '请检查远程鉴权地址是否可达及鉴权请求是否被正确转发'
-        : edge && [502, 504].includes(res.status)
-          ? '请检查 HTTPS 回源地址、Host/SNI 与源站证书'
-          : '请检查 Dokploy 泛域名路由及代理是否转发到当前 EAT';
+      const hint =
+        edge && res.status === 404
+          ? res.headers.via || res.headers.eagleid
+            ? '请核对检查路径、实例标识和可信回源请求头；泛域名自定义回源请求头存在官方功能限制'
+            : '未见 CDN 节点标记，可能直达源站；请核对实际连接 IP、完整 CNAME、Host 及检查路径'
+          : edge && res.status === 403
+            ? '请检查远程鉴权地址是否可达及鉴权请求是否被正确转发'
+            : edge && [502, 504].includes(res.status)
+              ? '请检查 HTTPS 回源地址、Host/SNI 与源站证书'
+              : '请检查 Dokploy 泛域名路由及代理是否转发到当前 EAT';
       const detail = edge ? cdnOriginError(res.headers) : '';
       throw new SiteSetupError(`${stage}失败：HTTP ${res.status}，${hint}${detail ? `；${detail}` : ''}`);
     }

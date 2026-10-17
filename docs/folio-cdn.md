@@ -1,6 +1,10 @@
 # Folio 阿里云 CDN
 
-管理员在「系统设置 → Folio 发布 → 阿里云 CDN」配置一次。成员继续按原方式发布、回滚、设置权限和发表评论。CDN 默认关闭；数据库只保留 CDN 配置与运行状态，不改旧 Folio 设置、域名、版本指针、DNS 或 Traefik 路由。
+**当前能力限制（2026-10-17）：普通阿里云 CDN 的泛域名方案尚不满足实际接入与缓存加速的交付条件。** 官方中英文文档明确说明：[泛域名不能修改出站请求头](https://help.aliyun.com/zh/cdn/user-guide/configure-custom-request-headers/)，[泛域名不能修改出站响应头](https://help.aliyun.com/zh/cdn/user-guide/create-a-custom-http-response-header)。当前实现依赖前者注入可信回源标记，依赖后者让缓存命中后的浏览器仍收到 `private, no-store`；API 接受参数、配置状态为 `success` 或替身测试通过，均不能消除这个功能限制。
+
+控制台和管理员 API 的 `capabilityWarning` 会明确显示这个缺口。请保留直连解析，不要手动把 DNS 切到 CDN，不要通过删除回源验证、关闭证书校验或放宽浏览器缓存绕过检查。要完成原目标，需要先调整为供应商支持的接入方式并进行真实验证；本次没有完成该兼容方案，不能将当前实现或整体禁用缓存宣称为已完成加速。
+
+以下描述已经实现的控制流程及替身验证范围，使用条件仍受上述限制约束。管理员配置入口为「系统设置 → Folio 发布 → 阿里云 CDN」。成员继续按原方式发布、回滚、设置权限和发表评论。CDN 默认关闭；数据库只保留 CDN 配置与运行状态，不改旧 Folio 设置、域名、版本指针、DNS 或 Traefik 路由。
 
 迁移 `0020_folio_cdn` 新增 CDN 状态表。已执行历史迁移 `0021_folio_cdn_purge` 的环境通过 `0022_folio_cdn_no_purge` 删除刷新触发器、函数及队列，丢弃尚未提交或等待重试的维护任务，保留 Folio 和 CDN 接入状态。历史迁移保持不变，全新安装与旧环境升级都运行完整迁移链。
 
@@ -12,6 +16,8 @@
 4. 选择范围、凭证来源及是否自动管理 DNS，勾选启用后保存。AccessKey 留空保留旧值，Secret 只接受写入，不会读回。配置已保存不代表接入成功。后台每 30 秒检查可执行任务；正在处理云操作时保存可能返回冲突，稍后重试即可。
 5. 自动管理复用 Folio 的 AliDNS / Cloudflare 凭证，验证 TXT 并迁移预期的直连通配记录。未授权自动管理时，控制台按阶段给出完整 TXT / CNAME 名称和值，手动完成后点击「重新检查 / 恢复」。验证使用注册主域名的 `verification` TXT，不是 `_acme-challenge`。TXT 与 ACME 的 DNS-01 是两个独立用途。
 6. 只有 HTTPS 证书指纹、Host/SNI、实际缓存 HIT、携带会话访问旧缓存被拒绝以及切换后的访问检查全部通过，状态才变为「已接入」。缺少相关 CDN 功能、权限不足或规则仍在配置中时保留诊断，不跳过安全检查。
+
+上面是状态机的设计流程，尚不能按普通 CDN 泛域名的标准能力完成整条接入链路。额外增加 RAM 权限、手工添加 TXT / CNAME 或重复保存相同规则不能补齐供应商不支持的头部功能。
 
 源站复用 Folio 的部署入口 IP / 主机名，端口固定 HTTPS 443，不使用容器内部 upstream 地址作为 CDN 公网源站。入口必须独立于 Folio 域名空间；推荐固定入口 IP 或直接指向该 IP 的独立源站域名。HTTP Host 保留真实固定 / 版本 Folio 域名；TLS SNI 使用同一泛域名证书覆盖的实例专用精确名称 `eat-origin-<实例标识前八位>.<Folio 后缀>`。连接地址仍是独立源站，不需要把该 SNI 名称解析到 CDN。开启回源证书校验，不配置跳过校验或 Common Name 宽泛白名单。
 
@@ -89,6 +95,8 @@ CDN 域名已有但没有本实例标签时，不接管、不删除。DNS 类型
 
 失败时分别提示源站 / CDN 阶段、HTTP 状态、实例标记或浏览器缓存头问题，不回显上游响应正文。CDN 返回 502 时，按 `X-Swift-Error` / `X-Tengine-Error` 的内容分类提示握手、超时或上游 5xx，不回显原始错误头。证书上传成功但边缘证书与链路尚未验证时显示「已上传，等待边缘验证」；同步时间只在边缘检查通过后记录。「尚未同步」不能单独用于判断证书上传失败。
 
+检查返回 404 不代表 CDN 已接入或之前的 502 已解决。若没有 `Via` / `EagleId` 等节点标记，先核对实际连接地址、完整 CNAME、Host 和检查路径，可能没有经过 CDN；源站没有收到可信回源标记时，检查路径也可能落入普通 Folio 路由并返回不存在。若已有节点标记，则核对检查路径、实例标识与回源请求头能力。不能只凭 HTTP 状态、JSON 类型或 no-store 判断是哪段链路。
+
 遇到 CDN 502 时，先保留现有 DNS 和证书校验。直连检查通过只说明 EAT 能访问源站，不能证明 CDN 回源节点也可访问：需结合错误类型及源站 Traefik 日志核对 SNI、完整证书链、443 监听、安全组 / 防火墙与回源 IP 限制。阿里云 API 的配置 `success` 也不能证明 TLS 握手成功。可以在部署服务器使用 `curl --connect-to '<Folio 探测主机>:443:<CDN CNAME>:443' -D - -o /dev/null 'https://<Folio 探测主机>/__eat/cdn-probe/<完整实例标识>'` 获取节点错误头，其中探测主机为 `eat-cdn-<实例标识前八位>.<Folio 后缀>`，实例标识对应 CDN 资源的 `eat-instance` 标签。必须使用该检查路径；不存在站点的首页会被鉴权拒绝，不能代替回源检查。该诊断保留 Host/SNI 和 TLS 校验，不依赖 Folio DNS 已指向 CDN，不携带密钥、不修改解析。修复确认的问题后点击「重新检查 / 恢复」，不能通过提前切 DNS、改用 HTTP 或关闭证书校验绕过失败。参考[官方回源排障指南](https://help.aliyun.com/zh/cdn/user-guide/back-to-origin-troubleshooting)。
 
 传播等待时间是对遵守 DNS TTL 的客户端的保护，不是对所有不遵守 TTL 的递归解析器的全网保证。等待期间浏览器曾收到的缓存资源路径也可在源站直接访问，但源站每次重新鉴权且返回 no-store。
@@ -118,12 +126,13 @@ CDN 域名已有但没有本实例标签时，不接管、不删除。DNS 类型
 - [添加域名](https://help.aliyun.com/zh/cdn/developer-reference/api-cdn-2018-05-10-addcdndomain)：泛域名为前导点，创建及配置下发是异步的。[查询配置](https://help.aliyun.com/zh/cdn/developer-reference/api-cdn-2018-05-10-describecdndomainconfigs) 提供 success / configuring / failed 状态；HTTP API 成功不能代替下发完成。
 - [HTTPS 配置](https://help.aliyun.com/zh/cdn/user-guide/configure-an-ssl-certificate/) 与 [泛域名证书限制](https://help.aliyun.com/zh/cdn/support/configure-an-ssl-certificate-for-a-wildcard-domain-name)：CDN 控制台免费证书不支持泛域名，因此上传现有 Traefik / Let's Encrypt 证书，不调用 CDN 免费证书申请，也不购买证书。[Let's Encrypt FAQ](https://letsencrypt.org/docs/faq/) 明确泛域名需 DNS-01；[Traefik ACME](https://doc.traefik.io/traefik/v3.5/reference/install-configuration/tls/certificate-resolvers/acme/) 负责存储与续期。
 - [Node.js 22 HTTPS](https://nodejs.org/docs/latest-v22.x/api/https.html#httpsglobalagent)：默认全局 Agent 启用 Keep-Alive；探测设置 `agent: false`，每次按指定目标建立连接并保留 TLS 校验。
+- [修改出站请求头](https://help.aliyun.com/zh/cdn/user-guide/configure-custom-request-headers/)（[英文](https://help.aliyun.com/en/cdn/user-guide/configure-custom-request-headers)）与[修改出站响应头](https://help.aliyun.com/zh/cdn/user-guide/create-a-custom-http-response-header)（[英文](https://help.aliyun.com/en/cdn/user-guide/create-a-custom-http-response-header)）：两项均不支持泛域名。当前实现依赖这两项，之前仅核对 API 参数及规则保存状态，遗漏了该产品限制；本次修正文档、API / 控制台提示和诊断，未完成替代架构。该限制直接影响可信回源和浏览器缓存语义，必须作为未满足项交付。
 
 `origin_certificate_verification` 的官方参数表使用 `enabled`，同页示例使用 `enable`，二者有文档不一致。当前优先使用示例中的 `enable=on`；只有该功能明确返回 `InvalidArgName.ValueNotSupported` 时，才尝试另一种 `enabled=on` 并记录采用的参数名。不会通过关闭证书校验绕过失败，两种写法均不支持时保留直连解析。已有部分配置可按原参数名继续恢复，无需重建 CDN。配置逐功能提交，按照官方每用户每秒 3 次的限制节流；中断后只提交缺失的规则。错误显示当前功能及可安全识别的参数名，不回显云端原始错误正文、请求头值或凭证。参数接受与全网生效仍需真实云验收。
 
 已有 resolver 的 ACME 文件目前要求标准 `/etc/dokploy/traefik/` 范围内的 JSON 路径，其他路径会明确拒绝。ACME JSON 仅读取目标 resolver 下匹配 SAN 的证书，不写入账户私钥，也不修改 ACME 存储。
 
-本地测试使用真实 PostgreSQL、测试证书、可注入云/DNS/链路替身和浏览器 API 替身。真实账号验证了 CDN 服务、域名验证接口及隔离 DNS 记录的创建、读取、更新、切换、恢复与删除，测试记录已清理；未创建 CDN、签发公网证书、切换实际 Folio 解析或验证公网 HIT。替身测试不能证明该账号的泛域名功能组合、配额、全网规则下发、所有加速区域、TLS 回源和跨运营商 DNS 传播均已通过。
+本地测试使用真实 PostgreSQL、测试证书、可注入云/DNS/链路替身和浏览器 API 替身。云 / 链路替身模拟头部功能正常的前提；这个前提不符合普通 CDN 泛域名的官方功能限制，状态机与权限逻辑测试通过不能作为完整云适配已完成的证据。真实账号验证了 CDN 服务、域名验证接口及隔离 DNS 记录的创建、读取、更新、切换、恢复与删除，测试记录已清理；未创建 CDN、签发公网证书、切换实际 Folio 解析或验证公网 HIT。替身测试不能证明该账号的泛域名功能组合、配额、全网规则下发、所有加速区域、TLS 回源和跨运营商 DNS 传播均已通过。
 
 首次真实云验收需在隔离域名和可公网访问的 EAT/Traefik 上执行完整开启 → 两次静态资源访问观察 HIT → 权限收紧 / 会话撤销 / 删除后旧缓存拒绝 → 测试证书更新并核对指纹 → 关闭并跨 TTL 检查。控制面保存、配置状态成功与抽样访问均不是供应商提供的全网原子性证明；本实现依赖供应商成功状态及已部署远程鉴权的契约，公网跨节点传播仍需实测。没有确认安全功能时应保持 CDN 未接入，不能用全部关闭缓存宣称缓存加速已完成。
 
@@ -133,11 +142,11 @@ CDN 域名已有但没有本实例标签时，不接管、不删除。DNS 类型
 
 | 验证 | 结果与范围 |
 | --- | --- |
-| `pnpm test` | 服务端 389 项、CLI 222 项通过；Web 使用下列浏览器脚本另行验证 |
-| CDN / 网关回归（包含于全量测试） | 61 项通过，覆盖本地双 HTTPS 服务确认指定 IP / Host、不复用错误目标连接，实际回源 SNI 与 HTTP Host 分离、证书域名不匹配拒绝、502 错误头分类不泄露任意正文，源站 / CDN 分段诊断与错误脱敏，证书上传与同步分离，独立 API 参数契约、证书校验参数变体、逐功能恢复、限流、阿里云默认配置和 `ParentId=0`、旧冲突及 TXT 指引恢复、HTTP 200 验证未通过、30 天 TTL、版本隔离 / 历史缓存命中 / 权限收紧 / 删除、签名、证书读取、缓存别名、重启和 DNS 恢复 |
+| `pnpm test` | 服务端 390 项、CLI 222 项通过；Web 使用下列浏览器脚本另行验证；这些结果不证明当前泛域名方案符合供应商能力限制 |
+| CDN / 网关回归（包含于全量测试） | 62 项通过，覆盖 API 能力缺口提示、404 缺少节点标记诊断、本地双 HTTPS 服务确认指定 IP / Host、不复用错误目标连接，实际回源 SNI 与 HTTP Host 分离、证书域名不匹配拒绝、502 错误头分类不泄露任意正文，源站 / CDN 分段诊断与错误脱敏，证书上传与同步分离，独立 API 参数契约、证书校验参数变体、逐功能恢复、限流、阿里云默认配置和 `ParentId=0`、旧冲突及 TXT 指引恢复、HTTP 200 验证未通过、30 天 TTL、版本隔离 / 历史缓存命中 / 权限收紧 / 删除、签名、证书读取、缓存别名、重启和 DNS 恢复 |
 | `pnpm typecheck`、`pnpm build` | 最终变更全工作区通过 |
 | `pnpm db:migrate` | 在独立本地 PostgreSQL 测试库执行两次均成功；另有旧配置升级保持不变、已有刷新任务和触发器清除且 Folio / CDN 状态保留的真实迁移测试 |
-| `node scripts/test-folio-cdn-ui.mjs` | 浏览器 API 替身；桌面及手机配置、等待、证书已上传但尚未验证的状态、分段诊断、失败恢复、DNS 指引、密钥输入清空、无横向溢出通过 |
+| `node scripts/test-folio-cdn-ui.mjs` | 浏览器 API 替身；桌面及手机官方能力限制提示与来源链接、配置、等待、证书已上传但尚未验证的状态、分段诊断、失败恢复、DNS 指引、密钥输入清空、无横向溢出通过 |
 | `node scripts/test-site-ui.mjs` | 原 Folio 发布、上传恢复、评论、登录/密码提示、删除及手机布局回归通过 |
 | 真实云 API 与隔离 DNS | 生产适配器验证 CDN 服务及域名验证接口；AliDNS 随机测试记录的 TXT 创建 / 读取 / 更新 / TTL 恢复 / 删除、A → CNAME → A 切换及记录 ID 保持通过。全部临时记录已清理，未创建 CDN |
 | 云端配置只读诊断 | 只读查询确认云端域名已 online、HTTPS 已 on、目标规则均为 success；修复代码重放实际返回的 10 项服务默认配置通过，没有为此修改云资源或 DNS，也不代表完整 CDN 链路验收已通过 |

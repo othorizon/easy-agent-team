@@ -1,6 +1,9 @@
 /** Public contract checked against the official feature parameter examples (2026-10-17).
  * https://help.aliyun.com/zh/cdn/developer-reference/parameters-for-configuring-features-for-domain-names
  * origin_certificate_verification: the example uses enable; enabled is the table's alternate spelling.
+ * Argument names do not imply wildcard availability: ordinary CDN does not support wildcard
+ * origin request header changes or outbound response header changes. Cloud substitutes model
+ * the state machine under that capability assumption and cannot prove production compatibility.
  */
 export const aliyunCdnContract: Record<string, { required: string[]; optional?: string[] }> = {
   forward_scheme: { required: ['enable'], optional: ['scheme_origin', 'scheme_origin_port'] },

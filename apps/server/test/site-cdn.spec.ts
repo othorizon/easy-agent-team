@@ -279,6 +279,7 @@ describe('Folio CDN control and durable reconciliation (cloud substitutes)', () 
       connected: false,
       status: 'disabled',
       hasSecret: false,
+      capabilityWarning: expect.stringContaining('尚未满足普通 CDN 泛域名接入条件'),
     });
     expect(await settings.capability()).toMatchObject({ enabled: true });
     expect((await request('GET', '/api/admin/site-settings/cdn', member)).statusCode).toBe(403);

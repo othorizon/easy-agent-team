@@ -254,6 +254,7 @@ describe('CDN certificate, signing and DNS adapter contracts', () => {
   });
   it.each([
     { edge: false, status: 404, body: 'private upstream response', noStore: true, error: '源站直连检查失败：HTTP 404' },
+    { edge: true, status: 404, body: 'private upstream response', noStore: true, error: 'CDN 接入检查失败：HTTP 404，未见 CDN 节点标记' },
     { edge: true, status: 403, body: 'private upstream response', noStore: true, error: 'CDN 接入检查失败：HTTP 403，请检查远程鉴权' },
     { edge: true, status: 502, body: 'private upstream response', noStore: true, error: 'CDN 接入检查失败：HTTP 502，请检查 HTTPS 回源' },
     { edge: false, status: 200, body: 'private upstream response', noStore: true, error: '源站直连检查失败：HTTP 200，但 EAT 实例标记不匹配' },
