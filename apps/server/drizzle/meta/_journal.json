@@ -141,6 +141,27 @@
       "when": 1792218071798,
       "tag": "0019_folio_blobs_only",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792222115273,
+      "tag": "0020_folio_cdn",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1792222381781,
+      "tag": "0021_folio_cdn_purge",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1792224935528,
+      "tag": "0022_folio_cdn_no_purge",
+      "breakpoints": true
     }
   ]
 }

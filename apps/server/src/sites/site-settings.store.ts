@@ -2,7 +2,7 @@ import { ConflictException, Inject, Injectable, ServiceUnavailableException } fr
 import { eq, sql } from 'drizzle-orm';
 import type { SiteCapabilityInfo, SiteSettingsInfo, UpdateSiteSettings } from '@eat/shared';
 import { DB, type Db } from '../db/db.module';
-import { sites, siteSettings, siteCleanups } from '../db/schema';
+import { sites, siteSettings, siteCleanups, siteCdn } from '../db/schema';
 import { decryptSecret, encryptSecret } from '../common/crypto';
 import { loadConfig } from '../config';
 
@@ -77,6 +77,11 @@ export class SiteSettingsStore {
     await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(1950536501)`);
       const [r] = await tx.select().from(siteSettings).where(eq(siteSettings.id, 1)).for('update');
+      const [cdn] = await tx.select().from(siteCdn).where(eq(siteCdn.id, 1));
+      if (cdn && (cdn.enabled || cdn.status !== 'disabled'))
+        throw new ConflictException('请先关闭 CDN 并等待 DNS 传播完成，再修改 Folio 配置');
+      if (cdn?.resources.owned && r && (r.domain !== dto.domain || r.gatewayTarget !== dto.gatewayTarget))
+        throw new ConflictException('CDN 保留资源仍属于当前域名和源站，不能切换域名或源站地址');
       if (r && (setupBusy(r.status) || r.status === 'enabled' || r.routeConfigured))
         throw new ConflictException('请先停用 Folio，再修改配置');
       if (r && r.domain !== dto.domain && (await tx.select({ id: sites.id }).from(sites).limit(1)).length)
@@ -96,14 +101,20 @@ export class SiteSettingsStore {
         platformUrl: (dto.platformUrl || loadConfig().publicUrl).replace(/\/$/, ''),
         ossAccessKeyIdEncrypted: enc(ossAccessKeyId, r?.ossAccessKeyIdEncrypted),
         ossAccessKeySecretEncrypted: enc(ossAccessKeySecret, r?.ossAccessKeySecretEncrypted),
-        dnsAccessKeyIdEncrypted: enc(dnsAccessKeyId, r?.tlsMode === dto.tlsMode ? r.dnsAccessKeyIdEncrypted : null),
+        dnsAccessKeyIdEncrypted: enc(
+          dnsAccessKeyId,
+          r?.tlsMode === dto.tlsMode ? r.dnsAccessKeyIdEncrypted : null,
+        ),
         dnsAccessKeySecretEncrypted: enc(
           dnsAccessKeySecret,
           r?.tlsMode === dto.tlsMode ? r.dnsAccessKeySecretEncrypted : null,
         ),
         updatedAt: new Date(),
       };
-      if (!decryptSecret(values.ossAccessKeyIdEncrypted) || !decryptSecret(values.ossAccessKeySecretEncrypted))
+      if (
+        !decryptSecret(values.ossAccessKeyIdEncrypted) ||
+        !decryptSecret(values.ossAccessKeySecretEncrypted)
+      )
         throw new ConflictException('请填写 OSS 访问凭证');
       if (
         ['alidns', 'cloudflare'].includes(dto.tlsMode) &&

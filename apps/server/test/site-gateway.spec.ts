@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthService } from '../src/auth/auth.service';
 import type { SiteCommentsService } from '../src/sites/site-comments.service';
 import type { SiteRuntime } from '../src/sites/site-config';
+import type { SiteCdnCache } from '../src/sites/site-cdn-cache.service';
 import { SiteGateway } from '../src/sites/site-gateway.service';
 import type { SiteStorage } from '../src/sites/site-storage.service';
 import { SitesController } from '../src/sites/sites.controller';
@@ -57,6 +58,7 @@ const gateway = new SiteGateway(
   storage as unknown as SiteStorage,
   auth as unknown as AuthService,
   runtime as unknown as SiteRuntime,
+  {probe:async()=>null, redirect:async()=>null} as unknown as SiteCdnCache,
 );
 let app: ReturnType<typeof Fastify>;
 
@@ -158,6 +160,7 @@ describe('评论 iframe 的固定域名与版本域名校验', () => {
     {} as SiteCommentsService,
     auth as unknown as AuthService,
     runtime as unknown as SiteRuntime,
+  {probe:async()=>null, redirect:async()=>null} as unknown as SiteCdnCache,
   );
   it('固定域名已打开的旧页面，在新版本发布后仍使用原浏览版本', async () => {
     site.currentVersionId = versionId(2);

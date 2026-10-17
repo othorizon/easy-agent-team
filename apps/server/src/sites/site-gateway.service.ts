@@ -1,5 +1,13 @@
-import { BadRequestException, HttpException, Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  Injectable,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { SiteCdnCache, CDN_PATH } from './site-cdn-cache.service';
+import { CDN_CACHE_TTL_SECONDS } from './site-cdn.infrastructure';
 import { sitePathSchema } from '@eat/shared';
 import { z } from 'zod';
 import { AuthService } from '../auth/auth.service';
@@ -22,6 +30,7 @@ export class SiteGateway {
     private readonly storage: SiteStorage,
     private readonly auth: AuthService,
     private readonly runtime: SiteRuntime,
+    private readonly cdn: SiteCdnCache,
   ) {}
 
   async handle(req: FastifyRequest, reply: FastifyReply) {
@@ -42,6 +51,43 @@ export class SiteGateway {
       )
         return reply.type('text/plain').send(siteProbeMarker(setting));
       if (setting.status !== 'enabled') return reply.status(503).send('Folio 尚未启用');
+      const probe =
+        (req.raw.url ?? '').startsWith('/__eat/cdn-probe/') ||
+        (req.raw.url ?? '').startsWith('/__eat/cdn/health/')
+          ? await this.cdn.probe(req, req.raw.url!)
+          : null;
+      if (probe)
+        return reply
+          .header(
+            'cache-control',
+            (req.raw.url ?? '').startsWith('/__eat/cdn/health/')
+              ? `public, max-age=${CDN_CACHE_TTL_SECONDS}`
+              : 'private, no-store',
+          )
+          .type('text/plain')
+          .send(probe);
+      if ((req.raw.url ?? '').startsWith('/__eat/cdn-deny/'))
+        return reply.status(418).send('CDN authentication was bypassed');
+      if ((req.raw.url ?? '').startsWith(CDN_PATH)) {
+        if (req.headers['service-worker'] || !['GET', 'HEAD'].includes(req.method))
+          return reply.status(403).send('缓存资源不可访问');
+        const resolved = await this.cdn.resolve(host, req.raw.url!);
+        if (!resolved) return reply.status(403).send('缓存资源已失效');
+        const content = await this.storage.getBlob(resolved.site.id, resolved.file.hash);
+        // Recheck after slow OSS I/O: an in-flight fill must not make revoked revisions usable.
+        if (!(await this.cdn.resolve(host, req.raw.url!))) return reply.status(403).send('缓存资源已失效');
+        return reply
+          .header(
+            'cache-control',
+            (await this.cdn.cacheableOrigin(req))
+              ? `public, max-age=${CDN_CACHE_TTL_SECONDS}`
+              : 'private, no-store',
+          )
+          .header('vary', 'Cookie, Authorization')
+          .header('x-eat-site-version', resolved.version.id)
+          .type(resolved.file.type)
+          .send(req.method === 'HEAD' ? '' : content);
+      }
       const target = parseSiteHost(host, setting.domain);
       if (!target) return reply.status(404).send('Folio 不存在');
       const site = await this.sites.get(target.slug);
@@ -50,7 +96,13 @@ export class SiteGateway {
       if (req.method === 'GET' && url.pathname === '/__eat/embed.js')
         return reply.type('text/javascript; charset=utf-8').send(SITE_EMBED_SCRIPT);
       if (req.method === 'GET' && url.pathname === '/__eat/login') {
-        const ticket = await this.sites.session(site, url.searchParams.get('code') ?? '', 'ticket', host, true);
+        const ticket = await this.sites.session(
+          site,
+          url.searchParams.get('code') ?? '',
+          'ticket',
+          host,
+          true,
+        );
         if (!ticket?.user) throw new UnauthorizedException('登录链接已失效，请重新登录');
         const session = await this.sites.newSession(site, 'view', ticket.user.tokenId, host);
         this.cookie(reply, session);
@@ -70,7 +122,9 @@ export class SiteGateway {
         return reply.send({ ok: true });
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') return reply.status(405).send('仅支持静态文件访问');
-      const bearer = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : '';
+      const bearer = req.headers.authorization?.startsWith('Bearer ')
+        ? req.headers.authorization.slice(7)
+        : '';
       const user = bearer ? await this.auth.authenticate(bearer) : null;
       const cookie = req.headers.cookie
         ?.split(';')
@@ -109,17 +163,20 @@ export class SiteGateway {
       if (!sitePathSchema.safeParse(path).success) return reply.status(404).send('文件不存在');
       if (!Object.hasOwn(version.manifest, path)) {
         const directoryIndex = path + '/index.html';
-        if (Object.hasOwn(version.manifest, directoryIndex)) return reply.redirect(url.pathname + '/' + url.search);
+        if (Object.hasOwn(version.manifest, directoryIndex))
+          return reply.redirect(url.pathname + '/' + url.search);
         if (site.spa && !path.split('/').pop()!.includes('.')) path = 'index.html';
         else return reply.status(404).send('文件不存在');
       }
       const file = version.manifest[path];
-      if (version.layout !== 'blobs-v1')
-        throw new ServiceUnavailableException('不支持的 Folio 版本布局');
+      if (version.layout !== 'blobs-v1') throw new ServiceUnavailableException('不支持的 Folio 版本布局');
+      const cachePath = await this.cdn.redirect(req, site, version, path, file.type);
+      if (cachePath) return reply.redirect(cachePath);
       const content = await this.storage.getBlob(site.id, file.hash);
       reply.header('x-eat-site-version', version.id).type(file.type);
       // 禁止 Folio 注册持久化 Service Worker，避免访问策略变化后离线缓存继续提供受保护 Folio。
-      if (req.headers['service-worker'] === 'script') return reply.status(403).send('Folio 不支持 Service Worker');
+      if (req.headers['service-worker'] === 'script')
+        return reply.status(403).send('Folio 不支持 Service Worker');
       if (file.type.startsWith('text/html')) {
         const config = Buffer.from(
           JSON.stringify({

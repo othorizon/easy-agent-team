@@ -149,6 +149,7 @@ beforeAll(async () => {
   });
   vi.spyOn(app.get(SiteDns), 'connect').mockResolvedValue({
     zone: 'example.com',
+    update: async () => {},
     records: async () => [],
     add: async () => '',
     remove: async () => {},

@@ -1,0 +1,43 @@
+import { z } from 'zod';
+
+const credential = z
+  .string()
+  .max(4096)
+  .refine((s) => !/[\r\n\0]/.test(s), '凭证不能包含换行')
+  .optional();
+export const updateSiteCdnSchema = z.object({
+  enabled: z.boolean().default(false),
+  scope: z.enum(['domestic', 'global', 'overseas']).default('overseas'),
+  credentialSource: z.enum(['independent', 'alidns']).default('independent'),
+  accessKeyId: credential,
+  accessKeySecret: credential,
+  autoDns: z.boolean().default(false),
+});
+export type UpdateSiteCdn = z.infer<typeof updateSiteCdnSchema>;
+export type SiteCdnStatus =
+  | 'disabled'
+  | 'checking'
+  | 'awaiting_dns'
+  | 'provisioning'
+  | 'verifying'
+  | 'enabled'
+  | 'draining'
+  | 'failed'
+  | 'conflict';
+export interface SiteCdnInfo extends Omit<UpdateSiteCdn, 'accessKeyId' | 'accessKeySecret'> {
+  status: SiteCdnStatus;
+  connected: boolean;
+  accessKeyIdMasked: string;
+  hasSecret: boolean;
+  phase: string;
+  lastError: string;
+  cname: string;
+  dnsInstructions: { name: string; type: string; value: string }[];
+  certificateExpiresAt: string | null;
+  originCertificateCheckedAt: string | null;
+  certificateSyncedAt: string | null;
+  certificateSyncError: string;
+  retryAt: string | null;
+  drainUntil: string | null;
+  updatedAt: string | null;
+}

@@ -1,3 +1,4 @@
+import { FolioCdnSettings } from './FolioCdnSettings';
 import { useEffect, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -402,6 +403,7 @@ export function FolioSettingsCard() {
             {r.lastError}
           </p>
         )}
+        <FolioCdnSettings folio={r} />
       </CardContent>
     </Card>
   );

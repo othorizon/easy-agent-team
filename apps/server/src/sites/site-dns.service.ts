@@ -7,17 +7,22 @@ import { SiteSettingsStore } from './site-settings.store';
 export class SiteSetupError extends Error {}
 const encode = (s: string) =>
   encodeURIComponent(s).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
-interface DnsRecord {
+export interface DnsRecord {
   id: string;
   type: string;
   name: string;
   content: string;
+  ttl?: number;
+  proxied?: boolean;
+  line?: string;
+  status?: string;
 }
 export interface SiteDnsClient {
   zone: string;
   records(name: string): Promise<DnsRecord[]>;
   add(name: string, type: string, content: string): Promise<string>;
   remove(id: string): Promise<void>;
+  update(record: DnsRecord): Promise<void>;
 }
 @Injectable()
 export class SiteDns {
@@ -34,7 +39,10 @@ export class SiteDns {
         try {
           response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
             method,
-            headers: { authorization: `Bearer ${credentials.dnsAccessKeySecret}`, 'content-type': 'application/json' },
+            headers: {
+              authorization: `Bearer ${credentials.dnsAccessKeySecret}`,
+              'content-type': 'application/json',
+            },
             ...(body ? { body: JSON.stringify(body) } : {}),
             signal: AbortSignal.timeout(20_000),
           });
@@ -55,14 +63,35 @@ export class SiteDns {
         return {
           zone,
           records: async (name) =>
-            (await call(`/zones/${id}/dns_records?name=${encodeURIComponent(name)}&per_page=100`)).map((r: any) => ({
-              id: r.id,
-              type: r.type,
-              name: r.name,
-              content: r.content,
-            })),
+            (await call(`/zones/${id}/dns_records?name=${encodeURIComponent(name)}&per_page=100`)).map(
+              (r: any) => ({
+                id: r.id,
+                type: r.type,
+                name: r.name,
+                content: r.content,
+                ttl: r.ttl,
+                proxied: r.proxied,
+              }),
+            ),
           add: async (name, type, content) =>
-            (await call(`/zones/${id}/dns_records`, 'POST', { name, type, content, ttl: 120, proxied: false })).id,
+            (
+              await call(`/zones/${id}/dns_records`, 'POST', {
+                name,
+                type,
+                content,
+                ttl: 120,
+                proxied: false,
+              })
+            ).id,
+          update: async (record) => {
+            await call(`/zones/${id}/dns_records/${encodeURIComponent(record.id)}`, 'PUT', {
+              name: record.name,
+              type: record.type,
+              content: record.content,
+              ttl: record.ttl ?? 120,
+              proxied: false,
+            });
+          },
           remove: async (recordId) => {
             await call(`/zones/${id}/dns_records/${encodeURIComponent(recordId)}`, 'DELETE');
           },
@@ -130,11 +159,35 @@ export class SiteDns {
         });
         return (json.DomainRecords?.Record ?? [])
           .filter((r: any) => r.RR === rr(name))
-          .map((r: any) => ({ id: r.RecordId, type: r.Type, name, content: r.Value }));
+          .map((r: any) => ({
+            id: r.RecordId,
+            type: r.Type,
+            name,
+            content: r.Value,
+            ttl: r.TTL,
+            line: r.Line,
+            status: r.Status,
+          }));
       },
       add: async (name, type, content) =>
-        (await call('AddDomainRecord', { DomainName: zone, RR: rr(name), Type: type, Value: content, TTL: '600' }))
-          .RecordId,
+        (
+          await call('AddDomainRecord', {
+            DomainName: zone,
+            RR: rr(name),
+            Type: type,
+            Value: content,
+            TTL: '600',
+          })
+        ).RecordId,
+      update: async (record) => {
+        await call('UpdateDomainRecord', {
+          RecordId: record.id,
+          RR: rr(record.name),
+          Type: record.type,
+          Value: record.content,
+          TTL: String(record.ttl ?? 600),
+        });
+      },
       remove: async (id) => {
         await call('DeleteDomainRecord', { RecordId: id });
       },
@@ -154,9 +207,11 @@ export class SiteDns {
       if (id) await client.remove(id);
       else {
         // 创建超时也可能已落库，按随机名称和内容只清理本次测试记录。
-        for (const record of await client.records(name)) if (record.type === 'TXT' && record.content === value) await client.remove(record.id);
+        for (const record of await client.records(name))
+          if (record.type === 'TXT' && record.content === value) await client.remove(record.id);
       }
-      if ((await client.records(name)).some(record => record.type === 'TXT' && record.content === value)) throw new SiteSetupError(`DNS 测试 TXT 删除后仍存在，请清理 ${name}`);
+      if ((await client.records(name)).some((record) => record.type === 'TXT' && record.content === value))
+        throw new SiteSetupError(`DNS 测试 TXT 删除后仍存在，请清理 ${name}`);
     }
   }
   async ensureWildcard(client: SiteDnsClient, row: SiteSettingRow) {
@@ -164,7 +219,8 @@ export class SiteDns {
     const content = row.gatewayTarget.replace(/^\[|\]$/g, '').toLowerCase();
     const type = isIP(content) === 4 ? 'A' : isIP(content) === 6 ? 'AAAA' : 'CNAME';
     const records = await client.records(name);
-    if (records.some((r) => r.type === type && r.content.toLowerCase().replace(/\.$/, '') === content)) return null;
+    if (records.some((r) => r.type === type && r.content.toLowerCase().replace(/\.$/, '') === content))
+      return null;
     if (records.length) throw new SiteSetupError('已有不同的通配 DNS 记录，EAT 不会覆盖，请先核对并手动处理');
     const id = await client.add(name, type, content);
     return { id, client };
