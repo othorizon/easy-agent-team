@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 33;
+export const PLATFORM_GUIDE_VERSION = 34;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -80,11 +80,13 @@ Folio 用于发布和分享网页、演示与报告，支持版本管理和评�
 
 明确访问权限后，用 \`eat folio create <slug> --access <模式>\` / \`create_folio\`（传 \`access\`）创建 Folio；已有 Folio 需要调整权限时用 \`eat folio update <folio> --access <模式>\` / \`update_folio\`，密码模式需按用户确认设置 \`password\`。再用 \`eat folio push <slug> <目录或 ZIP>\` / \`publish_folio\` 上传构建好的静态文件，根目录需包含 index.html。每次最多 2000 个文件、50 MiB，历史发布产物完整保留；Folio 固定域名直接展示当前版本、地址栏不跳转，带版本域名用于固定快照，用 \`activate_folio_version\` 可回滚。
 
+CLI/Web 每次提交完整文件清单，仅将缺失 SHA-256 内容以二进制直传私有 OSS；同一 Folio 的内容共享，版本仍保存完整清单。50 MiB/2000 文件按整版逻辑内容计算。CLI 中断后重跑同一命令可恢复，\`--resume <upload-id>\` 指定会话，\`--fresh\` 开始新的发布；会话有效 24 小时，短期签名可续签。浏览器刷新后需重新选择相同本地文件。服务端对新增对象的私有快照流式读取并核验 SHA-256 后封存，文件字节可能经过 EAT 验证一次。MCP 可用 \`prepare_folio_upload\` / \`get_folio_upload\` / \`renew_folio_upload\` / \`complete_folio_upload\`；只向返回的 OSS URL 发送原始二进制及签名头，绝不携带 EAT 令牌或 Cookie。远程 MCP 无法读取用户本地路径；小型内容也可用 \`publish_folio\` 的 utf8/base64 输入。
+
 MCP 中通过 folio 参数指定 Folio 标识。读取密码访问的 Folio 时，先 \`unlock_folio\` 验证，后续调用携带返回的 accessToken；\`create_folio_share_link\` 返回免输密码链接，它只授予 Folio 访问能力，不代表用户身份。发表评论或回复始终需要 EAT 登录。
 
 处理反馈用 \`list_folio_comments\`（支持 page / versionId / status），每条评论与回复均附实际浏览版本，讨论还附元素或区域锚点及原版本链接。创建或回复时必须传实际查看的 versionId，不要拿当前最新版代替旧 Folio 的版本。\`list_folio_mention_users\` 查询用户 ID，在 mentions 中指定即可 @；配置过个人飞书 webhook 的用户会收到事件通知。修复后发布新版、回复说明，再按需 \`set_folio_thread_status\` 标记解决；发布不会自动解决旧评论。删除评论用 \`delete_folio_comment\` / \`eat folio delete-comment <folio> <comment-id>\`，仅评论作者、Folio 所有者或管理员可操作；清除正文并保留其他人的回复。
 
-删除整个 Folio 用 \`eat folio delete <folio>\` / \`delete_folio\`，仅所有者或管理员可操作。必须先取得用户明确的删除指令；这会永久清除全部历史版本、发布文件、评论与会话，固定链接和分享链接立即失效，无法恢复。返回 \`cleanupFailed: true\` 时 Folio 已删除，但部分私有文件清理失败，需通知管理员按审计记录清理残留文件。
+删除整个 Folio 用 \`eat folio delete <folio>\` / \`delete_folio\`，仅所有者或管理员可操作。必须先取得用户明确的删除指令；这会永久清除全部历史版本、发布文件、评论与会话，固定链接和分享链接立即失效，无法恢复。返回 \`cleanupFailed: true\` 时 Folio 已删除，但部分私有文件清理失败，需通知管理员按审计记录检查清理；\`cleanupPending: true\` 表示旧上传签名仍有效，后台将继续清扫该 Folio 前缀。
 
 ### MCP 配置（连团队内部的 MCP 服务）
 

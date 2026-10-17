@@ -8,6 +8,9 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
 import * as bcrypt from 'bcryptjs';
 import { access, mkdtemp, rm } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { uploadFolioFiles, siteContentType, type FolioUploadFile } from '@eat/shared';
+import { AuditService } from '../src/audit/audit.service';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
@@ -128,6 +131,7 @@ beforeAll(async () => {
     .useValue({ notify })
     .compile();
   app = module.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+  await app.get<TestSiteStorage>(SiteStorage).start();
   await app.init();
   await app.getHttpAdapter().getInstance().ready();
   const login = async (email: string) =>
@@ -141,6 +145,7 @@ beforeAll(async () => {
   admin = (await login('admin@site.test')).token;
 });
 afterAll(async () => {
+  if (app) await app.get<TestSiteStorage>(SiteStorage).close();
   await app?.close();
   if (dir) await rm(dir, { recursive: true, force: true });
 });
@@ -227,9 +232,9 @@ describe('静态发布与不可变历史版本', () => {
   });
   it('上传中途失败不激活、不留新版本，旧文件保持可用', async () => {
     const storage = app.get(SiteStorage);
-    const original = storage.put.bind(storage);
+    const original = storage.putStaging.bind(storage);
     let count = 0;
-    const spy = vi.spyOn(storage, 'put').mockImplementation(async (...args) => {
+    const spy = vi.spyOn(storage, 'putStaging').mockImplementation(async (...args) => {
       if (++count === 2) throw new Error('storage unavailable');
       return original(...args);
     });
@@ -688,7 +693,7 @@ describe('Folio 永久删除', () => {
     const proof = (
       await api('POST', '/api/sites/delete-permission/access', undefined, { password: 'private' })
     ).body.accessToken;
-    const storage = vi.spyOn(app.get(SiteStorage), 'discard');
+    const storage = vi.spyOn(app.get(SiteStorage), 'discardSite');
     try {
       expect((await api('DELETE', '/api/sites/delete-permission')).status).toBe(401);
       expect(
@@ -772,19 +777,19 @@ describe('Folio 永久删除', () => {
     await expect(tools.call(actor, 'delete_folio', { folio: '../invalid' })).rejects.toThrow('工具参数不合法');
   });
 
-  it('部分文件清理失败仍撤销访问、继续清理其他版本，并返回警告与审计记录', async () => {
+  it('整站前缀清理失败仍撤销访问，并保留重试记录和失败审计', async () => {
     const created = (
       await api('POST', '/api/sites', owner, { slug: 'delete-storage-failure', name: 'Failure' })
     ).body;
     await api('POST', '/api/sites/delete-storage-failure/releases', owner, { files: files('first') });
     await api('POST', '/api/sites/delete-storage-failure/releases', owner, { files: files('second') });
-    const storage = vi.spyOn(app.get(SiteStorage), 'discard')
+    const storage = vi.spyOn(app.get(SiteStorage), 'discardSite')
       .mockRejectedValueOnce(new Error('storage unavailable'));
     try {
       const result = await api('DELETE', '/api/sites/delete-storage-failure', owner);
       expect(result.status).toBe(200);
       expect(result.body).toEqual({ ok: true, cleanupFailed: true });
-      expect(storage).toHaveBeenCalledTimes(2);
+      expect(storage).toHaveBeenCalledTimes(1);
       expect((await content('/', { site: 'delete-storage-failure', token: owner })).statusCode).toBe(404);
       const logs = await app.get<Db>(DB)
         .select().from(schema.auditLogs)
@@ -794,7 +799,7 @@ describe('Folio 永久删除', () => {
         ));
       expect(logs).toHaveLength(1);
       expect(logs[0].meta).toMatchObject({
-        slug: 'delete-storage-failure', versionIds: [storage.mock.calls[0][2]],
+        slug: 'delete-storage-failure',
       });
     } finally {
       storage.mockRestore();
@@ -806,7 +811,7 @@ describe('Folio 永久删除', () => {
       await api('POST', '/api/sites', owner, { slug: 'delete-during-publish', name: 'Race' })
     ).body;
     const storage = app.get(SiteStorage);
-    const put = storage.put.bind(storage);
+    const put = storage.putStaging.bind(storage);
     let uploaded!: () => void;
     let resume!: () => void;
     const ready = new Promise<void>((resolve) => {
@@ -815,7 +820,7 @@ describe('Folio 永久删除', () => {
     const paused = new Promise<void>((resolve) => {
       resume = resolve;
     });
-    const spy = vi.spyOn(storage, 'put').mockImplementation(async (...args) => {
+    const spy = vi.spyOn(storage, 'putStaging').mockImplementation(async (...args) => {
       await put(...args);
       uploaded();
       await paused;
@@ -829,7 +834,7 @@ describe('Folio 永久删除', () => {
       resume();
       const result = await publishing;
       expect(result.status).toBe(404);
-      expect(result.body.message).toContain('已删除');
+      expect(result.body.message).toContain('不存在');
       const versionId = spy.mock.calls[0][1];
       await expect(access(join(dir, created.id, versionId))).rejects.toThrow();
       expect(
@@ -858,5 +863,258 @@ describe('Folio 永久删除', () => {
       .select().from(schema.auditLogs)
       .where(and(eq(schema.auditLogs.action, 'site.deleted'), eq(schema.auditLogs.targetId, created.id)));
     expect(audit).toHaveLength(1);
+  });
+});
+
+function binaryFile(path: string, text: string | Buffer): FolioUploadFile {
+  const bytes = Buffer.from(text);
+  return { path, bytes, size: bytes.length, type: siteContentType(path), hash: createHash('sha256').update(bytes).digest('hex') };
+}
+async function uploadPlan(slug: string, files: FolioUploadFile[], requestId = randomUUID()) {
+  return api('POST', `/api/sites/${slug}/uploads`, owner,
+    { requestId, files: files.map(({ bytes: _, ...f }) => f), message: 'direct' });
+}
+async function putPlan(plan: any, files: FolioUploadFile[]) {
+  for (const target of plan.uploads) {
+    const response = await fetch(target.url, { method: 'PUT', headers: target.headers,
+      body: files.find((f) => f.hash === target.hash)!.bytes as Buffer });
+    expect(response.status).toBe(200);
+  }
+}
+const complete = (slug: string, id: string, token = owner) => api('POST', `/api/sites/${slug}/uploads/${id}/complete`, token, {});
+
+describe('二进制直传、共享内容和持久化会话', () => {
+  it('首发、仅增量上传、相同内容的路径 MIME、完整清单删除及固定版本/回滚', async () => {
+    await api('POST', '/api/sites', owner, { slug: 'direct', name: 'Direct' });
+    const files = [binaryFile('index.html', '<body>one</body>'), binaryFile('logo.png', 'same'), binaryFile('copy.txt', 'same')];
+    const requestId = randomUUID();
+    const plan = await uploadPlan('direct', files, requestId);
+    expect(plan.status).toBe(201);
+    expect(plan.body.uploads).toHaveLength(2);
+    expect((await uploadPlan('direct', files, requestId)).body.id).toBe(plan.body.id);
+    expect((await uploadPlan('direct', [binaryFile('index.html', 'changed')], requestId)).status).toBe(409);
+    await putPlan(plan.body, files);
+    const first = await complete('direct', plan.body.id);
+    expect(first.status).toBe(201);
+    expect(first.body.totalBytes).toBe(files.reduce((n, f) => n + f.size, 0));
+    const read = (path: string, version?: number) => content(path, { site: 'direct', token: owner, version });
+    expect((await read('/logo.png')).headers['content-type']).toBe('image/png');
+    expect((await read('/copy.txt')).headers['content-type']).toContain('text/plain');
+    const next = [binaryFile('index.html', '<body>two</body>'), files[1]];
+    const secondPlan = await uploadPlan('direct', next);
+    expect(secondPlan.body.uploads).toHaveLength(1);
+    await putPlan(secondPlan.body, next);
+    const second = await complete('direct', secondPlan.body.id);
+    expect(second.status).toBe(201);
+    expect((await read('/copy.txt')).statusCode).toBe(404);
+    expect((await read('/copy.txt', 1)).body).toBe('same');
+    expect((await read('/', 1)).body).toContain('one');
+    const unchanged = await uploadPlan('direct', next);
+    expect(unchanged.body.uploads).toHaveLength(0);
+    expect((await complete('direct', unchanged.body.id)).body.number).toBe(3);
+    expect((await complete('direct', secondPlan.body.id)).body).toEqual(second.body);
+    await api('POST', '/api/sites/direct/activate', owner, { versionId: first.body.id });
+    expect((await read('/')).body).toContain('one');
+    expect((await read('/', 2)).body).toContain('two');
+  });
+
+  it('非法清单、逻辑总量/数量限制、对象缺失、大小及 SHA-256 错误均不能激活', async () => {
+    await api('POST', '/api/sites', owner, { slug: 'bad-direct', name: 'Bad' });
+    const valid = binaryFile('index.html', 'correct');
+    const invalid = [
+      [{ ...valid, path: '../index.html' }], [{ ...valid, hash: 'BAD' }], [valid, valid],
+      [valid, { ...valid, path: 'index.html/file' }], [{ ...valid, path: 'no-index' }],
+      [{ ...valid, size: 30 * 1024 * 1024 }, { ...valid, path: 'a', size: 30 * 1024 * 1024 }],
+      Array.from({ length: 2001 }, (_, i) => ({ ...valid, path: i ? `${i}.txt` : 'index.html' })),
+    ];
+    for (const files of invalid) expect((await uploadPlan('bad-direct', files)).status).toBe(400);
+    const missing = (await uploadPlan('bad-direct', [valid])).body;
+    expect((await complete('bad-direct', missing.id)).status).toBe(400);
+    await fetch(missing.uploads[0].url, { method: 'PUT', headers: missing.uploads[0].headers, body: 'wrong!!' });
+    expect((await complete('bad-direct', missing.id)).status).toBe(400);
+    await fetch(missing.uploads[0].url, { method: 'PUT', headers: missing.uploads[0].headers, body: 'short' });
+    expect((await complete('bad-direct', missing.id)).status).toBe(400);
+    expect((await api('GET', '/api/sites/bad-direct', owner)).body.currentVersionId).toBeNull();
+    await putPlan(missing, [valid]);
+    expect((await complete('bad-direct', missing.id)).status).toBe(201);
+  });
+
+  it('旧签名重放和验证时改写 staging 无法改变快照或已发布字节', async () => {
+    await api('POST', '/api/sites', owner, { slug: 'replay', name: 'Replay' });
+    const files = [binaryFile('index.html', '<body>verified</body>')];
+    const plan = (await uploadPlan('replay', files)).body;
+    await putPlan(plan, files);
+    const storage = app.get<TestSiteStorage>(SiteStorage);
+    const snapshot = storage.snapshot.bind(storage);
+    const hook = vi.spyOn(storage, 'snapshot').mockImplementation(async (...args) => {
+      const result = await snapshot(...args);
+      await storage.putStaging(args[0], args[1], args[2], Buffer.from('malicious replacement'));
+      return result;
+    });
+    try { expect((await complete('replay', plan.id)).status).toBe(201); }
+    finally { hook.mockRestore(); }
+    await fetch(plan.uploads[0].url, { method: 'PUT', headers: plan.uploads[0].headers, body: 'later rewrite' });
+    expect((await content('/', { site: 'replay', token: owner })).body).toContain('verified');
+    expect((await complete('replay', plan.id)).body.number).toBe(1);
+  });
+
+  it('跨会话相同内容并发封存、并发完成和响应丢失重试只提交一次', async () => {
+    await api('POST', '/api/sites', owner, { slug: 'concurrent-direct', name: 'Concurrent' });
+    const files = [binaryFile('index.html', '<body>concurrent</body>')];
+    const plans = await Promise.all([uploadPlan('concurrent-direct', files), uploadPlan('concurrent-direct', files)]);
+    await Promise.all(plans.map((p) => putPlan(p.body, files)));
+    const results = await Promise.all([complete('concurrent-direct', plans[0].body.id), complete('concurrent-direct', plans[0].body.id), complete('concurrent-direct', plans[1].body.id)]);
+    expect(results.every((r) => r.status === 201 || r.status === 409)).toBe(true);
+    const retries = await Promise.all(plans.map((p) => complete('concurrent-direct', p.body.id)));
+    expect(retries.every((r) => r.status === 201)).toBe(true);
+    expect(new Set(retries.map((r) => r.body.number)).size).toBe(2);
+    expect((await api('GET', '/api/sites/concurrent-direct/versions', owner)).body).toHaveLength(2);
+    const site = await app.get(SitesService).get('concurrent-direct');
+    expect(await app.get<Db>(DB).select().from(schema.siteBlobs).where(eq(schema.siteBlobs.siteId, site.id))).toHaveLength(1);
+  });
+
+  it('中断、续签、租约过期后的进程恢复，以及 DB 提交失败后的恢复', async () => {
+    await api('POST', '/api/sites', owner, { slug: 'resume-direct', name: 'Resume' });
+    const files = [binaryFile('index.html', '<body>resume</body>')];
+    const plan = (await uploadPlan('resume-direct', files)).body;
+    const db = app.get<Db>(DB);
+    await db.update(schema.siteUploads).set({ state: 'verifying', lease: randomUUID(), leaseUntil: new Date(0) }).where(eq(schema.siteUploads.id, plan.id));
+    const renewed = await api('POST', `/api/sites/resume-direct/uploads/${plan.id}/renew`, owner, {});
+    expect(renewed.body.uploads).toHaveLength(1);
+    const expiredURL = new URL(plan.uploads[0].url); expiredURL.searchParams.set('expires', '0');
+    expect((await fetch(expiredURL, { method: 'PUT', headers: plan.uploads[0].headers, body: 'x' })).status).toBe(403);
+    await putPlan(renewed.body, files);
+    const actor = (await app.get(AuthService).authenticate(owner))!;
+    const recreated = new SitesService(db, app.get(SiteStorage), app.get(AuditService), app.get(SiteRuntime));
+    const failure = vi.spyOn(db, 'transaction').mockRejectedValueOnce(new Error('simulated DB commit failure'));
+    await expect(recreated.completeUpload(actor, 'resume-direct', plan.id)).rejects.toThrow('DB commit failure');
+    failure.mockRestore();
+    expect((await api('GET', '/api/sites/resume-direct', owner)).body.currentVersionId).toBeNull();
+    const result = await recreated.completeUpload(actor, 'resume-direct', plan.id);
+    expect(result.number).toBe(1);
+    expect((await api('GET', `/api/sites/resume-direct/uploads/${plan.id}`, owner)).body.result).toEqual(result);
+    expect((await complete('resume-direct', plan.id)).body).toEqual(result);
+  });
+
+  it('上传中停用、撤销权限和删除均不能提交，跨 Folio/用户会话拒绝访问', async () => {
+    const db = app.get<Db>(DB);
+    const storage = app.get<TestSiteStorage>(SiteStorage);
+    const member = (await api('POST', '/api/auth/login', undefined, { email: 'other@site.test', password: 'password123' })).body.token;
+    for (const kind of ['disabled', 'revoked', 'deleted']) {
+      const slug = 'during-' + kind;
+      const site = (await api('POST', '/api/sites', owner, { slug, name: kind })).body;
+      const files = [binaryFile('index.html', kind)];
+      const plan = (await uploadPlan(slug, files)).body;
+      expect((await api('GET', `/api/sites/demo/uploads/${plan.id}`, owner)).status).toBe(404);
+      expect((await api('GET', `/api/sites/${slug}/uploads/${plan.id}`, member)).status).toBe(403);
+      expect((await complete(slug, plan.id, member)).status).toBe(403);
+      await putPlan(plan, files);
+      const seal = storage.verifyAndSeal.bind(storage);
+      const hook = vi.spyOn(storage, 'verifyAndSeal').mockImplementation(async (...args) => {
+        await seal(...args);
+        if (kind === 'disabled') await db.update(schema.siteSettings).set({ status: 'disabled' });
+        if (kind === 'revoked') await db.update(schema.sites).set({ ownerId: otherId }).where(eq(schema.sites.id, site.id));
+        if (kind === 'deleted') await api('DELETE', `/api/sites/${slug}`, owner);
+      });
+      try { expect((await complete(slug, plan.id)).status).toBe(kind === 'disabled' ? 503 : kind === 'revoked' ? 403 : 404); }
+      finally { hook.mockRestore(); await db.update(schema.siteSettings).set({ status: 'enabled' }); }
+      expect(await db.select().from(schema.siteVersions).where(eq(schema.siteVersions.siteId, site.id))).toHaveLength(0);
+      if (kind === 'deleted') {
+        expect((await api('POST', `/api/sites/${slug}/uploads/${plan.id}/renew`, owner, {})).status).toBe(404);
+        await fetch(plan.uploads[0].url, { method: 'PUT', headers: plan.uploads[0].headers, body: 'late' });
+        await db.update(schema.siteCleanups).set({ notBefore: new Date(0) }).where(eq(schema.siteCleanups.siteId, site.id));
+        await app.get(SitesService).cleanupDeletedSites();
+        await expect(access(storage.file(`sites/${site.id}`))).rejects.toThrow();
+      }
+    }
+  });
+
+  it('数百个文件通过共用上传器和真实 HTTP PUT；有界并发及退避重试', async () => {
+    await api('POST', '/api/sites', owner, { slug: 'many-direct', name: 'Many' });
+    const files = [binaryFile('index.html', '<body>many</body>'), ...Array.from({ length: 350 }, (_, i) => binaryFile(`assets/${i}.txt`, `file ${i}`))];
+    const storage = app.get<TestSiteStorage>(SiteStorage);
+    storage.maxActive = 0; storage.failPuts = 2;
+    const before = storage.puts;
+    const progress: string[] = [];
+    const rssBefore = process.memoryUsage().rss;
+    let peakRss = rssBefore;
+    const sampling = setInterval(() => { peakRss = Math.max(peakRss, process.memoryUsage().rss); }, 10);
+    const result = await uploadFolioFiles(async (method, path, payload) => {
+      const response = await api(method as 'POST', path, owner, payload);
+      if (response.status >= 400) throw Object.assign(new Error(response.body.message), { status: response.status, code: response.body.error });
+      return response.body;
+    }, 'many-direct', files, { requestId: randomUUID(), onProgress: (s) => progress.push(s) }).finally(() => clearInterval(sampling));
+    expect(result.fileCount).toBe(351);
+    expect(storage.puts - before).toBe(351);
+    expect(storage.maxActive).toBeLessThanOrEqual(4);
+    const rssGrowth = Math.max(0, peakRss - rssBefore);
+    expect(rssGrowth).toBeLessThan(128 * 1024 * 1024);
+    console.log(`351 文件集成场景：最大 PUT 并发 ${storage.maxActive}，本地同进程 RSS 增长 ${(rssGrowth / 1024 / 1024).toFixed(1)} MiB`);
+    expect(progress.some((s) => s.includes('SHA-256'))).toBe(true);
+  });
+
+  it('2000 个合法长 Unicode 路径的清单超过默认 JSON 大小仍可准备，重复内容只签一次', async () => {
+    await api('POST', '/api/sites', owner, { slug: 'large-manifest', name: 'Large manifest' });
+    const empty = binaryFile('index.html', '');
+    const files = [empty, ...Array.from({ length: 1999 }, (_, i) => ({ ...empty, path: '层'.repeat(495) + '/' + i + '.txt', type: 'text/plain' }))];
+    const result = await uploadPlan('large-manifest', files);
+    expect(result.status).toBe(201);
+    expect(result.body.uploads).toHaveLength(1);
+  });
+  it('会话过期/有效租约明确拒绝完成；正式对象丢失时重新上传验证', async () => {
+    await api('POST', '/api/sites', owner, { slug: 'expiry-direct', name: 'Expiry' });
+    const files = [binaryFile('index.html', 'expiry test')];
+    const plan = (await uploadPlan('expiry-direct', files)).body;
+    const db = app.get<Db>(DB);
+    await db.update(schema.siteUploads).set({ state: 'verifying', lease: randomUUID(), leaseUntil: new Date(Date.now() + 600000) }).where(eq(schema.siteUploads.id, plan.id));
+    const busy = await complete('expiry-direct', plan.id);
+    expect(busy.status).toBe(409); expect(busy.body.error).toBe('UPLOAD_BUSY');
+    await db.update(schema.siteUploads).set({ expiresAt: new Date(0) }).where(eq(schema.siteUploads.id, plan.id));
+    expect((await complete('expiry-direct', plan.id)).status).toBe(400);
+    expect((await api('GET', `/api/sites/expiry-direct/uploads/${plan.id}`, owner)).body.state).toBe('expired');
+    expect((await api('POST', `/api/sites/expiry-direct/uploads/${plan.id}/renew`, owner, {})).body.uploads).toHaveLength(0);
+    const fresh = (await uploadPlan('expiry-direct', files)).body;
+    await putPlan(fresh, files); expect((await complete('expiry-direct', fresh.id)).status).toBe(201);
+    const site = await app.get(SitesService).get('expiry-direct');
+    const storage = app.get<TestSiteStorage>(SiteStorage);
+    await rm(storage.file(storage.blobKey(site.id, files[0].hash)));
+    const repair = (await uploadPlan('expiry-direct', files)).body;
+    expect(repair.uploads).toHaveLength(1);
+    await putPlan(repair, files); expect((await complete('expiry-direct', repair.id)).status).toBe(201);
+    expect((await content('/', { site: 'expiry-direct', token: owner })).body).toContain('expiry test');
+  });
+  it('新旧显式布局在同一 Folio 混合读取与回滚，不复制旧对象', async () => {
+    const site = (await api('POST', '/api/sites', owner, { slug: 'mixed-direct', name: 'Mixed' })).body;
+    const id = randomUUID();
+    const storage = app.get(SiteStorage);
+    await storage.put(site.id, id, 'index.html', Buffer.from('<body>legacy layout</body>'), 'text/html');
+    const db = app.get<Db>(DB);
+    await db.insert(schema.siteVersions).values({ id, siteId: site.id, number: 1, publisherId: ownerId, storage: 'local', layout: 'legacy-v0', fileCount: 1, totalBytes: 26, manifest: { 'index.html': { type: 'text/html', size: 26 } } });
+    await db.update(schema.sites).set({ nextVersion: 2, currentVersionId: id }).where(eq(schema.sites.id, site.id));
+    const files = [binaryFile('index.html', '<body>new layout</body>')];
+    const plan = (await uploadPlan('mixed-direct', files)).body;
+    await putPlan(plan, files); expect((await complete('mixed-direct', plan.id)).body.number).toBe(2);
+    expect((await content('/', { site: 'mixed-direct', version: 1, token: owner })).body).toContain('legacy layout');
+    expect((await content('/', { site: 'mixed-direct', token: owner })).body).toContain('new layout');
+    await api('POST', '/api/sites/mixed-direct/activate', owner, { versionId: id });
+    expect((await content('/', { site: 'mixed-direct', token: owner })).body).toContain('legacy layout');
+  });
+  it('MCP 会话与内联输入共用封存及幂等提交；至少 5 MiB Base64 不再栈溢出', async () => {
+    await api('POST', '/api/sites', owner, { slug: 'mcp-direct', name: 'MCP' });
+    const tools = app.get(McpToolsService);
+    const actor = (await app.get(AuthService).authenticate(owner))!;
+    const files = [binaryFile('index.html', 'mcp session')];
+    const plan = await tools.call(actor, 'prepare_folio_upload', { folio: 'mcp-direct', requestId: randomUUID(), files: files.map(({ bytes: _, ...f }) => f) }) as any;
+    await putPlan(plan, files);
+    const result = await tools.call(actor, 'complete_folio_upload', { folio: 'mcp-direct', uploadId: plan.id });
+    expect(await tools.call(actor, 'complete_folio_upload', { folio: 'mcp-direct', uploadId: plan.id })).toEqual(result);
+    const bytes = Buffer.alloc(5 * 1024 * 1024, 0xa5);
+    const payload = [{ path: 'index.html', content: '<body>large</body>' }, { path: 'big.bin', encoding: 'base64', content: bytes.toString('base64') }];
+    const published = await api('POST', '/api/sites/mcp-direct/releases', owner, { files: payload });
+    expect(published.status).toBe(201);
+    expect((await content('/big.bin', { site: 'mcp-direct', token: owner })).rawPayload).toEqual(bytes);
+    for (const content of ['abc', 'ab==', 'AAAA====', bytes.toString('base64') + '!']) {
+      expect((await api('POST', '/api/sites/mcp-direct/releases', owner, { files: [{ path: 'index.html', encoding: 'base64', content }] })).status).toBe(400);
+    }
   });
 });

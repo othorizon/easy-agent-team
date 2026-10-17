@@ -1,26 +1,30 @@
 import type { Command } from 'commander';
-import { lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { unzipSync } from 'fflate';
 import {
   SITE_MAX_BYTES,
   SITE_MAX_FILES,
-  siteFileSchema,
+  sitePathSchema, siteContentType, uploadFolioFiles, folioManifestKey,
   folioToolRequest,
-  type SiteFile,
+  type FolioUploadFile,
   type FolioToolName,
 } from '@eat/shared';
 import { Api } from '../client.js';
 
-export function collectFolioFiles(input: string): SiteFile[] {
+export function collectFolioFiles(input: string): FolioUploadFile[] {
   const root = resolve(input);
   const stat = lstatSync(root);
-  const files: SiteFile[] = [];
+  const files: FolioUploadFile[] = [];
   let total = 0;
   const add = (path: string, content: Uint8Array) => {
     total += content.length;
     if (total > SITE_MAX_BYTES || files.length >= SITE_MAX_FILES) throw new Error('发布最多 2000 个文件、50 MiB');
-    files.push(siteFileSchema.parse({ path, content: Buffer.from(content).toString('base64'), encoding: 'base64' }));
+    sitePathSchema.parse(path);
+    const bytes = Uint8Array.from(content);
+    files.push({ path, bytes, hash: createHash('sha256').update(bytes).digest('hex'), size: bytes.length, type: siteContentType(path) });
   };
   if (stat.isDirectory()) {
     const walk = (dir: string, prefix = '') => {
@@ -42,6 +46,7 @@ export function collectFolioFiles(input: string): SiteFile[] {
     if (stat.size > SITE_MAX_BYTES) throw new Error('ZIP 文件最多 50 MiB');
     let declared = 0,
       count = 0;
+    const seen = new Set<string>();
     const entries = unzipSync(readFileSync(root), {
       filter: (f) => {
         if (f.name.endsWith('/')) return false;
@@ -49,7 +54,9 @@ export function collectFolioFiles(input: string): SiteFile[] {
         count++;
         if (declared > SITE_MAX_BYTES || count > SITE_MAX_FILES)
           throw new Error('ZIP 解压内容超过 2000 个文件或 50 MiB');
-        siteFileSchema.shape.path.parse(f.name);
+        sitePathSchema.parse(f.name);
+        if (seen.has(f.name)) throw new Error('ZIP 中存在重复路径');
+        seen.add(f.name);
         return true;
       },
     });
@@ -64,8 +71,29 @@ export async function runFolioTool(name: FolioToolName, args: Record<string, unk
   const result = await Api.fromSaved().request(req.method, req.path, req.body, req.headers);
   console.log(JSON.stringify(result, null, 2));
 }
-export async function folioPush(folio: string, directory: string, opts: { message?: string }) {
-  return runFolioTool('publish_folio', { folio, files: collectFolioFiles(directory), message: opts.message ?? '' });
+export async function folioPush(folio: string, directory: string, opts: { message?: string; resume?: string; fresh?: boolean }) {
+  const api = Api.fromSaved();
+  const files = collectFolioFiles(directory);
+  const key = createHash('sha256').update(`${api.serverUrl}:${folio}:${folioManifestKey(files)}:${opts.message ?? ''}`).digest('hex');
+  const stateDir = join(homedir(), '.eat', 'folio-uploads');
+  const stateFile = join(stateDir, key + '.json');
+  let saved: { requestId: string; sessionId?: string } = { requestId: randomUUID() };
+  if (!opts.fresh && existsSync(stateFile)) saved = JSON.parse(readFileSync(stateFile, 'utf8'));
+  if (opts.resume) saved.sessionId = opts.resume;
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  writeFileSync(stateFile, JSON.stringify(saved), { mode: 0o600 });
+  const result = await uploadFolioFiles((...args) => api.request(...args), folio, files, {
+    ...saved, message: opts.message,
+    onSession: (id) => {
+      saved.sessionId = id;
+      writeFileSync(stateFile, JSON.stringify(saved), { mode: 0o600 });
+      console.error(`上传会话 ${id}；中断后重跑同一命令继续，或使用 --resume ${id}`);
+    },
+    onProgress: (message) => console.error(message),
+  });
+  rmSync(stateFile, { force: true });
+  console.log(`已发布 v${result.number}：${result.url}`);
+  return result;
 }
 export function folioComment(
   folio: string,
@@ -127,7 +155,9 @@ export function registerFolioCommands(program: Command): void {
     .command('push <folio> <directory-or-zip>')
     .description('上传构建好的静态目录或 ZIP，发布并保留完整历史版本')
     .option('-m, --message <text>', '版本说明')
-    .action(folioPush);
+    .option('--resume <upload-id>', '恢复指定上传会话，需选择相同内容')
+    .option('--fresh', '放弃本地恢复记录，开始新的发布')
+    .action(async (folio, directory, opts) => { await folioPush(folio, directory, opts); });
   folio
     .command('versions <folio>')
     .description('列出历史版本及固定访问地址')

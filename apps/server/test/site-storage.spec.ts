@@ -54,3 +54,48 @@ describe('静态产物存储', () => {
     expect(oss.deleteMulti).toHaveBeenCalled();
   });
 });
+
+describe('实际 SiteStorage 的流式验证与不可变封存', () => {
+  it('冻结快照后验证，再禁止覆盖封存；临时对象被改写也不影响最终字节', async () => {
+    const { Readable } = await import('node:stream');
+    const { createHash } = await import('node:crypto');
+    const bytes = Buffer.from('verified binary');
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    const objects = new Map([['sites/folio/staging/session/' + hash, bytes]]);
+    const copied: { destination: string; source: string; headers: Record<string, string> }[] = [];
+    const client = {
+      copy: async (destination: string, source: string, options: { headers: Record<string, string> }) => {
+        copied.push({ destination, source, headers: options.headers });
+        if (objects.has(destination)) throw { code: 'FileAlreadyExists' };
+        objects.set(destination, Buffer.from(objects.get(source)!));
+        if (destination.includes('/snapshots/')) objects.set(source, Buffer.from('rewrite staging'));
+      },
+      getStream: async (key: string) => ({ stream: Readable.from([objects.get(key)!]) }),
+      delete: async (key: string) => { objects.delete(key); },
+    };
+    const storage = new SiteStorage(settings as unknown as SiteSettingsStore);
+    vi.spyOn(storage, 'client').mockReturnValue(client as never);
+    await storage.verifyAndSeal('folio', 'session', { hash, size: bytes.length });
+    expect(objects.get('sites/folio/blobs/' + hash)).toEqual(bytes);
+    expect(copied[1].source).toBe(copied[0].destination);
+    expect(copied.every((c) => c.headers['x-oss-forbid-overwrite'] === 'true')).toBe(true);
+    expect([...objects.keys()].some((key) => key.includes('/snapshots/'))).toBe(false);
+    // Concurrent sealing accepts only an existing object that really hashes correctly.
+    objects.set('sites/folio/staging/session/' + hash, bytes);
+    await storage.verifyAndSeal('folio', 'session', { hash, size: bytes.length });
+    objects.set('sites/folio/blobs/' + hash, Buffer.from('corruption'));
+    objects.set('sites/folio/staging/session/' + hash, bytes);
+    await expect(storage.verifyAndSeal('folio', 'session', { hash, size: bytes.length })).rejects.toThrow('大小');
+  });
+  it('签名仅限 staging，SDK 故障不向错误或日志传播 URL/密钥', async () => {
+    const client = { signatureUrlV4: vi.fn().mockResolvedValue('https://oss.test/signed'),
+      head: vi.fn().mockRejectedValue(new Error('https://oss.test/?secret=credential')) };
+    const storage = new SiteStorage(settings as unknown as SiteSettingsStore);
+    vi.spyOn(storage, 'client').mockReturnValue(client as never);
+    expect(await storage.signUpload('folio', 'session', 'a'.repeat(64), 600)).toEqual({ url: 'https://oss.test/signed', headers: { 'Content-Type': 'application/octet-stream' } });
+    expect(client.signatureUrlV4).toHaveBeenCalledWith('PUT', 600,
+      { headers: { 'Content-Type': 'application/octet-stream' } }, 'sites/folio/staging/session/' + 'a'.repeat(64));
+    await expect(storage.hasBlob('folio', 'a'.repeat(64), 1)).rejects.toThrow('OSS 操作失败');
+    await expect(storage.hasBlob('folio', 'a'.repeat(64), 1)).rejects.not.toThrow('credential');
+  });
+});

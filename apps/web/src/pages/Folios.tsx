@@ -5,8 +5,9 @@ import { unzipSync } from 'fflate';
 import {
   SITE_MAX_BYTES,
   SITE_MAX_FILES,
-  siteFileSchema,
-  type SiteFile,
+  sitePathSchema, siteContentType, uploadFolioFiles,
+  type FolioUploadFile,
+
   type SiteInfo,
   type SiteVersion,
 } from '@eat/shared';
@@ -49,35 +50,35 @@ const modes = folioAccessModes;
 
 export { FoliosPage } from './folios/FolioLibrary';
 
-function base64(content: Uint8Array) {
-  let out = '';
-  for (let i = 0; i < content.length; i += 8192) out += String.fromCharCode(...content.subarray(i, i + 8192));
-  return btoa(out);
-}
-async function uploadFiles(selection: FileList): Promise<SiteFile[]> {
-  const files: SiteFile[] = [];
+async function uploadFiles(selection: FileList): Promise<FolioUploadFile[]> {
+  const files: FolioUploadFile[] = [];
   let total = 0;
-  const add = (path: string, bytes: Uint8Array) => {
+  const add = async (path: string, bytes: Uint8Array) => {
     total += bytes.length;
     if (total > SITE_MAX_BYTES || files.length >= SITE_MAX_FILES)
       throw new Error('每次发布最多 2000 个文件、50 MiB');
-    files.push(siteFileSchema.parse({ path, content: base64(bytes), encoding: 'base64' }));
+    sitePathSchema.parse(path);
+    const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as Uint8Array<ArrayBuffer>)), (n) => n.toString(16).padStart(2, '0')).join('');
+    files.push({ path, bytes, hash, size: bytes.length, type: siteContentType(path) });
   };
   if (selection.length === 1 && selection[0].name.toLowerCase().endsWith('.zip')) {
     if (selection[0].size > SITE_MAX_BYTES) throw new Error('ZIP 文件最多 50 MiB');
     let declared = 0,
       count = 0;
+    const seen = new Set<string>();
     const entries = unzipSync(new Uint8Array(await selection[0].arrayBuffer()), {
       filter: (f) => {
         if (f.name.endsWith('/')) return false;
         declared += f.originalSize;
         count++;
         if (declared > SITE_MAX_BYTES || count > SITE_MAX_FILES) throw new Error('ZIP 解压内容超过发布限制');
-        siteFileSchema.shape.path.parse(f.name);
+        sitePathSchema.parse(f.name);
+        if (seen.has(f.name)) throw new Error('ZIP 中存在重复路径');
+        seen.add(f.name);
         return true;
       },
     });
-    for (const [path, bytes] of Object.entries(entries)) add(path, bytes);
+    for (const [path, bytes] of Object.entries(entries)) await add(path, bytes);
   } else {
     for (const f of Array.from(selection)) {
       const path = f.webkitRelativePath ? f.webkitRelativePath.split('/').slice(1).join('/') : f.name;
@@ -88,7 +89,7 @@ async function uploadFiles(selection: FileList): Promise<SiteFile[]> {
       )
         continue;
       if (total + f.size > SITE_MAX_BYTES) throw new Error('每次发布最多 50 MiB');
-      add(path, new Uint8Array(await f.arrayBuffer()));
+      await add(path, new Uint8Array(await f.arrayBuffer()));
     }
   }
   if (!files.some((f) => f.path === 'index.html')) throw new Error('目录或 ZIP 根目录必须包含 index.html');
@@ -102,6 +103,10 @@ export function FolioDetailPage() {
   const [proof, setProof] = useState('');
   const [publishing, setPublishing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState('');
+  const [uploadError, setUploadError] = useState('');
+  const [hasPendingUpload, setHasPendingUpload] = useState(false);
+  const retryFiles = useRef<FolioUploadFile[] | null>(null);
   const [restoring, setRestoring] = useState(false);
   const [restore, setRestore] = useState<SiteVersion | null>(null);
   const [commentVersion, setCommentVersion] = useState<SiteVersion | null>(null);
@@ -139,24 +144,51 @@ export function FolioDetailPage() {
   useEffect(() => {
     setProof('');
     setCommentVersion(null);
+    retryFiles.current = null;
+    setHasPendingUpload(!!localStorage.getItem('eat.folio-upload:' + slug));
+    setUploadProgress('');
+    setUploadError('');
   }, [slug]);
   const refresh = () => {
     void cache.invalidateQueries({ queryKey: ['site', slug] });
     void cache.invalidateQueries({ queryKey: ['site-versions', slug] });
     void cache.invalidateQueries({ queryKey: ['sites'] });
   };
+  async function publishFiles(files: FolioUploadFile[]) {
+    const key = 'eat.folio-upload:' + slug;
+    const raw = localStorage.getItem(key);
+    const saved: { requestId: string; sessionId?: string } = raw ? JSON.parse(raw) : { requestId: crypto.randomUUID() };
+    localStorage.setItem(key, JSON.stringify(saved));
+    setHasPendingUpload(true);
+    await uploadFolioFiles(api, slug, files, {
+      ...saved,
+      onSession: (id) => { saved.sessionId = id; localStorage.setItem(key, JSON.stringify(saved)); },
+      onProgress: setUploadProgress,
+    });
+    localStorage.removeItem(key);
+    retryFiles.current = null;
+    setHasPendingUpload(false);
+    refresh();
+    setPublishing(false);
+    toast.success('Folio 已发布，访问链接保持不变');
+  }
+  async function retryUpload() {
+    if (!retryFiles.current || busy) return;
+    setBusy(true); setUploadError('');
+    try { await publishFiles(retryFiles.current); }
+    catch (e) { setUploadError((e as Error).message); }
+    finally { setBusy(false); }
+  }
   async function upload(e: ChangeEvent<HTMLInputElement>) {
     const input = e.currentTarget;
     const files = input.files;
     if (!files?.length || busy) return;
-    setBusy(true);
+    setBusy(true); setUploadError(''); setUploadProgress('正在扫描并计算文件 SHA-256…');
     try {
-      const payload = await uploadFiles(files);
-      await api<SiteVersion>('POST', '/api/sites/' + slug + '/releases', { files: payload, message: '' });
-      refresh();
-      setPublishing(false);
-      toast.success('Folio 已发布，访问链接保持不变');
+      retryFiles.current = await uploadFiles(files);
+      await publishFiles(retryFiles.current);
     } catch (e) {
+      setUploadError((e as Error).message);
       toast.error((e as Error).message);
     } finally {
       setBusy(false);
@@ -443,9 +475,20 @@ export function FolioDetailPage() {
               根目录需包含 index.html，最多 2000 个文件、50
               MiB。仅托管静态网站，不执行构建或服务端代码。发布成功后历史内容和评论会保留。
             </p>
+            {hasPendingUpload && !busy && (
+              <p className="text-sm">存在未完成的发布。可重新选择相同目录或 ZIP 恢复；关闭浏览器后需重新选择本地文件。</p>
+            )}
+            {uploadError && <p role="alert" className="text-sm text-destructive">{uploadError}</p>}
+            {!busy && hasPendingUpload && <div className="flex gap-2">
+              {retryFiles.current && <Button onClick={() => void retryUpload()}>重试发布</Button>}
+              <Button variant="outline" onClick={() => {
+                localStorage.removeItem('eat.folio-upload:' + slug);
+                retryFiles.current = null; setHasPendingUpload(false); setUploadError(''); setUploadProgress('');
+              }}>开始新的发布</Button>
+            </div>}
             {busy && (
               <p role="status" className="text-sm">
-                正在上传并发布，请稍候…
+                {uploadProgress || '正在准备发布…'}
               </p>
             )}
           </div>

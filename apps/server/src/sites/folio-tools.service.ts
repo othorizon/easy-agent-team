@@ -4,6 +4,7 @@ import {
   createSiteThreadSchema,
   isFolioTool,
   publishSiteSchema,
+  prepareSiteUploadSchema,
   FOLIO_TOOL_SPECS,
   siteCommentBodySchema,
   siteThreadQuerySchema,
@@ -38,6 +39,14 @@ export class FolioToolsService {
           return this.sites.remove(user, slug);
         case 'publish_folio':
           return this.sites.publish(user, slug, publishSiteSchema.parse(body));
+        case 'prepare_folio_upload':
+          return this.sites.prepareUpload(user, slug, prepareSiteUploadSchema.parse(body));
+        case 'get_folio_upload':
+          return this.sites.getUpload(user, slug, body.uploadId as string);
+        case 'renew_folio_upload':
+          return this.sites.getUpload(user, slug, body.uploadId as string, true);
+        case 'complete_folio_upload':
+          return this.sites.completeUpload(user, slug, body.uploadId as string);
         case 'list_folio_versions':
           return this.sites.versions(user, slug, proof);
         case 'activate_folio_version':

@@ -84,3 +84,5 @@ node scripts/demo/seed-demo.mjs  # 演示数据（截图 / 录屏用，见 scrip
 页面控制台启用（决策 69）：配置存 `site_setting`，不再读取 `EAT_SITES_*`。默认关闭，系统设置支持 AliDNS / Cloudflare、已有 Dokploy 证书或 DNS resolver；EAT 通过 Dokploy Traefik 文件 API 写专用共享路由，OSS/DNS 实测与 HTTPS 精确探针全部通过后才置 enabled。失败回滚路由，停用保留历史；PostgreSQL 会话 advisory lock 保护多实例启停，中断标 failed。旧本地历史固定读取 ./data/static-sites，新发布仅 OSS。测试用 TestSiteStorage 替代本地存储，不恢复 env 后门。CLI 0.6.1 / 指南 26。详见 docs/folios.md。
 
 Folio 命名（决策 70）：原「页面」功能统一为 Folio，CLI 使用 `eat folio`（不保留 `eat site` 别名），14 个 MCP 工具及资源参数改为 folio。控制台入口 `/folios`，嵌入评论 `/folio-comments/:slug`，相关登录与通知链接同步更新。数据库、OSS 键、REST `/api/sites` 与访问凭据协议保持原有标识，避免影响存量发布。CLI 0.7.0，指南 29；详见 `docs/folios.md`。
+
+Folio 增量上传（决策 72）：CLI/Web 共用清单→OSS V4 二进制 PUT→私有快照流式 SHA-256 验证→禁止覆盖封存→事务发布。每版完整清单、Folio 内 blob 共享；site_upload 持久化会话/租约/完成结果，删除通过 site_cleanup 持续清扫独立 UUID 前缀。新增内容验证读取仍经过 EAT 一次。CLI 0.8.0 / 指南 34；迁移 0018，协议、CORS、恢复、清理及真实 OSS 联调步骤见 docs/folio-uploads.md。本次不执行生产迁移/部署/数据清理。

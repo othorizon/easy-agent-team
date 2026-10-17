@@ -5,6 +5,7 @@ import {
   createSiteSchema,
   createSiteThreadSchema,
   publishSiteSchema,
+  prepareSiteUploadSchema,
   siteCommentBodySchema,
   siteThreadQuerySchema,
   updateSiteSchema,
@@ -35,6 +36,22 @@ export const FOLIO_TOOL_SPECS = {
     description:
       '仅发布已构建的静态网站（HTML/CSS/JS/图片，可含 SPA），创建不可变版本，无需审批。不执行依赖安装、构建、后端代码或 SSR；需要服务端运行的项目请走应用部署。files 为相对路径及 utf8/base64 内容，根目录必须有 index.html，总量最多 50 MiB；较大目录建议用 eat folio push。保存发布产物，不等于保存源工程。',
     schema: z.object({ ...folioArg, ...publishSiteSchema.shape }),
+  },
+  prepare_folio_upload: {
+    description: '提交完整目标清单（path、SHA-256、size、响应 MIME）和唯一 requestId，返回持久化上传会话及缺失内容的短期 OSS PUT 签名。相同内容只上传一次。将原始二进制传到签名 URL，仅带返回的 headers，绝不能带 EAT Authorization 或 Cookie。远程工具不能读取用户本地目录；本地目录/ZIP 请用 eat folio push。',
+    schema: z.object({ ...folioArg, ...prepareSiteUploadSchema.shape }),
+  },
+  get_folio_upload: {
+    description: '查询上传会话的完整清单、缺失内容、验证状态和已提交结果，可在中断或重启后恢复。',
+    schema: z.object({ ...folioArg, uploadId: z.string().uuid() }),
+  },
+  renew_folio_upload: {
+    description: '为未过期会话的缺失内容续签短期 OSS PUT URL。仅会话创建者且仍有管理权限时可操作。',
+    schema: z.object({ ...folioArg, uploadId: z.string().uuid() }),
+  },
+  complete_folio_upload: {
+    description: '完成上传：服务端快照、流式核验真实 SHA-256 和大小、不可变封存后原子发布。幂等重试返回同一版本，UPLOAD_BUSY 时查询进度再重试；未改变内容也会生成完整新版本。',
+    schema: z.object({ ...folioArg, uploadId: z.string().uuid() }),
   },
   list_folio_versions: {
     description: '查看 Folio 全部历史发布版本及各版本固定访问地址。',
@@ -122,6 +139,14 @@ export function folioToolRequest(name: FolioToolName, input: unknown) {
       path += '/releases';
       payload = publishSiteSchema.parse(body);
       break;
+    case 'prepare_folio_upload':
+      method = 'POST'; path += '/uploads'; payload = prepareSiteUploadSchema.parse(body); break;
+    case 'get_folio_upload':
+      path += `/uploads/${body.uploadId}`; break;
+    case 'renew_folio_upload':
+      method = 'POST'; path += `/uploads/${body.uploadId}/renew`; payload = {}; break;
+    case 'complete_folio_upload':
+      method = 'POST'; path += `/uploads/${body.uploadId}/complete`; payload = {}; break;
     case 'list_folio_versions':
       path += '/versions';
       break;

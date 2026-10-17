@@ -15,6 +15,7 @@ const versions = [1, 2].map((number) => ({
   id: versionId(number),
   number,
   storage: 'oss',
+  layout: 'legacy-v0',
   manifest: {
     'index.html': { type: 'text/html; charset=utf-8' },
     'app.js': { type: 'text/javascript; charset=utf-8' },

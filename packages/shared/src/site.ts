@@ -39,13 +39,71 @@ export const updateSiteSchema = z.object({
 });
 export const siteFileSchema = z.object({
   path: sitePathSchema,
-  content: z.string().max(Math.ceil((SITE_MAX_BYTES * 4) / 3)),
+  content: z.string().max(4 * Math.ceil(SITE_MAX_BYTES / 3)),
   encoding: z.enum(['utf8', 'base64']).default('utf8'),
 });
 export const publishSiteSchema = z.object({
   files: z.array(siteFileSchema).min(1).max(SITE_MAX_FILES),
   message: z.string().max(1000).default(''),
 });
+/** A complete logical release; hashes are scoped to a single Folio. */
+export const siteManifestFileSchema = z.object({
+  path: sitePathSchema,
+  hash: z.string().regex(/^[a-f0-9]{64}$/, '需要小写 SHA-256'),
+  size: z.number().int().min(0).max(SITE_MAX_BYTES),
+  type: z.string().min(1).max(200).regex(/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+(?:;[ \x21-\x7e]*)?$/, '响应类型无效'),
+});
+export const prepareSiteUploadSchema = z.object({
+  requestId: z.string().uuid(),
+  files: z.array(siteManifestFileSchema).min(1).max(SITE_MAX_FILES),
+  message: z.string().max(1000).default(''),
+}).superRefine((value, ctx) => {
+  const paths = new Set<string>();
+  const sizes = new Map<string, number>();
+  let total = 0;
+  for (const f of value.files) {
+    if (paths.has(f.path)) ctx.addIssue({ code: 'custom', message: `重复文件路径：${f.path}` });
+    paths.add(f.path);
+    if (sizes.has(f.hash) && sizes.get(f.hash) !== f.size)
+      ctx.addIssue({ code: 'custom', message: '相同哈希的大小必须一致' });
+    sizes.set(f.hash, f.size);
+    total += f.size;
+  }
+  if (total > SITE_MAX_BYTES) ctx.addIssue({ code: 'custom', message: '整版内容不得超过 50 MiB' });
+  if (!paths.has('index.html')) ctx.addIssue({ code: 'custom', message: '根目录必须包含 index.html' });
+  for (const path of paths) {
+    const parts = path.split('/');
+    while (parts.length > 1) {
+      parts.pop();
+      if (paths.has(parts.join('/'))) ctx.addIssue({ code: 'custom', message: '文件与目录路径冲突' });
+    }
+  }
+});
+export type SiteManifestFile = z.infer<typeof siteManifestFileSchema>;
+export type PrepareSiteUpload = z.infer<typeof prepareSiteUploadSchema>;
+export type SiteManifest = Record<string, { hash: string; size: number; type: string }>;
+export interface SiteUploadStatus {
+  id: string;
+  state: 'uploading' | 'verifying' | 'completed' | 'expired';
+  expiresAt: string;
+  files: SiteManifestFile[];
+  missing: { hash: string; size: number }[];
+  uploads: { hash: string; size: number; url: string; headers: Record<string, string>; expiresAt: string }[];
+  result: SiteVersion | null;
+}
+const SITE_MIME: Record<string, string> = {
+  html: 'text/html; charset=utf-8', htm: 'text/html; charset=utf-8', css: 'text/css; charset=utf-8',
+  js: 'text/javascript; charset=utf-8', mjs: 'text/javascript; charset=utf-8', json: 'application/json',
+  svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+  webp: 'image/webp', avif: 'image/avif', ico: 'image/x-icon', txt: 'text/plain; charset=utf-8',
+  xml: 'application/xml', pdf: 'application/pdf', wasm: 'application/wasm', woff: 'font/woff',
+  woff2: 'font/woff2', ttf: 'font/ttf', mp4: 'video/mp4', webm: 'video/webm', mp3: 'audio/mpeg',
+  map: 'application/json', webmanifest: 'application/manifest+json',
+};
+export function siteContentType(path: string) {
+  return SITE_MIME[path.split('.').pop()!.toLowerCase()] ?? 'application/octet-stream';
+}
+
 export const siteAnchorSchema = z
   .object({
     type: z.enum(['page', 'element', 'region']).default('page'),

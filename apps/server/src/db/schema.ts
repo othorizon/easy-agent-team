@@ -83,9 +83,39 @@ export const siteVersions = pgTable('site_version', {
   totalBytes: integer('total_bytes').notNull(),
   /** 存储位置固化在版本上，切换存储配置不改变旧版本的查找方式。 */
   storage: text('storage', { enum: ['local', 'oss'] }).notNull(),
-  manifest: jsonb('manifest').$type<Record<string, { size: number; type: string }>>().notNull(),
+  layout: text('layout', { enum: ['legacy-v0', 'blobs-v1'] }).notNull().default('legacy-v0'),
+  manifest: jsonb('manifest').$type<Record<string, { hash?: string; size: number; type: string }>>().notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [uniqueIndex('site_version_number_idx').on(t.siteId, t.number)]);
+
+/** Durable direct-upload sessions. Completed results survive response loss and restart. */
+export const siteUploads = pgTable('site_upload', {
+  id: uuid('id').primaryKey(),
+  siteId: uuid('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
+  publisherId: uuid('publisher_id').notNull().references(() => users.id),
+  requestId: uuid('request_id').notNull(),
+  files: jsonb('files').$type<import('@eat/shared').SiteManifestFile[]>().notNull(),
+  message: text('message').notNull(),
+  state: text('state', { enum: ['uploading', 'verifying', 'completed'] }).notNull().default('uploading'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  signedUntil: timestamp('signed_until', { withTimezone: true }),
+  lease: uuid('lease'),
+  leaseUntil: timestamp('lease_until', { withTimezone: true }),
+  result: jsonb('result').$type<import('@eat/shared').SiteVersion>(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('site_upload_request_idx').on(t.siteId, t.requestId), index('site_upload_expiry_idx').on(t.expiresAt)]);
+export const siteBlobs = pgTable('site_blob', {
+  siteId: uuid('site_id').notNull().references(() => sites.id, { onDelete: 'cascade' }),
+  hash: text('hash').notNull(),
+  size: integer('size').notNull(),
+  verifiedAt: timestamp('verified_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('site_blob_hash_idx').on(t.siteId, t.hash)]);
+/** Tombstone kept independently of site FK: late PUTs and in-flight sealing need another prefix sweep. */
+export const siteCleanups = pgTable('site_cleanup', {
+  siteId: uuid('site_id').primaryKey(),
+  notBefore: timestamp('not_before', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 /** 一次性登录兑换码与受限会话，始终绑定站点、域名和原始平台 Token。 */
 export const siteSessions = pgTable('site_session', {

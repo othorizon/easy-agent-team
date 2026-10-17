@@ -19,3 +19,4 @@ export * from './time.js';
 export * from './site.js';
 export * from './folio-tools.js';
 export * from './site-settings.js';
+export * from './site-upload.js';

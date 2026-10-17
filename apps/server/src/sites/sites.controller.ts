@@ -16,6 +16,7 @@ import {
   createSiteSchema,
   createSiteThreadSchema,
   publishSiteSchema,
+  prepareSiteUploadSchema, type PrepareSiteUpload,
   siteCommentBodySchema,
   siteThreadQuerySchema,
   updateSiteSchema,
@@ -106,6 +107,27 @@ export class SitesController {
     if (query.origin && query.origin !== siteOrigin && query.origin !== versionOrigin)
       throw new BadRequestException('页面来源不合法');
     return { origin: query.origin ?? versionOrigin };
+  }
+  @Post(':slug/uploads')
+  @RouteConfig({ eatSiteManifest: true })
+  prepareUpload(@CurrentUser() user: AuthUser, @Param('slug') slug: string,
+    @Body(new ZodValidationPipe(prepareSiteUploadSchema)) body: PrepareSiteUpload) {
+    return this.sites.prepareUpload(user, slug, body);
+  }
+  @Get(':slug/uploads/:id')
+  uploadStatus(@CurrentUser() user: AuthUser, @Param('slug') slug: string,
+    @Param('id', new ZodValidationPipe(z.string().uuid())) id: string) {
+    return this.sites.getUpload(user, slug, id);
+  }
+  @Post(':slug/uploads/:id/renew')
+  renewUpload(@CurrentUser() user: AuthUser, @Param('slug') slug: string,
+    @Param('id', new ZodValidationPipe(z.string().uuid())) id: string) {
+    return this.sites.getUpload(user, slug, id, true);
+  }
+  @Post(':slug/uploads/:id/complete')
+  completeUpload(@CurrentUser() user: AuthUser, @Param('slug') slug: string,
+    @Param('id', new ZodValidationPipe(z.string().uuid())) id: string) {
+    return this.sites.completeUpload(user, slug, id);
   }
   @Post(':slug/releases')
   @RouteConfig({ eatSiteUpload: true })

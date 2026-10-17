@@ -259,14 +259,17 @@ describe('CLI 自托管分发', () => {
     expect(r.body.trimEnd().endsWith('Install-EatCli')).toBe(true);
   });
 
-  it('AGENT.md 免鉴权：只含 CLI 安装流程，不提及 MCP（决策 20）', async () => {
+  it('AGENT.md 免鉴权：CLI 安装流程不混入 MCP 接入配置（决策 20）', async () => {
     const r = await api('GET', '/install/AGENT.md');
     expect(r.status).toBe(200);
     expect(String(r.headers['content-type'])).toContain('markdown');
     expect(r.body).toContain('curl -fsSL');
     expect(r.body).toContain('eat login --server');
     expect(r.body).toContain('eat sync');
-    expect(String(r.body).toLowerCase()).not.toContain('mcp');
+    // 决策 71 允许说明 eat sync 同步 MCP；接入配置仍只出现在独立 MCP.md。
+    expect(String(r.body).toLowerCase()).not.toContain('eat mcp');
+    expect(String(r.body).toLowerCase()).not.toContain('claude mcp add');
+    expect(r.body).not.toContain('/install/MCP.md');
     // 决策 24：两套命令都给出，并要求 Agent 先判断平台
     expect(r.body).toContain('/install.sh | sh');
     expect(r.body).toContain('/install.ps1 | iex');

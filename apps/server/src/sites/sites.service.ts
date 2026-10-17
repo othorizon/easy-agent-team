@@ -12,10 +12,11 @@ import {
 } from '@nestjs/common';
 import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import * as bcrypt from 'bcryptjs';
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { extname } from 'node:path';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
   SITE_MAX_BYTES,
+  prepareSiteUploadSchema, siteContentType,
+  type PrepareSiteUpload, type SiteManifestFile, type SiteUploadStatus,
   type CreateSite,
   type PublishSite,
   type SiteInfo,
@@ -24,7 +25,7 @@ import {
 } from '@eat/shared';
 import type { AuthUser } from '../auth/auth.decorators';
 import { DB, type Db } from '../db/db.module';
-import { apiTokens, auditLogs, sites, siteVersions, siteSessions, siteThreads, users, siteSettings } from '../db/schema';
+import { apiTokens, auditLogs, sites, siteVersions, siteSessions, siteThreads, users, siteSettings, siteUploads, siteBlobs, siteCleanups } from '../db/schema';
 import { sha256Hex } from '../common/crypto';
 import { loadConfig } from '../config';
 import { AuditService } from '../audit/audit.service';
@@ -32,35 +33,6 @@ import { parseSiteHost, SiteRuntime } from './site-config';
 import { SiteStorage } from './site-storage.service';
 
 export type SiteRow = typeof sites.$inferSelect;
-const MIME: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.htm': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.json': 'application/json',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.avif': 'image/avif',
-  '.ico': 'image/x-icon',
-  '.txt': 'text/plain; charset=utf-8',
-  '.xml': 'application/xml',
-  '.pdf': 'application/pdf',
-  '.wasm': 'application/wasm',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-  '.ttf': 'font/ttf',
-  '.mp4': 'video/mp4',
-  '.webm': 'video/webm',
-  '.mp3': 'audio/mpeg',
-  '.map': 'application/json',
-  '.webmanifest': 'application/manifest+json',
-};
-
 @Injectable()
 export class SitesService {
   private readonly logger = new Logger(SitesService.name);
@@ -166,46 +138,47 @@ export class SitesService {
   async remove(user: AuthUser, slug: string) {
     const site = await this.get(slug);
     this.manage(site, user);
-    const versions = await this.db.transaction(async (tx) => {
-      // 与发布共用行锁，确保已提交的全部版本都包含在清理范围内。
+    const pending = await this.db.transaction(async (tx) => {
       const [locked] = await tx.select().from(sites).where(eq(sites.id, site.id)).for('update');
       if (!locked) throw new NotFoundException('Folio 不存在');
       this.manage(locked, user);
-      const snapshots = await tx.select().from(siteVersions).where(eq(siteVersions.siteId, site.id));
-      // 评论引用版本，必须先删讨论（级联评论），再级联删除版本和会话。
+      const uploads = await tx.select().from(siteUploads).where(eq(siteUploads.siteId, site.id)).for('update');
+      const [{ count }] = await tx.select({ count: sql<number>`count(*)::int` }).from(siteVersions).where(eq(siteVersions.siteId, site.id));
+      const until = Math.max(Date.now(), ...uploads.flatMap((u) => [u.signedUntil?.getTime() ?? 0, u.leaseUntil?.getTime() ?? 0]));
+      await tx.insert(siteCleanups).values({ siteId: site.id, notBefore: new Date(until + 60_000) });
       await tx.delete(siteThreads).where(eq(siteThreads.siteId, site.id));
       await tx.delete(sites).where(eq(sites.id, site.id));
-      await tx.insert(auditLogs).values({
-        actorId: user.id,
-        action: 'site.deleted',
-        targetType: 'site',
-        targetId: site.id,
-        meta: { slug, versionCount: snapshots.length },
-      });
-      return snapshots;
+      await tx.insert(auditLogs).values({ actorId: user.id, action: 'site.deleted', targetType: 'site', targetId: site.id,
+        meta: { slug, versionCount: count } });
+      return until > Date.now();
     });
-    // 先撤销所有访问，再清理私有文件；存储故障不能让已删除的 Folio 重新可见。
-    const failedVersions: string[] = [];
-    for (const version of versions) {
-      try {
-        await this.storage.discard(version.storage, site.id, version.id, Object.keys(version.manifest));
-      } catch {
-        failedVersions.push(version.id);
-        this.logger.warn(`Folio 文件清理失败：site=${site.id} version=${version.id}`);
-      }
+    let cleanupFailed = false;
+    try { await this.storage.discardSite(site.id); }
+    catch {
+      cleanupFailed = true;
+      await this.audit.record({ actorId: user.id, action: 'site.storage_cleanup_failed', targetType: 'site', targetId: site.id,
+        meta: { slug } }).catch(() => undefined);
+      this.logger.warn(`Folio 文件清理失败：site=${site.id}`);
     }
-    if (failedVersions.length) {
-      await this.audit
-        .record({
-          actorId: user.id,
-          action: 'site.storage_cleanup_failed',
-          targetType: 'site',
-          targetId: site.id,
-          meta: { slug, versionIds: failedVersions },
-        })
-        .catch(() => this.logger.warn(`Folio 文件清理失败审计未写入：site=${site.id}`));
+    return { ok: true, cleanupFailed, ...(pending ? { cleanupPending: true } : {}) };
+  }
+  private cleanupTimer?: ReturnType<typeof setInterval>;
+  onModuleInit() {
+    this.cleanupTimer = setInterval(() => void this.cleanupDeletedSites().catch(() => undefined), 60_000);
+    this.cleanupTimer.unref();
+    void this.cleanupDeletedSites().catch(() => undefined);
+  }
+  onModuleDestroy() { if (this.cleanupTimer) clearInterval(this.cleanupTimer); }
+  async cleanupDeletedSites() {
+    const rows = await this.db.select().from(siteCleanups).where(sql`${siteCleanups.notBefore} <= now()`).limit(50);
+    for (const row of rows) {
+      let delay = 3600_000;
+      try { await this.storage.discardSite(row.siteId); }
+      catch { delay = 300_000; this.logger.warn(`Folio 残留文件清理失败：site=${row.siteId}`); }
+      // Retain tombstones: even an arbitrarily delayed old process's late writes get another sweep.
+      await this.db.update(siteCleanups).set({ notBefore: new Date(Date.now() + delay) })
+        .where(eq(siteCleanups.siteId, row.siteId));
     }
-    return { ok: true, cleanupFailed: failedVersions.length > 0 };
   }
   async versionInfo(site: SiteRow, row: typeof siteVersions.$inferSelect): Promise<SiteVersion> {
     return {
@@ -248,88 +221,157 @@ export class SitesService {
     if (!row) throw new NotFoundException('发布版本不存在');
     return row;
   }
-  async publish(user: AuthUser, slug: string, dto: PublishSite) {
+  private async uploadActor(user: AuthUser, slug: string) {
     const site = await this.get(slug);
     this.manage(site, user);
-    const paths = new Set<string>();
-    let totalBytes = 0;
-    const files = dto.files.map((f) => {
-      if (paths.has(f.path)) throw new BadRequestException(`重复文件路径：${f.path}`);
-      paths.add(f.path);
-      if (
-        f.encoding === 'base64' &&
-        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(f.content)
-      )
-        throw new BadRequestException(`Base64 内容无效：${f.path}`);
-      const content = Buffer.from(f.content, f.encoding === 'base64' ? 'base64' : 'utf8');
-      totalBytes += content.length;
-      if (totalBytes > SITE_MAX_BYTES) throw new BadRequestException('单次发布不得超过 50 MiB');
-      return { path: f.path, content, type: MIME[extname(f.path).toLowerCase()] ?? 'application/octet-stream' };
-    });
-    if (!paths.has('index.html')) throw new BadRequestException('发布目录根目录必须包含 index.html');
-    for (const path of paths) {
-      const parts = path.split('/');
-      while (parts.length > 1) {
-        parts.pop();
-        if (paths.has(parts.join('/'))) throw new BadRequestException('文件与目录路径冲突');
+    return site;
+  }
+  private async uploadRow(user: AuthUser, site: SiteRow, id: string) {
+    const [row] = await this.db.select().from(siteUploads)
+      .where(and(eq(siteUploads.id, id), eq(siteUploads.siteId, site.id))).limit(1);
+    if (!row || row.publisherId !== user.id) throw new NotFoundException('上传会话不存在');
+    return row;
+  }
+  private async missingBlobs(siteId: string, files: SiteManifestFile[]) {
+    const unique = [...new Map(files.map((f) => [f.hash, { hash: f.hash, size: f.size }])).values()];
+    const known = new Map((await this.db.select().from(siteBlobs)
+      .where(and(eq(siteBlobs.siteId, siteId), inArray(siteBlobs.hash, unique.map((f) => f.hash)))))
+      .map((b) => [b.hash, b.size]));
+    const missing: typeof unique = [];
+    let cursor = 0;
+    await Promise.all(Array.from({ length: Math.min(8, unique.length) }, async () => {
+      while (cursor < unique.length) {
+        const file = unique[cursor++];
+        if (known.get(file.hash) !== file.size || !(await this.storage.hasBlob(siteId, file.hash, file.size)))
+          missing.push(file);
       }
+    }));
+    return missing.sort((a, b) => a.hash.localeCompare(b.hash));
+  }
+  private async uploadStatus(site: SiteRow, row: typeof siteUploads.$inferSelect, sign: boolean): Promise<SiteUploadStatus> {
+    const expired = row.expiresAt.getTime() <= Date.now();
+    const missing = row.state === 'completed' ? [] : await this.missingBlobs(site.id, row.files);
+    const uploads: SiteUploadStatus['uploads'] = [];
+    if (sign && missing.length > 0 && !expired && row.state !== 'completed') {
+      const seconds = Math.min(600, Math.floor((row.expiresAt.getTime() - Date.now()) / 1000));
+      if (seconds < 1) throw new BadRequestException('上传会话已过期，请重新准备发布');
+      // Persist BEFORE issuing any URL. Deletion must account for every possibly outstanding signature.
+      const expiresAt = new Date(Date.now() + seconds * 1000);
+      const [live] = await this.db.update(siteUploads).set({ signedUntil: expiresAt })
+        .where(eq(siteUploads.id, row.id)).returning({ id: siteUploads.id });
+      if (!live) throw new NotFoundException('Folio 已删除');
+      for (const file of missing) uploads.push({ ...file, ...(await this.storage.signUpload(site.id, row.id, file.hash, seconds)),
+        expiresAt: expiresAt.toISOString() });
     }
-    const id = randomUUID();
-    const storage = this.storage.kind();
+    return { id: row.id, state: row.state === 'completed' ? 'completed' : expired ? 'expired' : row.state,
+      expiresAt: row.expiresAt.toISOString(), files: row.files, missing, uploads, result: row.result };
+  }
+  async prepareUpload(user: AuthUser, slug: string, input: PrepareSiteUpload, sign = true) {
+    const parsed = prepareSiteUploadSchema.safeParse(input);
+    if (!parsed.success) throw new BadRequestException({ error: 'VALIDATION_FAILED', message: '发布清单不合法', details: parsed.error.issues });
+    const dto = parsed.data;
+    dto.files.sort((a, b) => a.path.localeCompare(b.path));
+    const site = await this.uploadActor(user, slug);
+    await this.db.insert(siteUploads).values({ id: randomUUID(), siteId: site.id, publisherId: user.id,
+      requestId: dto.requestId, files: dto.files, message: dto.message, expiresAt: new Date(Date.now() + 24 * 3600_000) })
+      .onConflictDoNothing({ target: [siteUploads.siteId, siteUploads.requestId] });
+    const [row] = await this.db.select().from(siteUploads)
+      .where(and(eq(siteUploads.siteId, site.id), eq(siteUploads.requestId, dto.requestId)));
+    if (!row || row.publisherId !== user.id || JSON.stringify(row.files.map((f) => [f.path, f.hash, f.size, f.type])) !== JSON.stringify(dto.files.map((f) => [f.path, f.hash, f.size, f.type])) || row.message !== dto.message)
+      throw new ConflictException('requestId 已用于不同发布，请使用新的 requestId');
+    return this.uploadStatus(site, row, sign);
+  }
+  async getUpload(user: AuthUser, slug: string, id: string, renew = false) {
+    const site = await this.uploadActor(user, slug);
+    const row = await this.uploadRow(user, site, id);
+    return this.uploadStatus(site, row, renew);
+  }
+  async completeUpload(user: AuthUser, slug: string, id: string): Promise<SiteVersion> {
+    const site = await this.uploadActor(user, slug);
+    const existing = await this.uploadRow(user, site, id);
+    if (existing.result) return existing.result;
+    if (existing.expiresAt.getTime() <= Date.now()) throw new BadRequestException('上传会话已过期，请重新准备发布');
+    const lease = randomUUID();
+    const [claimed] = await this.db.update(siteUploads).set({ state: 'verifying', lease, leaseUntil: new Date(Date.now() + 600_000) })
+      .where(and(eq(siteUploads.id, id), sql`${siteUploads.state} <> 'completed'`,
+        or(isNull(siteUploads.leaseUntil), sql`${siteUploads.leaseUntil} < now()`))).returning();
+    if (!claimed) {
+      const row = await this.uploadRow(user, site, id);
+      if (row.result) return row.result;
+      throw new ConflictException({ error: 'UPLOAD_BUSY', message: '上传会话正在验证，请查询状态后重试完成' });
+    }
     try {
-      // 先完整写入不可变快照，再在事务内分配版本号并激活；失败不改变线上版本。
-      for (const f of files) await this.storage.put(site.id, id, f.path, f.content, f.type);
-      const row = await this.db.transaction(async (tx) => {
+      for (const file of await this.missingBlobs(site.id, claimed.files)) {
+        await this.storage.verifyAndSeal(site.id, id, file);
+        // Outside the publication transaction. Orphaned sealed blobs are deliberately retained.
+        await this.db.insert(siteBlobs).values({ siteId: site.id, hash: file.hash, size: file.size })
+          .onConflictDoNothing({ target: [siteBlobs.siteId, siteBlobs.hash] }).catch(async (e) => {
+            const [live] = await this.db.select({ id: sites.id }).from(sites).where(eq(sites.id, site.id));
+            if (!live) throw new NotFoundException('Folio 已删除，本次发布未生效');
+            throw e;
+          });
+        const [alive] = await this.db.update(siteUploads).set({ leaseUntil: new Date(Date.now() + 600_000) })
+          .where(and(eq(siteUploads.id, id), eq(siteUploads.lease, lease))).returning({ id: siteUploads.id });
+        if (!alive) throw new NotFoundException('上传会话已失效');
+      }
+      // All external I/O is finished. Only short DB locks below.
+      return await this.db.transaction(async (tx) => {
         const [capability] = await tx.select().from(siteSettings).where(eq(siteSettings.id, 1)).for('share');
         if (capability?.status !== 'enabled') throw new ServiceUnavailableException('Folio 已停用，本次发布未生效');
         const [locked] = await tx.select().from(sites).where(eq(sites.id, site.id)).for('update');
         if (!locked) throw new NotFoundException('Folio 已删除，本次发布未生效');
-        const [v] = await tx
-          .insert(siteVersions)
-          .values({
-            id,
-            siteId: site.id,
-            number: locked.nextVersion,
-            message: dto.message,
-            publisherId: user.id,
-            fileCount: files.length,
-            totalBytes,
-            storage,
-            manifest: Object.fromEntries(files.map((f) => [f.path, { size: f.content.length, type: f.type }])),
-          })
-          .returning();
-        await tx
-          .update(sites)
-          .set({ currentVersionId: id, nextVersion: locked.nextVersion + 1, updatedAt: new Date() })
+        // Refresh long-running request identity and token; role/ownership can change during OSS I/O.
+        const [actor] = await tx.select({ id: users.id, role: users.role }).from(users)
+          .innerJoin(apiTokens, eq(apiTokens.userId, users.id))
+          .where(and(eq(users.id, user.id), eq(users.status, 'active'), eq(apiTokens.id, user.tokenId),
+            isNull(apiTokens.revokedAt), or(isNull(apiTokens.expiresAt), gt(apiTokens.expiresAt, new Date())))).for('share');
+        if (!actor || (locked.ownerId !== actor.id && actor.role !== 'admin')) throw new ForbiddenException('发布权限已失效');
+        const [session] = await tx.select().from(siteUploads).where(eq(siteUploads.id, id)).for('update');
+        if (session?.result) return session.result;
+        if (!session || session.lease !== lease || session.expiresAt.getTime() <= Date.now())
+          throw new ConflictException('上传会话已失效，请重新查询');
+        const versionId = randomUUID();
+        const [version] = await tx.insert(siteVersions).values({ id: versionId, siteId: site.id,
+          number: locked.nextVersion, publisherId: user.id, message: session.message, storage: 'oss', layout: 'blobs-v1',
+          fileCount: session.files.length, totalBytes: session.files.reduce((sum, f) => sum + f.size, 0),
+          manifest: Object.fromEntries(session.files.map(({ path, ...file }) => [path, file])) }).returning();
+        const result = await this.versionInfo(locked, version);
+        await tx.update(sites).set({ currentVersionId: versionId, nextVersion: locked.nextVersion + 1, updatedAt: new Date() })
           .where(eq(sites.id, site.id));
-        return v;
+        await tx.update(siteUploads).set({ state: 'completed', result, lease: null, leaseUntil: null }).where(eq(siteUploads.id, id));
+        await tx.insert(auditLogs).values({ actorId: user.id, action: 'site.published', targetType: 'site', targetId: site.id,
+          meta: { versionId, number: version.number, totalBytes: version.totalBytes, uploadId: id } });
+        return result;
       });
-      await this.audit.record({
-        actorId: user.id,
-        action: 'site.published',
-        targetType: 'site',
-        targetId: site.id,
-        meta: { versionId: id, number: row.number, totalBytes },
-      });
-      return this.versionInfo(site, row);
     } catch (e) {
-      // DB 成功后的审计异常不能删除已经生效的产物。
-      const [committed] = await this.db
-        .select({ id: siteVersions.id })
-        .from(siteVersions)
-        .where(eq(siteVersions.id, id))
-        .limit(1);
-      if (!committed)
-        await this.storage
-          .discard(
-            storage,
-            site.id,
-            id,
-            files.map((f) => f.path),
-          )
-          .catch(() => this.logger.warn('未完成版本清理失败'));
+      // Fencing prevents an old worker from releasing a newer worker's lease or changing its result.
+      await this.db.update(siteUploads).set({ state: 'uploading', lease: null, leaseUntil: null })
+        .where(and(eq(siteUploads.id, id), eq(siteUploads.lease, lease))).catch(() => undefined);
       throw e;
     }
+  }
+  /** Small MCP inline input adapter. CLI/Web always use binary direct upload. */
+  async publish(user: AuthUser, slug: string, dto: PublishSite) {
+    await this.uploadActor(user, slug);
+    let total = 0;
+    const bytes = dto.files.map((file) => {
+      if (file.encoding === 'base64' && (file.content.length % 4 !== 0 ||
+        /[^A-Za-z0-9+/=]/.test(file.content))) throw new BadRequestException(`Base64 内容无效：${file.path}`);
+      const content = Buffer.from(file.content, file.encoding === 'base64' ? 'base64' : 'utf8');
+      // Linear scan + canonical round-trip: no repeated-group regex and no permissive Buffer decoding.
+      if (file.encoding === 'base64' && content.toString('base64') !== file.content)
+        throw new BadRequestException(`Base64 内容无效：${file.path}`);
+      total += content.length;
+      if (total > SITE_MAX_BYTES) throw new BadRequestException('整版内容不得超过 50 MiB');
+      return { path: file.path, content, hash: createHash('sha256').update(content).digest('hex'), size: content.length,
+        type: siteContentType(file.path) };
+    });
+    const session = await this.prepareUpload(user, slug, { requestId: randomUUID(), message: dto.message,
+      files: bytes.map(({ content: _, ...f }) => f) }, false);
+    const site = await this.get(slug);
+    for (const file of session.missing) await this.storage.putStaging(site.id, session.id, file.hash,
+      bytes.find((f) => f.hash === file.hash)!.content);
+    return this.completeUpload(user, slug, session.id);
   }
   async activate(user: AuthUser, slug: string, id: string) {
     const site = await this.get(slug);

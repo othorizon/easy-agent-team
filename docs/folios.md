@@ -17,7 +17,7 @@ Folio 发布默认关闭。平台管理员进入「系统设置 → Folio 发布
 | 私有 OSS Bucket、地域、AccessKey ID / Secret | 检查 Bucket ACL、实际上传/读回/删除测试对象及删除后不可读取；确认匿名访问被拒绝 |
 | 证书接入方式，见下表 | 配置共享 HTTP → HTTPS 跳转和页面转发，再验证 HTTPS 信任链、主机名、有效期和 EAT 探针 |
 
-OSS 凭证需要目标 Bucket 的 `oss:GetBucketAcl`，以及 `sites/*` 下的 `oss:PutObject`、`oss:GetObject`、`oss:DeleteObject` 权限。Bucket 必须为私有读写，不得通过 Bucket Policy 或 OSS 源站公开文件。EAT 在 `sites/_checks/` 下创建随机临时对象，并在失败时也尝试清理；缺少删除权限会明确阻止启用并提示残留对象路径。
+OSS 凭证需要目标 Bucket 的 `oss:GetBucketAcl`、`oss:ListObjects`，以及 `sites/*` 下的 `oss:PutObject`、`oss:GetObject`、`oss:DeleteObject` 权限。复制使用源对象 GetObject + 目标对象 PutObject 权限。浏览器直传还需按 [上传运维说明](folio-uploads.md) 追加 CORS 规则，不覆盖 Bucket 已有规则。Bucket 必须为私有读写，不得通过 Bucket Policy 或 OSS 源站公开文件。EAT 在 `sites/_checks/` 下创建随机临时对象，并在失败时也尝试清理；缺少删除权限会明确阻止启用并提示残留对象路径。
 
 ### HTTPS 与 DNS
 
@@ -72,7 +72,9 @@ eat folio activate demo <version-id>
 
 所有者和管理员可在 Folio 详情的「设置 → 删除 Folio」确认删除，也可使用 `eat folio delete <folio>`、MCP `delete_folio`（参数 `folio`）或 `DELETE /api/sites/:slug`。删除会永久清除 Folio、全部发布版本、讨论、回复和访问会话，并清理各版本的 OSS 文件或旧本地文件。固定链接、历史版本链接和分享链接立即失效；删除后无法恢复。删除不会影响其他 Folio 或共享 HTTPS / DNS 配置；同一 slug 可重新创建，新 Folio 不接受旧分享凭据。
 
-删除与发布共用行锁；上传途中被删除的 Folio 无法激活新版本，未提交文件会清理。数据库删除与 `site.deleted` 审计在同一事务内完成，之后清理私有文件。若存储清理失败，响应仍为 `{ ok: true, cleanupFailed: true }`，Folio 保持不可访问，控制台提示联系管理员；管理员需按 `site.storage_cleanup_failed` 审计中的 Folio ID 与版本 ID 清理残留文件（OSS 前缀 `sites/<Folio ID>/<版本 ID>/`，旧本地目录 `data/static-sites/sites/<Folio ID>/<版本 ID>/`）。正常响应为 `{ ok: true, cleanupFailed: false }`。
+删除与发布共用短事务站点行锁。先删除访问记录与评论，再清扫整个 `sites/<Folio ID>/` 前缀（旧目录、新 blobs、staging 与 snapshots），并清理旧本地 `data/static-sites/sites/<Folio ID>/`。清理失败返回 `cleanupFailed: true` 并记录 `site.storage_cleanup_failed`（目标为 Folio ID）；数据库中的 `site_cleanup` 保留独立清理记录，后台每分钟检查、失败五分钟后再试，成功后继续每小时清扫，以处理旧签名或延迟完成请求产生的残留。`cleanupPending: true` 表示还有有效签名或验证租约；访问立即失效，资源清理稍后完成。服务停止期间不会清理，重启后继续。
+
+新版本按路径清单读取共享内容，MIME 属于路径；相同内容可同时按 PNG 和文本类型响应。旧版本目录使用显式 `legacy-v0` 标记读取，不做对象搬迁。新旧版本的固定域名、当前指针、回滚及评论版本归属沿用现有规则。升级前可按用户选择清空旧 Folio，详见 [协议、CORS、恢复与历史资源清理](folio-uploads.md)。
 
 ## 访问方式
 
@@ -121,9 +123,21 @@ eat folio delete-comment demo '<评论或回复 ID>'
 
 输入 `@` 可搜索并选择活跃用户。被提及用户配置过个人飞书 webhook（现有「求助」页的个人通知配置）时，复用签名、投递记录与最多五次退避重试。重复用户 ID 在一条评论内去重，自己 @ 自己不推送。通知为事件与讨论链接，不携带评论正文、密码或分享凭据；打开后仍校验 Folio 访问权限。重试沿用现有进程内机制，进程在重试中途重启时不会自动恢复投递。
 
+## 二进制增量发布与恢复
+
+CLI/Web 默认先提交完整清单，再直接将缺失内容的原始二进制 PUT 到 OSS。没有修改的内容无需再次上传；完全相同的清单仍可生成新版本。新清单不含的路径在新版中消失，历史版本保留。ZIP 在客户端解包。CLI 按扫描时取得的字节快照发布，避免扫描和上传读到不同内容；内存按最多 50 MiB 原始内容加 ZIP/哈希等开销使用。
+
+最多 4 个并发上传，失败退避重试。CLI 输出总文件、复用/新增内容数、上传和验证阶段及最终固定版本地址。重复内容数按唯一哈希计算，容量按所有路径的逻辑大小计算。中断后重跑相同命令恢复，或 `eat folio push demo ./dist --resume <上传会话 ID>`；`--fresh` 放弃本地恢复记录，新建会话。记录保存在 `~/.eat/folio-uploads/`，不含令牌和签名 URL。Web 失败可点击“重试发布”；刷新或关闭后重新选择相同目录/ZIP，可恢复同一会话。内容变化时需开始新的发布。
+
+上传会话有效 24 小时，PUT 签名最长十分钟，可续签。验证进程异常退出后，最长等待十分钟租约过期再重试完成。准备、查询、续签、完成均验证身份、管理权限和启用状态。完成结果与版本、当前指针同事务提交，响应丢失后重试返回同一版本。不会因鉴权/网络故障回退 Base64 上传；旧平台没有新端点时提示升级。
+
+新增内容由 EAT 流式读取客户端不可写的快照并核验 SHA-256，然后封存到禁止覆盖的正式对象。**客户端上传绕过 EAT；新增内容的验证读取会经过 EAT 一次**，不是文件字节完全绕过 EAT。详细状态、竞态保护与清理边界见 [上传运维说明](folio-uploads.md)。
+
 ## MCP 与 API
 
-本机 stdio MCP 和平台 HTTP MCP 都提供：`list_folios`、`create_folio`、`update_folio`、`delete_folio`、`publish_folio`、`list_folio_versions`、`activate_folio_version`、`create_folio_share_link`、`unlock_folio`、`list_folio_comments`、`create_folio_comment`、`reply_folio_comment`、`delete_folio_comment`、`set_folio_thread_status`、`list_folio_mention_users`。
+本机 stdio MCP 和平台 HTTP MCP 都提供：`list_folios`、`create_folio`、`update_folio`、`delete_folio`、`publish_folio`、`prepare_folio_upload`、`get_folio_upload`、`renew_folio_upload`、`complete_folio_upload`、`list_folio_versions`、`activate_folio_version`、`create_folio_share_link`、`unlock_folio`、`list_folio_comments`、`create_folio_comment`、`reply_folio_comment`、`delete_folio_comment`、`set_folio_thread_status`、`list_folio_mention_users`。
+
+会话接口为 `POST /api/sites/:slug/uploads`、`GET /api/sites/:slug/uploads/:id`、`POST /api/sites/:slug/uploads/:id/renew`、`POST /api/sites/:slug/uploads/:id/complete`。小型 MCP 内联 utf8/base64 输入仍可调用 `publish_folio`，解码后进入相同封存和发布链路。
 
 主要 REST 入口为 `/api/sites`、`/:slug/releases`、`/:slug/versions`、`/:slug/activate`、`/:slug/access`、`/:slug/share`、`/:slug/threads`、`/:slug/threads/:id/replies`；删除评论使用 `DELETE /api/sites/:slug/comments/:id`。密码访问的 Folio 可先调用 access 端点，再通过 `x-eat-site-access` 携带返回的访问凭据；它不代替发表评论所需的 EAT 身份。按版本筛选讨论使用发起版本，回复保留各自的浏览版本。
 

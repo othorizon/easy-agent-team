@@ -40,7 +40,8 @@ export class SitesModule implements OnModuleInit, NestModule {
   configure() {
     this.adapter.httpAdapter
       .getInstance()
-      .addHook('onRoute', (options: { config?: { eatSiteUpload?: boolean }; bodyLimit?: number }) => {
+      .addHook('onRoute', (options: { config?: { eatSiteUpload?: boolean; eatSiteManifest?: boolean }; bodyLimit?: number }) => {
+        if (options.config?.eatSiteManifest) options.bodyLimit = 8 * 1024 * 1024;
         if (options.config?.eatSiteUpload) options.bodyLimit = 72 * 1024 * 1024;
       });
   }

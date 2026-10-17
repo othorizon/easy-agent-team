@@ -127,6 +127,13 @@
       "when": 1792150398175,
       "tag": "0017_site_comment_deletion",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792215882246,
+      "tag": "0018_folio_blob_uploads",
+      "breakpoints": true
     }
   ]
 }

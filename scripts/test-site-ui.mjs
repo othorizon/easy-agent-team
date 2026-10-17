@@ -3,6 +3,8 @@
  * 使用 API 替身验证交互与请求上下文；不会连接真实页面或写入业务数据。
  */
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile, mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,7 +13,8 @@ import { createServer } from 'node:http';
 import { captureFolioUI } from './folio-ui-evidence.mjs';
 import { captureWebsiteUI } from './folio-website-evidence.mjs';
 
-const platform = process.env.EAT_UI_URL ?? 'http://127.0.0.1:5173';
+const upstreamPlatform = process.env.EAT_UI_URL ?? 'http://127.0.0.1:5173';
+let platform = upstreamPlatform;
 const output = process.env.EAT_UI_SHOTS ?? '/tmp/eat-site-ui';
 // 用真实本地 HTTP 响应保留地址空间分类，避免路由替身被浏览器视为公网源。
 const publishedServer = createServer((_request, response) => {
@@ -20,6 +23,46 @@ const publishedServer = createServer((_request, response) => {
 });
 await new Promise((resolve) => publishedServer.listen(0, '127.0.0.1', resolve));
 const published = 'http://127.0.0.1:' + publishedServer.address().port;
+// Real cross-origin HTTP, actual SDK V4 URL generation, and native browser CORS/preflight.
+// This is an OSS protocol substitute, not validation against Alibaba Cloud.
+const requireServer = createRequire(new URL('../apps/server/package.json', import.meta.url));
+const OSS = requireServer('ali-oss');
+const { zipSync } = createRequire(new URL('../apps/web/package.json', import.meta.url))('fflate');
+const blobs = new Map(), staged = new Map(), uploadSessions = new Map(), signatures = new Set();
+let denyCors = false, corsOptions = 0, binaryPuts = 0;
+const ossServer = createServer(async (request, response) => {
+  if (!denyCors) {
+    response.setHeader('Access-Control-Allow-Origin', platform);
+    response.setHeader('Access-Control-Allow-Methods', 'PUT');
+    response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  }
+  if (request.method === 'OPTIONS') { corsOptions++; response.writeHead(204).end(); return; }
+  assert.equal(request.headers.authorization, undefined);
+  assert.equal(request.headers.cookie, undefined);
+  assert.equal(request.headers['content-type'], 'application/octet-stream');
+  assert.equal(request.headers.origin, platform);
+  const url = new URL(request.url, 'http://oss');
+  assert.equal(url.searchParams.get('x-oss-signature-version'), 'OSS4-HMAC-SHA256');
+  if (!signatures.has(url.pathname + url.search)) { response.writeHead(403).end(); return; }
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  staged.set(url.pathname.slice(1), Buffer.concat(chunks));
+  binaryPuts++; response.writeHead(200).end();
+});
+await new Promise((resolve) => ossServer.listen(0, '127.0.0.1', resolve));
+const oss = new OSS({ region: 'oss-cn-hangzhou', bucket: 'test-folio-bucket', accessKeyId: 'test-key',
+  accessKeySecret: 'test-secret', endpoint: `http://127.0.0.1:${ossServer.address().port}`, cname: true, secure: false });
+async function uploadStatus(session, sign) {
+  const missing = [...new Map(session.files.filter((f) => !blobs.has(f.hash)).map((f) => [f.hash, { hash: f.hash, size: f.size }])).values()];
+  const uploads = [];
+  if (sign) for (const file of missing) {
+    const headers = { 'Content-Type': 'application/octet-stream' };
+    const url = await oss.signatureUrlV4('PUT', 600, { headers }, `staging/${session.id}/${file.hash}`);
+    const parsed = new URL(url); signatures.add(parsed.pathname + parsed.search);
+    uploads.push({ ...file, headers, url, expiresAt: new Date(Date.now() + 600000).toISOString() });
+  }
+  return { ...session, missing, uploads, expiresAt: new Date(Date.now() + 86400000).toISOString() };
+}
 const v1 = '10000000-0000-4000-8000-000000000001';
 const v2 = '10000000-0000-4000-8000-000000000002';
 const user = {
@@ -144,7 +187,9 @@ async function context(authenticated = true, viewport = { width: 1440, height: 1
       { user, platform },
     );
   ctx.on('page', (page) => page.on('pageerror', (error) => failures.push(error.message)));
-  await ctx.route(platform + '/api/**', async (route) => {
+  return ctx;
+}
+async function apiHandler(route) {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname.replace('/api/sites/demo', '');
@@ -178,9 +223,29 @@ async function context(authenticated = true, viewport = { width: 1440, height: 1
       site.currentVersionId = data.versionId;
       return json({ ok: true });
     }
-    if (path === '/releases') {
-      site.currentVersionId = v2;
-      return json(versions[0], 201);
+    if (path === '/uploads') {
+      let session = [...uploadSessions.values()].find((s) => s.requestId === data.requestId);
+      if (!session) {
+        session = { id: randomUUID(), requestId: data.requestId, files: data.files, state: 'uploading', result: null };
+        uploadSessions.set(session.id, session);
+      }
+      return json(await uploadStatus(session, true), 201);
+    }
+    if (path.startsWith('/uploads/')) {
+      const [, , id, action] = path.split('/');
+      const session = uploadSessions.get(id);
+      if (!session) return json({ message: '会话不存在' }, 404);
+      if (action === 'complete') {
+        for (const file of session.files) if (!blobs.has(file.hash)) {
+          const bytes = staged.get(`staging/${id}/${file.hash}`);
+          if (!bytes || bytes.length !== file.size || createHash('sha256').update(bytes).digest('hex') !== file.hash)
+            return json({ message: 'SHA-256 或大小不符' }, 400);
+          blobs.set(file.hash, bytes);
+        }
+        site.currentVersionId = v2; session.state = 'completed'; session.result = versions[0];
+        return json(session.result, 201);
+      }
+      return json(await uploadStatus(session, action === 'renew'));
     }
     if (path === '/threads' && request.method() === 'GET') {
       if (failThreads) return json({ message: '服务暂时不可用' }, 503);
@@ -247,9 +312,25 @@ async function context(authenticated = true, viewport = { width: 1440, height: 1
       return json(t);
     }
     throw new Error('Unhandled API ' + request.method() + ' ' + request.url());
-  });
-  return ctx;
 }
+// Native HTTP API substitute avoids DevTools routing changing CORS/preflight behavior.
+const platformServer = createServer(async (req, res) => {
+  try {
+    if (req.url.startsWith('/api/')) {
+      const chunks = []; for await (const chunk of req) chunks.push(chunk);
+      const body = Buffer.concat(chunks).toString();
+      await apiHandler({ request: () => ({ url: () => platform + req.url, method: () => req.method,
+        headers: () => req.headers, postDataJSON: () => body ? JSON.parse(body) : null }),
+        fulfill: ({ status, contentType, body }) => { res.writeHead(status, { 'Content-Type': contentType }); res.end(body); } });
+    } else {
+      const upstream = await fetch(upstreamPlatform + req.url);
+      res.writeHead(upstream.status, { 'Content-Type': upstream.headers.get('content-type') ?? 'text/plain' });
+      res.end(Buffer.from(await upstream.arrayBuffer()));
+    }
+  } catch (e) { failures.push(e.message); res.writeHead(500).end(); }
+});
+await new Promise((resolve) => platformServer.listen(0, '127.0.0.1', resolve));
+platform = 'http://127.0.0.1:' + platformServer.address().port;
 const waitText = (page, text) => page.getByText(text, { exact: true }).first().waitFor({ state: 'visible' });
 const shot = (page, name) => page.screenshot({ path: output + '/' + name + '.png', fullPage: true });
 async function refreshWebsite(frame) {
@@ -352,8 +433,28 @@ try {
   const uploadDirectory = await mkdtemp(join(tmpdir(), 'eat-ui-upload-'));
   try {
     await writeFile(join(uploadDirectory, 'index.html'), '<h1>Updated</h1>');
+    const beforeDeniedPuts = binaryPuts;
+    denyCors = true;
+    await page.locator('input[aria-label="上传目录"]').setInputFiles(uploadDirectory);
+    await page.getByRole('alert').filter({ hasText: 'OSS 二进制上传失败' }).waitFor();
+    assert.ok(await page.getByRole('button', { name: '重试发布', exact: true }).isVisible());
+    assert.equal(binaryPuts, beforeDeniedPuts, 'failed preflight prevents PUT');
+    const sessionCount = uploadSessions.size;
+    await page.reload();
+    await page.getByRole('button', { name: '发布新版', exact: true }).click();
+    await page.getByText('存在未完成的发布', { exact: false }).waitFor();
+    denyCors = false;
     await page.locator('input[aria-label="上传目录"]').setInputFiles(uploadDirectory);
     await waitText(page, 'Folio 已发布，访问链接保持不变');
+    assert.equal(uploadSessions.size, sessionCount, 'reload resumes the same session');
+    assert.equal(binaryPuts, 1);
+    await page.getByRole('button', { name: '发布新版', exact: true }).click();
+    const zip = zipSync({ 'index.html': Buffer.from('<body>ZIP binary</body>'), 'image.png': Buffer.from([0,128,255]) });
+    await page.locator('input[aria-label="上传 ZIP"]').setInputFiles({ name: 'valid.zip', mimeType: 'application/zip', buffer: Buffer.from(zip) });
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    assert.equal(binaryPuts, 3);
+    assert.ok(corsOptions >= 3, 'browser performed native cross-origin preflights');
+    console.log('PASS binary directory/ZIP, SDK V4 URLs/Content-Type, native CORS denial, reload/resume, retry, no EAT credentials');
   } finally {
     await rm(uploadDirectory, { recursive: true, force: true });
   }
@@ -766,4 +867,6 @@ try {
 } finally {
   await browser.close();
   await new Promise((resolve) => publishedServer.close(resolve));
+  await new Promise((resolve) => ossServer.close(resolve));
+  await new Promise((resolve) => platformServer.close(resolve));
 }

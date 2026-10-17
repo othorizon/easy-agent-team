@@ -2,7 +2,7 @@ import { ConflictException, Inject, Injectable, ServiceUnavailableException } fr
 import { eq, sql } from 'drizzle-orm';
 import type { SiteCapabilityInfo, SiteSettingsInfo, UpdateSiteSettings } from '@eat/shared';
 import { DB, type Db } from '../db/db.module';
-import { sites, siteSettings, siteVersions } from '../db/schema';
+import { sites, siteSettings, siteCleanups } from '../db/schema';
 import { decryptSecret, encryptSecret } from '../common/crypto';
 import { loadConfig } from '../config';
 
@@ -84,10 +84,10 @@ export class SiteSettingsStore {
       if (
         r &&
         (r.ossBucket !== dto.ossBucket || r.ossRegion !== dto.ossRegion) &&
-        (await tx.select({ id: siteVersions.id }).from(siteVersions).where(eq(siteVersions.storage, 'oss')).limit(1))
-          .length
+        ((await tx.select({ id: sites.id }).from(sites).limit(1)).length ||
+          (await tx.select().from(siteCleanups).limit(1)).length)
       )
-        throw new ConflictException('已有 OSS 历史版本，不能切换 Bucket 或地域；可更新访问凭证');
+        throw new ConflictException('已有 Folio 或待清理资源，不能切换 Bucket 或地域；可更新访问凭证');
       const enc = (value: string | undefined, previous?: string | null) =>
         value ? encryptSecret(value) : (previous ?? encryptSecret(''));
       const { ossAccessKeyId, ossAccessKeySecret, dnsAccessKeyId, dnsAccessKeySecret, ...plain } = dto;
