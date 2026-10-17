@@ -1,11 +1,13 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { ArrowDownToLine, ArrowUpRight, Files, Plus, Search, Upload } from 'lucide-react';
+import {
+  ArrowDownToLine, ArrowUpRight, Copy, Files, LayoutGrid, List, MessageSquare,
+  MoreHorizontal, Plus, Search, Settings, Upload, X,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import type { SiteCapabilityInfo, SiteInfo } from '@eat/shared';
 import { api } from '../../api';
-import { PageHeader } from '../../components/page-header';
 import { Button } from '../../components/ui/button';
 import { Input, Textarea } from '../../components/ui/input';
 import {
@@ -16,8 +18,87 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '../../components/ui/dialog';
-import { FolioAccess, folioAccessModes, FolioMark } from './folio-ui';
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from '../../components/ui/dropdown-menu';
+import { FolioAccess, folioAccessModes } from './folio-ui';
 import './folio.css';
+
+type LibraryView = 'grid' | 'list';
+type LibrarySort = 'updated' | 'created' | 'name';
+const viewPreference = 'eat.folio-library-view';
+
+function FolioProject({ site }: { site: SiteInfo }) {
+  const detailUrl = '/folios/' + site.slug;
+  const published = !!site.currentVersionId;
+  return (
+    <article className="folio-project">
+      <div className="folio-project-header">
+        <div className="folio-project-identity">
+          <h2><Link className="folio-project-link" to={detailUrl} title={site.name}>{site.name}</Link></h2>
+          <span className="folio-project-slug" title={site.slug}>{site.slug}</span>
+        </div>
+        <span className={published ? 'folio-status' : 'folio-status folio-status-draft'}>
+          <i />{published ? '已发布' : '待发布'}
+        </span>
+      </div>
+      {site.description && <p className="folio-project-description">{site.description}</p>}
+      <div className="folio-project-footer">
+        <div className="folio-project-meta">
+          <FolioAccess access={site.access} />
+          <time className="folio-project-date" dateTime={site.updatedAt} title={new Date(site.updatedAt).toLocaleString('zh-CN')}>
+            {new Date(site.updatedAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })} 更新
+          </time>
+        </div>
+        <div className="folio-project-actions">
+          {published ? (
+            <>
+              <Button
+                variant="ghost" size="icon-sm" aria-label={'复制链接：' + site.name} title="复制链接"
+                onClick={() => void navigator.clipboard.writeText(site.url)
+                  .then(() => toast.success('已复制 Folio 链接'))
+                  .catch(() => toast.error('复制失败，请重试'))}
+              ><Copy /></Button>
+              <Button asChild variant="outline" size="sm">
+                <a href={site.url} target="_blank" rel="noreferrer" aria-label={'打开 ' + site.name}>
+                  打开<ArrowUpRight />
+                </a>
+              </Button>
+            </>
+          ) : (
+            <Button asChild variant="outline" size="sm">
+              <Link to={detailUrl + (site.canManage ? '?tab=releases' : '')}>
+                {site.canManage ? '去发布' : '查看详情'}
+              </Link>
+            </Button>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon-sm" aria-label={'更多操作：' + site.name} title="更多操作">
+                <MoreHorizontal />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem asChild>
+                <Link to={detailUrl}><MessageSquare />{published ? '查看评论' : '查看详情'}</Link>
+              </DropdownMenuItem>
+              {(published || site.canManage) && (
+                <DropdownMenuItem asChild>
+                  <Link to={detailUrl + '?tab=releases'}><Upload />{published ? '发布记录' : '发布 Folio'}</Link>
+                </DropdownMenuItem>
+              )}
+              {site.canManage && (
+                <DropdownMenuItem asChild>
+                  <Link to={detailUrl + '?tab=settings'}><Settings />作品设置</Link>
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+    </article>
+  );
+}
 
 export function FoliosPage() {
   const cache = useQueryClient();
@@ -35,13 +116,26 @@ export function FoliosPage() {
   const [busy, setBusy] = useState(false);
   const [access, setAccess] = useState('authenticated');
   const [query, setQuery] = useState('');
+  const searchInput = useRef<HTMLInputElement>(null);
   const [scope, setScope] = useState('all');
+  const [sort, setSort] = useState<LibrarySort>('updated');
+  const [view, setView] = useState<LibraryView>(() => {
+    try { return localStorage.getItem(viewPreference) === 'list' ? 'list' : 'grid'; }
+    catch { return 'grid'; }
+  });
+  function changeView(next: LibraryView) {
+    setView(next);
+    try { localStorage.setItem(viewPreference, next); }
+    catch { /* Keep the view usable when browser storage is unavailable. */ }
+  }
   const items = list.data ?? [];
   const visible = items.filter(
     (site) =>
       (scope !== 'managed' || site.canManage) &&
       `${site.name} ${site.description} ${site.slug}`.toLowerCase().includes(query.trim().toLowerCase()),
-  );
+  ).sort((a, b) => sort === 'name'
+    ? a.name.localeCompare(b.name, 'zh-CN', { numeric: true })
+    : Date.parse(sort === 'created' ? b.createdAt : b.updatedAt) - Date.parse(sort === 'created' ? a.createdAt : a.updatedAt));
   return (
     <Dialog
       open={creating}
@@ -52,28 +146,13 @@ export function FoliosPage() {
       }}
     >
       <div className="folio-surface folio-library">
-        <div className="folio-heading">
-          <FolioMark />
-          <PageHeader
-            title="Folio"
-            description="发布作品，分享想法，让反馈发生。"
-            actions={
-              <DialogTrigger asChild>
-                <Button disabled={!capability.data?.enabled}>
-                  <Plus />
-                  创建 Folio
-                </Button>
-              </DialogTrigger>
-            }
-          />
+        <div className="folio-library-heading">
+          <h1>Folio</h1>
+          <DialogTrigger asChild>
+            <Button disabled={!capability.data?.enabled}><Plus />创建 Folio</Button>
+          </DialogTrigger>
         </div>
-        <div className="folio-library-intro">
-          <span>
-            <Files />
-            网页、演示与报告的共享空间
-          </span>
-          <span>静态网站 · 版本记录 · 页面批注</span>
-        </div>
+        {capability.isLoading && <p role="status" className="text-sm text-muted-foreground">正在检查发布配置…</p>}
         {capability.data && !capability.data.enabled && (
           <div className="folio-empty">
             <ArrowDownToLine />
@@ -99,15 +178,31 @@ export function FoliosPage() {
                   我管理的 <span>{items.filter((site) => site.canManage).length}</span>
                 </button>
               </div>
-              <label className="folio-search">
-                <Search aria-hidden="true" />
-                <Input
-                  aria-label="搜索 Folio"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="搜索名称、标识或说明…"
-                />
-              </label>
+              <div className="folio-library-controls">
+                <div className="folio-search">
+                  <Search aria-hidden="true" />
+                  <Input
+                    ref={searchInput}
+                    aria-label="搜索 Folio" value={query}
+                    onChange={(e) => setQuery(e.target.value)} placeholder="搜索 Folio…"
+                  />
+                  {query && (
+                    <button type="button" aria-label="清空搜索" title="清空搜索" onClick={() => {
+                      setQuery('');
+                      searchInput.current?.focus();
+                    }}><X /></button>
+                  )}
+                </div>
+                <select className="folio-library-sort" aria-label="Folio 排序" value={sort} onChange={(e) => setSort(e.target.value as LibrarySort)}>
+                  <option value="updated">最近更新</option>
+                  <option value="created">最近创建</option>
+                  <option value="name">名称排序</option>
+                </select>
+                <div className="folio-view-switch" role="group" aria-label="Folio 视图">
+                  <button type="button" aria-label="卡片视图" title="卡片视图" aria-pressed={view === 'grid'} onClick={() => changeView('grid')}><LayoutGrid /></button>
+                  <button type="button" aria-label="列表视图" title="列表视图" aria-pressed={view === 'list'} onClick={() => changeView('list')}><List /></button>
+                </div>
+              </div>
             </div>
             {list.isLoading && (
               <p role="status" className="folio-empty">
@@ -131,7 +226,13 @@ export function FoliosPage() {
                     ? '试试其他关键词，或查看全部 Folio。'
                     : '创建 Folio 后，上传静态网站目录或 ZIP，即可分享和收集反馈。'}
                 </p>
-                {!query && scope === 'all' && (
+                {query || scope !== 'all' ? (
+                  <Button variant="outline" onClick={() => {
+                    setQuery('');
+                    setScope('all');
+                    searchInput.current?.focus();
+                  }}>重置筛选</Button>
+                ) : (
                   <DialogTrigger asChild>
                     <Button>
                       <Plus />
@@ -141,44 +242,9 @@ export function FoliosPage() {
                 )}
               </div>
             )}
-            <div className="folio-library-grid">
-              {visible.map((site) => (
-                <article className="folio-project" key={site.id}>
-                  <div className="folio-project-top">
-                    <FolioMark small />
-                    <span
-                      className={site.currentVersionId ? 'folio-status' : 'folio-status folio-status-draft'}
-                    >
-                      <i />
-                      {site.currentVersionId ? '已发布' : '待发布'}
-                    </span>
-                  </div>
-                  <h2>
-                    <Link to={'/folios/' + site.slug}>{site.name}</Link>
-                  </h2>
-                  <p className="folio-project-description">{site.description || '还没有添加作品说明。'}</p>
-                  <a className="folio-project-url" href={site.url} target="_blank" rel="noreferrer">
-                    {site.slug}
-                    <ArrowUpRight />
-                  </a>
-                  <div className="folio-project-footer">
-                    <FolioAccess access={site.access} />
-                    <Link
-                      className="folio-project-action"
-                      to={'/folios/' + site.slug}
-                      aria-label={(site.canManage ? '管理 ' : '查看 ') + site.name}
-                    >
-                      {site.canManage ? '管理作品' : '查看评论'}
-                      <ArrowUpRight />
-                    </Link>
-                  </div>
-                  <div className="folio-project-date">
-                    更新于{' '}
-                    {new Date(site.updatedAt).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })}
-                  </div>
-                </article>
-              ))}
-            </div>
+            {!!visible.length && <div className="folio-library-grid" data-view={view}>
+              {visible.map((site) => <FolioProject key={site.id} site={site} />)}
+            </div>}
           </>
         )}
         <DialogContent className="folio-dialog sm:max-w-xl">

@@ -38,6 +38,25 @@ export async function captureFolioUI({ context, platform, published, output, sit
       url: 'https://release-notes.example.test',
       updatedAt: '2026-10-13T08:00:00Z',
     },
+    {
+      ...site,
+      id: 'managed-draft-fixture',
+      slug: 'team-handbook',
+      name: '团队手册',
+      description: '',
+      currentVersionId: null,
+      createdAt: '2026-10-17T08:00:00Z',
+      updatedAt: '2026-10-12T08:00:00Z',
+    },
+    {
+      ...site,
+      id: 'long-title-fixture',
+      slug: 'customer-experience-research-notes',
+      name: '客户体验研究与产品设计协作记录：从需求访谈到新版本的完整实践',
+      description: '汇总访谈、原型与阶段结论，帮助团队持续跟进问题。',
+      canManage: false,
+      updatedAt: '2026-10-11T08:00:00Z',
+    },
   ];
   let posted;
   await page.route(platform + '/api/sites', async (route) => {
@@ -61,14 +80,57 @@ export async function captureFolioUI({ context, platform, published, output, sit
   await page.goto(platform + '/folios');
   await page.getByRole('link', { name: '季度产品报告', exact: true }).waitFor();
   await shot(page, '01-library');
+  const cards = page.locator('.folio-project');
+  const firstCard = await cards.first().boundingBox();
+  assert.ok(firstCard.y < 160 && firstCard.height <= 200, 'compact cards appear early and stay under 200px');
+  const managedDraft = cards.filter({ has: page.getByRole('heading', { name: '团队手册', exact: true }) });
+  assert.equal(await managedDraft.getByRole('link', { name: '去发布', exact: true }).getAttribute('href'), '/folios/team-handbook?tab=releases');
+  assert.equal(await managedDraft.locator('a[target="_blank"]').count(), 0, 'drafts do not link to an unpublished website');
+  await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: platform });
+  await page.getByRole('button', { name: '复制链接：' + site.name, exact: true }).click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), site.url);
+  assert.equal(new URL(page.url()).pathname, '/folios', 'copy action does not activate the card link');
+  assert.equal(await page.getByRole('link', { name: '打开 ' + site.name, exact: true }).getAttribute('href'), site.url);
+  await page.getByRole('button', { name: '更多操作：' + site.name, exact: true }).click();
+  assert.equal(await page.getByRole('menuitem', { name: '作品设置', exact: true }).getAttribute('href'), '/folios/' + site.slug + '?tab=settings');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '更多操作：下一次产品发布', exact: true }).click();
+  assert.equal(await page.getByRole('menuitem', { name: '作品设置', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('menuitem', { name: '发布 Folio', exact: true }).count(), 0);
+  await page.keyboard.press('Escape');
+  await cards.first().click({ position: { x: 8, y: 8 } });
+  await page.waitForURL(platform + '/folios/' + site.slug);
+  await page.goto(platform + '/folios');
+  await page.getByRole('link', { name: '季度产品报告', exact: true }).waitFor();
+  await page.getByRole('combobox', { name: 'Folio 排序' }).selectOption('created');
+  assert.equal(await cards.first().getByRole('heading').innerText(), '团队手册');
+  await page.getByRole('combobox', { name: 'Folio 排序' }).selectOption('updated');
+  await page.getByRole('button', { name: '列表视图', exact: true }).click();
+  await shot(page, '01b-library-list');
+  assert.ok((await cards.first().boundingBox()).height <= 96, 'list view stays compact');
+  await page.reload();
+  await page.getByRole('link', { name: '季度产品报告', exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '列表视图', exact: true }).getAttribute('aria-pressed'), 'true');
+  for (const width of [1920, 1280, 768, 390, 320]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await shot(page, 'library-list-' + width);
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('button', { name: '卡片视图', exact: true }).click();
   await page.getByRole('textbox', { name: '搜索 Folio' }).fill('季度');
   assert.equal(await page.locator('.folio-project').count(), 1);
+  await page.getByRole('button', { name: '清空搜索', exact: true }).click();
+  assert.equal(await cards.count(), 6);
   await page.getByRole('textbox', { name: '搜索 Folio' }).fill('no-matching-folio');
   await page.getByRole('heading', { name: '没有匹配的 Folio' }).waitFor();
-  await page.getByRole('textbox', { name: '搜索 Folio' }).fill('');
+  await page.getByRole('button', { name: '重置筛选', exact: true }).click();
   await page.getByRole('button', { name: /我管理的/ }).click();
-  assert.equal(await page.locator('.folio-project').count(), 3);
+  assert.equal(await page.locator('.folio-project').count(), 4);
   await page.getByRole('button', { name: /全部 Folio/ }).click();
+  for (const width of [1920, 1280, 768, 320]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await shot(page, 'library-grid-' + width);
+  }
   await page.setViewportSize({ width: 390, height: 844 });
   await shot(page, '11-library-mobile');
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -217,6 +279,6 @@ export async function captureFolioUI({ context, platform, published, output, sit
   );
   await ctx.close();
   console.log(
-    'PASS evidence: library search/scope/create, detail at four viewports, dialogs, embedded panel, empty and admin settings',
+    'PASS evidence: compact library grid/list at 320–1920px, card actions/permissions, sort/view memory/search/scope/create, detail, dialogs, embedded panel, empty and admin settings',
   );
 }

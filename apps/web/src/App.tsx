@@ -209,6 +209,7 @@ function UserMenu({ compact }: { compact?: boolean }) {
 
 function Shell({ children }: { children: React.ReactNode }) {
   const user = getStoredUser();
+  const { pathname } = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const groups = user?.role === 'admin' ? [...NAV_GROUPS, ADMIN_GROUP] : NAV_GROUPS;
 
@@ -250,7 +251,10 @@ function Shell({ children }: { children: React.ReactNode }) {
 
       {/* 内容区 */}
       <main className="lg:pl-60">
-        <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 lg:py-8">{children}</div>
+        <div className={cn(
+          'mx-auto w-full px-4 py-6 sm:px-6 lg:py-8',
+          pathname === '/folios' ? 'max-w-[1600px]' : 'max-w-5xl',
+        )}>{children}</div>
       </main>
     </div>
   );
