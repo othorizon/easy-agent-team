@@ -1,24 +1,16 @@
 import type { SiteAnchor, SiteComment, SiteThread, UserPublic } from '@eat/shared';
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import {
-  Check,
-  ExternalLink,
-  MapPin,
-  MessageSquare,
-  MousePointer2,
-  RefreshCw,
-  Trash2,
-  X,
-} from 'lucide-react';
+import { MapPin, MessageSquare, MousePointer2, ScanLine, Search, Trash2, RefreshCw, X } from 'lucide-react';
 import { api, ApiError, getStoredUser, getToken } from '../api';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { Badge } from '../components/ui/badge';
 import { cn } from '../lib/utils';
 import { FolioConnectionState } from './folios/folio-ui';
 import { FolioComposer as Composer, type MentionUser } from './folios/FolioComposer';
+import { FolioThread } from './folios/FolioThread';
 import './folios/folio.css';
+import './folios/folio-discussion.css';
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -307,28 +299,9 @@ export function FolioDiscussion({
     send('eat:clear-anchor');
   }
   const composer = versionId && !needsAccess && (
-    <div
-      className={cn(
-        'folio-composer space-y-3',
-        embedded ? 'shrink-0 border-t bg-background px-4 py-3' : 'rounded-xl border bg-muted/20 p-4',
-      )}
-    >
+    <div className="folio-composer">
       {user ? (
         <>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-sm font-medium">发表评论</span>
-            {embedded && anchor.type === 'page' && (
-              <div className="flex gap-1">
-                <Button variant="outline" size="sm" onClick={() => send('eat:select', { mode: 'element' })}>
-                  <MousePointer2 />
-                  标注元素
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => send('eat:select', { mode: 'region' })}>
-                  框选区域
-                </Button>
-              </div>
-            )}
-          </div>
           {anchor.type !== 'page' && (
             <div className="flex items-start gap-2 rounded-lg border bg-background p-2 text-xs">
               <MapPin className="size-4 shrink-0 text-muted-foreground" />
@@ -341,27 +314,51 @@ export function FolioDiscussion({
               </Button>
             </div>
           )}
-          {!embedded && (
-            <details className="text-xs text-muted-foreground">
-              <summary className="w-fit cursor-pointer rounded py-1 hover:text-foreground">
-                评论页面：{composePage || '/'}
-              </summary>
-              <label className="mt-2 flex flex-wrap items-center gap-2">
-                页面路径
-                <Input
-                  className="h-8 w-44"
-                  aria-label="新评论的页面路径"
-                  value={composePage}
-                  onChange={(e) => setComposePage(e.target.value)}
-                  placeholder="/ 或 /about"
-                />
-              </label>
-            </details>
-          )}
           <Composer
             key={versionId + (embedded ? page : '')}
             users={users}
             label="发送评论"
+            toolbar={
+              embedded ? (
+                anchor.type === 'page' && (
+                  <div className="folio-annotation-tools">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      title="标注元素"
+                      onClick={() => send('eat:select', { mode: 'element' })}
+                    >
+                      <MousePointer2 />
+                      <span>标注元素</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      title="框选区域"
+                      onClick={() => send('eat:select', { mode: 'region' })}
+                    >
+                      <ScanLine />
+                      <span>框选区域</span>
+                    </Button>
+                  </div>
+                )
+              ) : (
+                <details className="folio-compose-path">
+                  <summary>评论页面：{composePage || '/'}</summary>
+                  <label>
+                    页面路径
+                    <Input
+                      aria-label="新评论的页面路径"
+                      value={composePage}
+                      onChange={(e) => setComposePage(e.target.value)}
+                      placeholder="/ 或 /about"
+                    />
+                  </label>
+                </details>
+              )
+            }
             submit={async (content, mentions) => {
               await request('POST', '/threads', {
                 content,
@@ -402,13 +399,11 @@ export function FolioDiscussion({
       >
         <div className="flex items-start justify-between gap-2">
           <div>
-            <h2 className="flex items-center gap-2 font-semibold">
-              <MessageSquare className="size-4" />
-              Folio 评论
+            <h2 className="folio-discussion-title">
+              {embedded ? '评论' : '讨论'}
+              <span>{threads.length}</span>
             </h2>
-            <p className="mt-1 break-all text-xs text-muted-foreground">
-              {embedded ? page || '/' : '集中查看反馈，Folio 更新后讨论会继续保留。'}
-            </p>
+            {embedded && <p className="folio-discussion-page">{page || '/'}</p>}
           </div>
           <div className="flex gap-1">
             <Button
@@ -451,17 +446,18 @@ export function FolioDiscussion({
             ))}
           </div>
           {!embedded && (
-            <Input
-              className="h-8 w-48"
-              aria-label="按页面筛选评论"
-              placeholder="筛选页面，如 /about"
-              value={page}
-              onChange={(e) => setPage(e.target.value)}
-            />
+            <label className="folio-comment-search">
+              <Search aria-hidden="true" />
+              <Input
+                aria-label="按页面筛选评论"
+                placeholder="筛选页面，如 /about"
+                value={page}
+                onChange={(e) => setPage(e.target.value)}
+              />
+            </label>
           )}
         </div>
       </div>
-      {!embedded && composer}
       {locateMessage && (
         <div
           className={cn(
@@ -567,172 +563,37 @@ export function FolioDiscussion({
               </div>
             )}
             {visibleThreads.map((t) => (
-              <article
-                id={'thread-' + t.id}
+              <FolioThread
                 key={t.id}
-                className={cn(
-                  'folio-thread space-y-3 rounded-xl border bg-card p-4',
-                  t.id === targetThread && 'ring-2 ring-ring/40',
-                )}
+                thread={t}
+                canReply={!!user}
+                embedded={embedded}
+                siteUrl={siteUrl}
+                targeted={t.id === targetThread}
+                replying={replyTo === t.id}
+                updating={updating === t.id}
+                deleting={deleting}
+                onReply={() => setReplyTo(replyTo === t.id ? '' : t.id)}
+                onLocate={() => send('eat:locate', { anchor: t.anchor, threadId: t.id })}
+                onDelete={(comment) => {
+                  setDeleteTarget(comment);
+                  setDeleteError('');
+                }}
+                onResolve={async () => {
+                  if (updating) return;
+                  setUpdating(t.id);
+                  try {
+                    await request('PATCH', '/threads/' + t.id, {
+                      status: t.status === 'open' ? 'resolved' : 'open',
+                    });
+                    await reload();
+                  } catch (e) {
+                    setError((e as Error).message);
+                  } finally {
+                    setUpdating('');
+                  }
+                }}
               >
-                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  {!embedded && <span className="break-all">{t.page}</span>}
-                  <span>
-                    {t.anchor.type === 'page'
-                      ? '页面反馈'
-                      : t.anchor.type === 'region'
-                        ? '区域标注'
-                        : '元素标注'}
-                  </span>
-                  {t.status === 'resolved' && (
-                    <Badge variant="secondary">
-                      <Check className="mr-1 size-3" />
-                      已解决
-                    </Badge>
-                  )}
-                </div>
-                {t.anchor.text && (
-                  <blockquote className="line-clamp-3 break-words rounded-r-md border-l-2 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-                    {t.anchor.text}
-                  </blockquote>
-                )}
-                {t.comments.map((c, index) => (
-                  <div
-                    key={c.id}
-                    id={'comment-' + c.id}
-                    className={cn('space-y-2', index > 0 && 'ml-2 border-l-2 pl-3')}
-                  >
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-                      <span className="folio-author">
-                        <span className="folio-avatar" aria-hidden="true">
-                          {c.authorName.slice(0, 1)}
-                        </span>
-                        {c.authorName}
-                      </span>
-                      <time
-                        className="text-muted-foreground"
-                        dateTime={c.createdAt}
-                        title={new Date(c.createdAt).toLocaleString()}
-                      >
-                        {new Date(c.createdAt).toLocaleString(undefined, {
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </time>
-                      {user && c.canDelete && !c.deletedAt && (
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          className="ml-auto text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                          aria-label="删除评论"
-                          title="删除评论"
-                          disabled={deleting}
-                          onClick={() => {
-                            setDeleteTarget(c);
-                            setDeleteError('');
-                          }}
-                        >
-                          <Trash2 />
-                        </Button>
-                      )}
-                    </div>
-                    {c.deletedAt ? (
-                      <p className="text-sm italic text-muted-foreground">评论已删除</p>
-                    ) : (
-                      <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{c.content}</p>
-                    )}
-                  </div>
-                ))}
-                <div className="flex flex-wrap gap-2">
-                  {user && (
-                    <Button
-                      variant={replyTo === t.id ? 'secondary' : 'outline'}
-                      size="sm"
-                      onClick={() => setReplyTo(replyTo === t.id ? '' : t.id)}
-                    >
-                      <MessageSquare />
-                      回复
-                    </Button>
-                  )}
-                  {embedded && t.anchor.type !== 'page' && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => send('eat:locate', { anchor: t.anchor, threadId: t.id })}
-                    >
-                      <MapPin />
-                      定位标注
-                    </Button>
-                  )}
-                  {!embedded && siteUrl && (
-                    <Button asChild variant="outline" size="sm">
-                      <a
-                        href={(() => {
-                          const url = new URL(t.page, siteUrl);
-                          url.searchParams.set('eat_thread', t.id);
-                          return url.href;
-                        })()}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        查看页面
-                        <ExternalLink />
-                      </a>
-                    </Button>
-                  )}
-                  {user && t.canResolve && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      loading={updating === t.id}
-                      onClick={async () => {
-                        if (updating) return;
-                        setUpdating(t.id);
-                        try {
-                          await request('PATCH', '/threads/' + t.id, {
-                            status: t.status === 'open' ? 'resolved' : 'open',
-                          });
-                          await reload();
-                        } catch (e) {
-                          setError((e as Error).message);
-                        } finally {
-                          setUpdating('');
-                        }
-                      }}
-                    >
-                      <Check />
-                      {t.status === 'open' ? '标记解决' : '重新打开'}
-                    </Button>
-                  )}
-                </div>
-                <details className="text-xs text-muted-foreground">
-                  <summary className="w-fit cursor-pointer rounded py-1 hover:text-foreground">
-                    评论上下文
-                  </summary>
-                  <div className="mt-2 space-y-2 rounded-lg bg-muted/40 p-3">
-                    <p className="break-all">
-                      页面：{t.page} · 发起于 v{t.versionNumber}
-                    </p>
-                    <a
-                      className="inline-flex items-center gap-1 text-primary underline-offset-4 hover:underline"
-                      href={t.url}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      查看评论时的页面
-                      <ExternalLink className="size-3" />
-                    </a>
-                    <ul className="space-y-1">
-                      {t.comments.map((c) => (
-                        <li key={c.id}>
-                          {c.authorName} · v{c.versionNumber} · {new Date(c.createdAt).toLocaleString()}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </details>
                 {replyTo === t.id && user && (
                   <Composer
                     key={t.id + versionId}
@@ -751,12 +612,12 @@ export function FolioDiscussion({
                     }}
                   />
                 )}
-              </article>
+              </FolioThread>
             ))}
           </>
         )}
       </div>
-      {embedded && !replyTo && composer}
+      {(!embedded || !replyTo) && composer}
       <AlertDialog
         open={!!deleteTarget}
         onOpenChange={(open) => {

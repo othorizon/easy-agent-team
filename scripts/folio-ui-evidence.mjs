@@ -91,6 +91,10 @@ export async function captureFolioUI({ context, platform, published, output, sit
   await detail.goto(platform + '/folios/demo');
   await detail.getByText('首页标题可以更清楚地表达产品价值。', { exact: true }).waitFor();
   await shot(detail, '03-comments');
+  await detail.getByRole('region', { name: 'Folio 评论' }).screenshot({
+    path: `${output}/18-discussion-closeup.png`,
+    animations: 'disabled',
+  });
   for (const width of [768, 1280]) {
     await detail.setViewportSize({ width, height: 1024 });
     assert.equal(
@@ -129,6 +133,10 @@ export async function captureFolioUI({ context, platform, published, output, sit
   const frame = embedded.frameLocator('iframe[title="Folio 评论"]');
   await frame.getByText('首页标题可以更清楚地表达产品价值。', { exact: true }).waitFor();
   await shot(embedded, '08-embedded');
+  await embedded.locator('iframe[title="Folio 评论"]').screenshot({
+    path: `${output}/19-embedded-closeup.png`,
+    animations: 'disabled',
+  });
   await embedded.setViewportSize({ width: 390, height: 844 });
   await shot(embedded, '16-embedded-mobile');
 
@@ -202,7 +210,11 @@ export async function captureFolioUI({ context, platform, published, output, sit
   const refetched = admin.waitForResponse((response) => response.url().endsWith('/api/admin/site-settings'));
   await admin.evaluate(() => window.dispatchEvent(new Event('online')));
   await refetched;
-  assert.equal(await domain.inputValue(), 'draft.folios.example.test', 'refetch preserves unsaved admin edits');
+  assert.equal(
+    await domain.inputValue(),
+    'draft.folios.example.test',
+    'refetch preserves unsaved admin edits',
+  );
   await ctx.close();
   console.log(
     'PASS evidence: library search/scope/create, detail at four viewports, dialogs, embedded panel, empty and admin settings',

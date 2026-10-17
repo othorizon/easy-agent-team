@@ -31,6 +31,10 @@ pnpm --filter @eat/web typecheck
 pnpm --filter @eat/web build
 ```
 
-浏览器默认地址为 http://127.0.0.1:5173，可通过 EAT_UI_URL 修改；默认 Chromium 为 /usr/bin/chromium，可通过 CHROMIUM_PATH 指定。EAT_UI_CAPTURE 额外生成编号 01–16 的桌面 / 手机截图并验证搜索、创建与配置草稿。脚本使用 API 测试替身及本地跨源静态页，不写入真实业务数据，不依赖外部账号。
+浏览器默认地址为 http://127.0.0.1:5173，可通过 EAT_UI_URL 修改；默认 Chromium 为 /usr/bin/chromium，可通过 CHROMIUM_PATH 指定。EAT_UI_CAPTURE 额外生成编号 01–16 的桌面 / 手机截图和 18、19 两处评论区近景，并验证搜索、创建与配置草稿。脚本使用 API 测试替身及本地跨源静态页，不写入真实业务数据，不依赖外部账号。
 
 本次完整截图和交互式索引位于 /workspace/folio-ui-review，源码中不收录二进制截图；重新执行上述命令可生成。
+
+## 评论区视觉迭代
+
+平台与发布网站的评论改为轻量讨论流后，重新执行完整浏览器回归、Web 类型检查与生产构建、Server 类型检查。新版截图位于 /workspace/folio-comments-v2；18-discussion-closeup.png 和 19-embedded-closeup.png 为两处近景，13-comments-mobile.png 和 16-embedded-mobile.png 为手机版。

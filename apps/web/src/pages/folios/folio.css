@@ -369,145 +369,6 @@
 .folio-discussion-body[data-slot='card-content'] {
   padding: 0;
 }
-.folio-discussion {
-  min-width: 0;
-  text-wrap: pretty;
-}
-.folio-discussion-workspace {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 286px;
-  gap: 20px 24px;
-  align-items: start;
-}
-.folio-discussion-heading {
-  grid-column: 1 / -1;
-}
-.folio-discussion-heading h2 {
-  font-size: 16px;
-  letter-spacing: -0.02em;
-}
-.folio-discussion-workspace > .folio-composer {
-  grid-column: 2;
-  grid-row: 2;
-  position: sticky;
-  top: 24px;
-  padding: 18px;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: color-mix(in oklch, var(--muted) 45%, var(--background));
-}
-.folio-composer textarea {
-  min-height: 128px;
-  font-size: 13px;
-  line-height: 1.7;
-  border-radius: 8px;
-  box-shadow: none;
-}
-.folio-composer form > div:last-child {
-  flex-wrap: wrap;
-  row-gap: 12px;
-}
-.folio-composer form > div:last-child > span {
-  font-size: 10px;
-}
-.folio-composer form > div:last-child > div {
-  margin-left: auto;
-}
-.folio-composer button[type='submit'] {
-  font-size: 12px;
-  padding-inline: 12px;
-}
-.folio-thread-list {
-  min-width: 0;
-}
-.folio-discussion-workspace > .folio-thread-list {
-  grid-column: 1;
-  grid-row: 2 / span 3;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  overflow: hidden;
-  background: var(--card);
-}
-.folio-discussion-workspace > .folio-thread-list > .folio-thread {
-  border: 0;
-  border-bottom: 1px solid var(--border);
-  border-radius: 0;
-  padding: 22px;
-  margin-top: 0;
-}
-.folio-discussion-workspace > .folio-thread-list > .folio-thread:last-child {
-  border-bottom: 0;
-}
-.folio-thread p {
-  line-height: 1.8;
-  overflow-wrap: anywhere;
-}
-.folio-thread > div:first-child {
-  font-size: 11px;
-  gap: 10px;
-}
-.folio-author {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-  font-size: 12px;
-}
-.folio-avatar {
-  width: 26px;
-  height: 26px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border);
-  background: var(--secondary);
-  color: var(--muted-foreground);
-  border-radius: 50%;
-  font-size: 11px;
-}
-.folio-thread time {
-  font-size: 11px;
-}
-.folio-thread > div > p {
-  padding-left: 34px;
-}
-.folio-thread > div > p.italic {
-  padding-left: 0;
-}
-.folio-thread button,
-.folio-thread a[data-slot='button'] {
-  box-shadow: none;
-  font-size: 11px;
-}
-.folio-thread > details {
-  padding-top: 1px;
-  font-size: 11px;
-}
-.folio-thread blockquote {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 9px 12px;
-  background: var(--muted);
-}
-.folio-comment-filters {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px;
-  background: var(--muted);
-  border-radius: 8px;
-}
-.folio-comment-filters > button {
-  font-size: 12px;
-  height: 29px;
-  border: 1px solid transparent;
-  box-shadow: none;
-}
-.folio-comment-filters > button[aria-pressed='true'] {
-  background: var(--card);
-  border-color: var(--border);
-  color: var(--foreground);
-}
 .folio-releases > div:first-child h1 {
   font-size: 17px;
 }
@@ -791,28 +652,6 @@
   text-decoration: underline;
   text-underline-offset: 4px;
 }
-.folio-discussion-embedded .folio-discussion-heading {
-  padding: 18px 16px 14px;
-}
-.folio-discussion-embedded .folio-thread-list {
-  background: var(--muted);
-  padding: 12px;
-}
-.folio-discussion-embedded .folio-thread {
-  padding: 16px;
-  box-shadow: none;
-  border-radius: 10px;
-}
-.folio-discussion-embedded .folio-thread > div > p {
-  padding-left: 0;
-}
-.folio-discussion-embedded .folio-composer {
-  padding: 14px 16px;
-  background: var(--background);
-}
-.folio-discussion-embedded .folio-composer textarea {
-  min-height: 86px;
-}
 .folio-admin-settings[data-slot='card'] {
   box-shadow: none;
 }
@@ -852,12 +691,6 @@
 .folio-admin-settings input[type='checkbox'] {
   margin-top: 0;
 }
-@media (max-width: 1199px) and (min-width: 1024px) {
-  .folio-discussion-workspace {
-    grid-template-columns: minmax(0, 1fr) 250px;
-    gap: 20px;
-  }
-}
 @media (max-width: 767px) {
   .folio-heading {
     align-items: flex-start;
@@ -893,24 +726,7 @@
   .folio-project-top {
     margin-bottom: 18px;
   }
-  .folio-discussion-workspace {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-  }
-  .folio-discussion-workspace > .folio-composer {
-    position: static;
-    width: 100%;
-  }
-  .folio-discussion-workspace > .folio-thread-list {
-    width: 100%;
-  }
-  .folio-discussion-heading {
-    width: 100%;
-  }
-  .folio-discussion-workspace .folio-thread {
-    padding: 18px;
-  }
+
   .folio-settings-form,
   .folio-settings-section {
     grid-template-columns: minmax(0, 1fr);
@@ -949,9 +765,7 @@
   .folio-linkbar > button {
     order: 2;
   }
-  .folio-comment-filters {
-    flex-wrap: wrap;
-  }
+
   .folio-surface button,
   .folio-surface input:not([type='checkbox']),
   .folio-surface select,
@@ -965,9 +779,7 @@
   .folio-search > svg {
     top: 15px;
   }
-  .folio-thread-list .folio-thread > div.flex {
-    gap: 8px;
-  }
+
   .folio-admin-settings > div {
     padding: 20px;
   }

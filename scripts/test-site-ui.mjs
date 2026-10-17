@@ -284,7 +284,11 @@ try {
   await oldThread.getByRole('button', { name: '重新打开' }).waitFor();
   await oldThread.getByRole('button', { name: '重新打开' }).click();
   await oldThread.getByRole('button', { name: '标记解决' }).waitFor();
-  await page.getByRole('textbox', { name: '评论内容', exact: true }).fill('@陈');
+  await page.getByRole('button', { name: '提及同事', exact: true }).click();
+  const commentInput = page.getByRole('textbox', { name: '评论内容', exact: true });
+  assert.equal(await commentInput.inputValue(), '@');
+  assert.equal(await commentInput.evaluate((el) => el === document.activeElement), true);
+  await commentInput.pressSequentially('陈');
   await page.getByRole('button', { name: '陈沐 chen@example.test' }).click();
   await page.getByRole('textbox', { name: '评论内容', exact: true }).press('End');
   await page.getByRole('textbox', { name: '评论内容', exact: true }).pressSequentially('请看一下');
