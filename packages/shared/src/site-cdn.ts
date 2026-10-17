@@ -7,11 +7,13 @@ const credential = z
   .optional();
 export const updateSiteCdnSchema = z.object({
   enabled: z.boolean().default(false),
-  scope: z.enum(['domestic', 'global', 'overseas']).default('overseas'),
+  scope: z.enum(['domestic', 'global', 'overseas']).default('global'),
   credentialSource: z.enum(['independent', 'alidns']).default('independent'),
   accessKeyId: credential,
   accessKeySecret: credential,
   autoDns: z.boolean().default(false),
+  // Omission preserves an existing choice; a new installation defaults to verification off.
+  verifyOriginCertificate: z.boolean().optional(),
 });
 export type UpdateSiteCdn = z.infer<typeof updateSiteCdnSchema>;
 export type SiteCdnStatus =
@@ -25,6 +27,7 @@ export type SiteCdnStatus =
   | 'failed'
   | 'conflict';
 export interface SiteCdnInfo extends Omit<UpdateSiteCdn, 'accessKeyId' | 'accessKeySecret'> {
+  verifyOriginCertificate: boolean;
   status: SiteCdnStatus;
   connected: boolean;
   cacheRefresh: {

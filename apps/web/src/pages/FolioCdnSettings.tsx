@@ -34,9 +34,10 @@ export function FolioCdnSettings({ folio }: { folio?: SiteSettingsInfo }) {
   const form = useForm<UpdateSiteCdn>({
     defaultValues: {
       enabled: false,
-      scope: 'overseas',
+      scope: 'global',
       credentialSource: 'independent',
       autoDns: false,
+      verifyOriginCertificate: false,
       accessKeyId: '',
       accessKeySecret: '',
     },
@@ -147,6 +148,15 @@ export function FolioCdnSettings({ folio }: { folio?: SiteSettingsInfo }) {
             </>
           )}
           <label className="flex items-start gap-2 text-sm sm:col-span-2">
+            <input type="checkbox" className="mt-1" {...register('verifyOriginCertificate')} />
+            <span>
+              校验回源证书
+              <span className="mt-1 block text-xs text-muted-foreground">
+                关闭后仍使用 HTTPS 回源，但会放宽源站证书身份校验。
+              </span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-sm sm:col-span-2">
             <input type="checkbox" className="mt-1" {...register('autoDns')} />
             自动管理 Folio DNS（迁移当前直连记录；发现外部修改时暂停）
           </label>
@@ -180,6 +190,7 @@ export function FolioCdnSettings({ folio }: { folio?: SiteSettingsInfo }) {
           <p>
             配置意愿：{r.enabled ? '开启' : '关闭'} · 实际接入：{r.connected ? '已验证接入' : '未确认接入'}
           </p>
+          <p>HTTPS 回源 · 回源证书校验：{r.verifyOriginCertificate ? '开启' : '关闭'}</p>
           {r.phase && <p className="break-words">{r.phase}</p>}
           {r.cname && <p className="break-all">CDN CNAME：{r.cname}</p>}
           <p>

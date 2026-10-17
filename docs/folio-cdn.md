@@ -9,11 +9,13 @@
 1. 阿里云账号完成实名认证并开通 CDN。选择中国内地或全球范围时，域名需要有效 ICP 备案；`overseas` 为全球但不含中国内地。服务开通、备案、计费与额度由账号所有者处理，EAT 不代为购买服务。
 2. 按 [Folio 使用说明](folios.md) 先启用 Folio，确认私有 OSS、独立部署入口和 Traefik HTTPS 正常。CDN 源站必须是公网可达、独立于 Folio 域名的 IP 或主机名，避免切换 DNS 后循环回源。
 3. 准备下文 RAM 权限。可使用独立 CDN AccessKey，或明确选择复用现有 AliDNS AccessKey；复用后也要具有 CDN 权限。Cloudflare DNS 使用自己的 Token，CDN 仍使用独立阿里云 RAM 凭证。
-4. 选择加速区域、凭证来源和自动 DNS，勾选启用后保存。凭证加密存储、AccessKey 脱敏显示、Secret 不读回，留空保留原值。管理员 API 校验权限并记录不含凭证的审计。
+4. 选择加速区域、凭证来源、回源证书校验和自动 DNS，勾选启用后保存。新配置默认全球加速、关闭回源证书校验，回源协议仍为 HTTPS 443；管理员可开启校验以验证源站证书身份。凭证加密存储、AccessKey 脱敏显示、Secret 不读回，留空保留原值。管理员 API 校验权限并记录不含凭证的审计。
 5. 自动 DNS 复用 Folio 的 AliDNS / Cloudflare 凭证，完成 TXT 验证并迁移预期的直连通配记录。关闭自动 DNS 时，按控制台每阶段的 TXT / CNAME 指引手动配置，再点击「重新检查 / 恢复」。TXT 使用注册主域名的 `verification`，与 ACME 的 `_acme-challenge` 用途不同。
 6. 后台验证源站 HTTPS、实际 Folio Host、SNI、实例标记、CDN 边缘证书和静态资源 HIT 后，才切 DNS 并检查实际访问。失败保留诊断与恢复入口，不能提前切 DNS 绕过检查。
 
-源站端口为 HTTPS 443，不是容器内部 upstream 地址。HTTP Host 保留用户实际访问的固定或历史版本 Folio 域名；TLS SNI 使用源站泛域名证书覆盖的精确名称 `eat-origin-<实例标识前八位>.<Folio 后缀>`。连接地址仍为独立源站，该 SNI 名称无需指向 CDN。始终校验源站证书，不改 HTTP 回源，不跳过证书校验。
+源站端口为 HTTPS 443，不是容器内部 upstream 地址。HTTP Host 保留用户实际访问的固定或历史版本 Folio 域名；TLS SNI 使用源站泛域名证书覆盖的精确名称 `eat-origin-<实例标识前八位>.<Folio 后缀>`。连接地址仍为独立源站，该 SNI 名称无需指向 CDN。管理员可保存 CDN 回源证书校验开关，后台按该值更新已有规则；重新检查和重启保留选择。EAT 自身的直连探针和 CDN 边缘证书验证始终保持严格 TLS 校验。
+
+新配置默认全球加速、关闭回源证书校验。升级保留已有加速范围；历史校验状态按原来的开启设置回填，此前已明确记录在 `resources.originCertificateVerification.enabled=false` 的人工关闭操作会迁移为关闭，保留现有 CDN 配置摘要、连接状态与 DNS。更新已有规则会先记录变更前后摘要；云端响应丢失或规则仍在下发时可继续恢复，同时拒绝覆盖其他外部配置变化。
 
 Folio 网关目前是 EAT 服务内的模块，Traefik 将 Folio 域名请求转发给该模块，不经过控制台前端。CDN 缓存命中时不访问 EAT；未命中、HTML 和动态接口回源。控制台域名不需要作为每次 CDN 访问的鉴权回调地址。
 
@@ -138,7 +140,7 @@ curl --connect-to '<Folio 探测主机>:443:<CDN CNAME>:443' -D - -o /dev/null \
 - [HTTPS](https://help.aliyun.com/zh/cdn/user-guide/configure-an-ssl-certificate/)、[回源 SNI](https://help.aliyun.com/zh/cdn/user-guide/configure-sni)、[回源 Host](https://help.aliyun.com/zh/cdn/user-guide/configure-the-default-origin-host)：使用上传证书、精确 SNI 和实际访问 Host，需与源站虚拟主机配置匹配。
 - [Let's Encrypt FAQ](https://letsencrypt.org/docs/faq/) 与 [Traefik ACME](https://doc.traefik.io/traefik/v3.5/reference/install-configuration/tls/certificate-resolvers/acme/)：泛域名使用 DNS-01，Traefik 独立签发、存储及续期。外部证书 / resolver 延续原维护责任，EAT 不另起签发流程。
 - [回源请求头限制](https://help.aliyun.com/zh/cdn/user-guide/configure-custom-request-headers/) 与 [出站响应头限制](https://help.aliyun.com/zh/cdn/user-guide/create-a-custom-http-response-header)：泛域名不支持，当前方案已不依赖；[删除指定配置](https://help.aliyun.com/zh/cdn/developer-reference/api-cdn-2018-05-10-deletespecificconfig) 用于迁移旧规则。
-- [域名功能 API 参数](https://help.aliyun.com/zh/cdn/developer-reference/parameters-for-configuring-features-for-domain-names)：回源证书校验优先使用示例 `enable=on`，仅遇明确不支持时尝试表格的 `enabled=on` 并记录，不关闭校验。配置逐功能按每秒不超过三次节流，中断后仅补缺失项。
+- [域名功能 API 参数](https://help.aliyun.com/zh/cdn/developer-reference/parameters-for-configuring-features-for-domain-names)：回源证书校验优先使用示例的 `enable`，仅遇明确不支持时尝试表格的 `enabled` 并记录，两种写法均保留管理员保存的 `on` / `off` 选择。配置逐功能按每秒不超过三次节流，中断后继续恢复。
 
 证书签发免费不等于 CDN 免费。CDN 流量、HTTPS 请求及资源包 / 超额费用按阿里云账单计费。
 

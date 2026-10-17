@@ -11,9 +11,10 @@ const browser = await chromium.launch({
 });
 let state = {
   enabled: false,
-  scope: 'overseas',
+  scope: 'global',
   credentialSource: 'independent',
   autoDns: false,
+  verifyOriginCertificate: false,
   cacheRefresh: { pending: 0, lastCompletedAt: null, lastError: '', retryAt: null },
   status: 'disabled',
   connected: false,
@@ -79,13 +80,14 @@ try {
         if (req.method() === 'PUT') {
           const dto = req.postDataJSON();
           writes++;
-          assert.equal(dto.accessKeySecret, 'ui-test-secret');
+          assert.equal(dto.accessKeySecret, writes === 1 ? 'ui-test-secret' : '');
           state = {
             ...state,
             enabled: dto.enabled,
             scope: dto.scope,
             credentialSource: dto.credentialSource,
             autoDns: dto.autoDns,
+            verifyOriginCertificate: dto.verifyOriginCertificate,
             status: 'checking',
             connected: false,
             accessKeyIdMasked: 'ui-t****-key',
@@ -141,12 +143,22 @@ try {
     assert.equal(await section.getByText('缓存维护：', { exact: false }).count(), 1);
     if (viewport.width === 1440) {
       await section.getByText('CDN 证书同步：尚未上传', { exact: true }).waitFor();
+      assert.equal(await section.getByLabel('CDN 加速区域').inputValue(), 'global');
+      assert.equal(await section.getByRole('checkbox', { name: '校验回源证书' }).isChecked(), false);
       await section.getByRole('checkbox', { name: '启用 CDN' }).check();
+      await section.getByRole('checkbox', { name: '校验回源证书' }).check();
       await section.getByLabel('CDN 加速区域').selectOption('global');
       await section.getByLabel('CDN AccessKey ID', { exact: true }).fill('ui-test-key');
       await section.getByLabel('CDN AccessKey Secret', { exact: true }).fill('ui-test-secret');
       await section.getByRole('button', { name: '保存 CDN 配置' }).click();
       await section.getByText('配置意愿：开启 · 实际接入：未确认接入').waitFor();
+      await section.getByText('HTTPS 回源 · 回源证书校验：开启', { exact: true }).waitFor();
+      assert.equal(state.verifyOriginCertificate, true);
+      assert.equal(await section.getByLabel('CDN AccessKey Secret', { exact: true }).inputValue(), '');
+      await section.getByRole('checkbox', { name: '校验回源证书' }).uncheck();
+      await section.getByRole('button', { name: '保存 CDN 配置' }).click();
+      await section.getByText('HTTPS 回源 · 回源证书校验：关闭', { exact: true }).waitFor();
+      assert.equal(state.verifyOriginCertificate, false);
       assert.equal(await section.getByLabel('CDN AccessKey Secret', { exact: true }).inputValue(), '');
       await section.screenshot({ path: output + '/checking-desktop.png' });
       state = {
@@ -157,6 +169,8 @@ try {
         dnsInstructions: [{ name: 'verification.example.com', type: 'TXT', value: 'verify_isolated_test' }],
       };
       await page.reload();
+      await section.getByText('HTTPS 回源 · 回源证书校验：关闭', { exact: true }).waitFor();
+      assert.equal(await section.getByRole('checkbox', { name: '校验回源证书' }).isChecked(), false);
       await section.getByText('验证 TXT 尚未生效，请核对 DNS 权限').waitFor();
       await section
         .getByText('请在 DNS 服务商完成以下记录后点击“重新检查 / 恢复”：', { exact: true })
@@ -217,7 +231,7 @@ try {
     }
     await context.close();
   }
-  assert.equal(writes, 1);
+  assert.equal(writes, 2);
   assert.equal(retries, 2);
   assert.deepEqual(errors, []);
   console.log(

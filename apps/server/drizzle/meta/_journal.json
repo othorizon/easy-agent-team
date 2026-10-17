@@ -169,6 +169,20 @@
       "when": 1792236139670,
       "tag": "0023_folio_cdn_origin_cache",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792243122792,
+      "tag": "0024_folio_cdn_origin_verification",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792243675983,
+      "tag": "0025_folio_cdn_defaults",
+      "breakpoints": true
     }
   ]
 }

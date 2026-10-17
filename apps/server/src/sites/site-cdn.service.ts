@@ -156,6 +156,71 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
   private async journal(row: SiteCdnRow) {
     await this.store.patch({ resources: { ...row.resources } });
   }
+  private async certificateVerification(
+    row: SiteCdnRow,
+    base: SiteSettingRow,
+    c: CdnCredentials,
+    configs: any[],
+    guard: () => void,
+  ) {
+    const waiting = () => new SiteSetupError('等待回源证书校验配置下发完成，将保留已保存的选择');
+    const settle = async () => {
+      const change = row.resources.certificateVerificationChange!;
+      if (configDigest(configs) === change.from) {
+        if (configs.some((v) => v.Status !== 'success')) throw waiting();
+        guard();
+        await this.phase(row, '更新 CDN 回源证书校验；保留 HTTPS 回源');
+        await this.api.call(c, 'BatchSetCdnDomainConfig', {
+          DomainNames: cdnDomain(base),
+          Functions: JSON.stringify([
+            cdnFunction('origin_certificate_verification', { [change.arg]: change.enabled ? 'on' : 'off' }),
+          ]),
+        });
+        guard();
+        configs = cdnConfigsToCheck(await this.infra.configurations(c, cdnDomain(base)));
+      }
+      const digest = configDigest(configs);
+      if (digest === change.from) throw waiting();
+      if (digest !== change.to) throw new CdnConflict('CDN 配置发生外部修改，已暂停回源证书校验更新');
+      if (configs.some((v) => v.Status !== 'success')) throw waiting();
+      row.resources.configDigest = row.resources.configured ? digest : undefined;
+      row.resources.certificateVerificationChange = undefined;
+      await this.journal(row);
+    };
+    if (row.resources.certificateVerificationChange) await settle();
+    const existing = configs.filter((v) => v.FunctionName === 'origin_certificate_verification');
+    if (!existing.length) return configs;
+    const rule = existing[0];
+    const args = rule.FunctionArgs?.FunctionArg ?? [];
+    const arg = args[0]?.ArgName;
+    if (
+      existing.length !== 1 ||
+      !['enable', 'enabled'].includes(arg) ||
+      !['on', 'off'].includes(args[0]?.ArgValue) ||
+      configDigest([rule]) !== configDigest([cdnFunction('origin_certificate_verification', { [arg]: args[0].ArgValue })])
+    ) throw new CdnConflict('CDN 回源证书校验存在未知参数或条件，保留现有配置');
+    if (row.resources.certificateVerificationArg !== arg) {
+      row.resources.certificateVerificationArg = arg;
+      await this.journal(row);
+    }
+    const desired = cdnFunctions(row, base).find((f) => f.functionName === 'origin_certificate_verification')!;
+    if (configDigest([rule]) === configDigest([desired])) return configs;
+    const known = [...cdnFunctions(row, base), ...legacyCdnFunctions(row, base)];
+    if (configs.some((v) => v !== rule && !known.some((f) => configDigest([v]) === configDigest([f]))))
+      throw new CdnConflict('CDN 存在未知配置，保留现状，请核对外部修改');
+    if (configs.some((v) => v.Status !== 'success')) throw waiting();
+    row.resources.certificateVerificationChange = {
+      from: configDigest(configs),
+      to: configDigest(configs.map((v) => v === rule ? desired : v)),
+      enabled: row.verifyOriginCertificate === true,
+      arg,
+    };
+    // Record both exact fingerprints before the provider call: a lost response can resume
+    // either side of this one-rule change without accepting unrelated external edits.
+    await this.journal(row);
+    await settle();
+    return configs;
+  }
   private async owned(row: SiteCdnRow, base: SiteSettingRow, c: CdnCredentials) {
     const result = await this.api.call(c, 'ListTagResources', {
       ResourceType: 'DOMAIN',
@@ -299,21 +364,14 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
     await this.phase(row, '配置 HTTPS 回源和源站缓存策略');
     let configs = cdnConfigsToCheck(await this.infra.configurations(c, domain));
     guard();
+    const change = row.resources.certificateVerificationChange;
     if (
-      !row.resources.certificateVerificationArg &&
-      configs.some(
-        (v) =>
-          configDigest([v]) ===
-          configDigest([cdnFunction('origin_certificate_verification', { enabled: 'on' })]),
-      )
-    ) {
-      // Resume a partially applied older configuration without rewriting its verified flag.
-      row.resources.certificateVerificationArg = 'enabled';
-      await this.journal(row);
-    }
-    const functions = cdnFunctions(row, base);
-    if (row.resources.configDigest && configDigest(configs) !== row.resources.configDigest)
+      (row.resources.configDigest || change) &&
+      ![row.resources.configDigest, change?.from, change?.to].includes(configDigest(configs))
+    )
       throw new CdnConflict('CDN 配置发生外部修改，已暂停自动覆盖，请恢复原配置后重试');
+    configs = await this.certificateVerification(row, base, c, configs, guard);
+    const functions = cdnFunctions(row, base);
     if (row.resources.cacheModel !== 'origin-v1') {
       // Only remove exact old EAT rules on our tagged domain. Persist intent before each API call;
       // a lost response/restart is safe because absence of an already deleted ConfigId is success.
@@ -368,9 +426,9 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
             e.code !== 'InvalidArgName.ValueNotSupported'
           )
             throw e;
-          // Both names appear in current official documentation. Retry only this mandatory on flag.
+          // Both names appear in current official documentation. Preserve the saved value.
           const alternate = rule.functionArgs[0].argName === 'enable' ? 'enabled' : 'enable';
-          rule.functionArgs = [{ argName: alternate, argValue: 'on' }];
+          rule.functionArgs = [{ argName: alternate, argValue: row.verifyOriginCertificate ? 'on' : 'off' }];
           row.resources.certificateVerificationArg = alternate;
           await this.journal(row);
           guard();

@@ -178,6 +178,8 @@ describe('CDN certificate, signing and DNS adapter contracts', () => {
       });
     const source = server('source'),
       edge = server('cdn');
+    // macOS does not bind arbitrary 127/8 aliases without system configuration.
+    const edgeAddress = process.platform === 'darwin' ? '::1' : '127.0.0.2';
     const listen = (s: https.Server, port: number, host: string) =>
       new Promise<void>((resolve, reject) => {
         s.once('error', reject);
@@ -189,7 +191,7 @@ describe('CDN certificate, signing and DNS adapter contracts', () => {
     try {
       await listen(source, 0, '127.0.0.1');
       const port = (source.address() as { port: number }).port;
-      await listen(edge, port, '127.0.0.2');
+      await listen(edge, port, edgeAddress);
       vi.spyOn(https, 'request').mockImplementation(
         ((options: https.RequestOptions, callback: Parameters<typeof realRequest>[2]) =>
           realRequest(
@@ -203,7 +205,7 @@ describe('CDN certificate, signing and DNS adapter contracts', () => {
       const host = cdnProbeHost(base);
       expect((await f.service.probe(host, '127.0.0.1', '/probe')).body).toBe('source');
       await new Promise<void>((resolve) => setImmediate(resolve));
-      expect((await f.service.probe(host, '127.0.0.2', '/probe')).body).toBe('cdn');
+      expect((await f.service.probe(host, edgeAddress, '/probe')).body).toBe('cdn');
       expect((await f.service.probe(host, '127.0.0.1', '/probe')).body).toBe('source');
       expect(received).toEqual(['source', 'cdn', 'source']);
     } finally {
@@ -336,7 +338,7 @@ describe('CDN certificate, signing and DNS adapter contracts', () => {
       expect(String(e)).not.toContain('test-secret');
     }
   });
-  it('matches the published function argument contract and requires origin certificate verification on', () => {
+  it('matches the published function argument contract and defaults origin certificate verification off', () => {
     for (const fn of cdnFunctions(row, base)) {
       const contract = aliyunCdnContract[fn.functionName];
       expect(contract, fn.functionName).toBeDefined();
@@ -345,7 +347,7 @@ describe('CDN certificate, signing and DNS adapter contracts', () => {
       expect(names.every((name) => [...contract.required, ...(contract.optional ?? [])].includes(name)), fn.functionName).toBe(true);
     }
     expect(cdnFunctions(row, base).find((f) => f.functionName === 'origin_certificate_verification')!.functionArgs)
-      .toEqual([{ argName: 'enable', argValue: 'on' }]);
+      .toEqual([{ argName: 'enable', argValue: 'off' }]);
   });
   it('identifies a rejected function and argument without exposing any response text or argument value', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({

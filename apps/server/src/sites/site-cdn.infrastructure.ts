@@ -59,7 +59,7 @@ export function cdnFunctions(row: SiteCdnRow, base: SiteSettingRow) {
     cdnFunction('https_origin_sni', { enabled: 'on', https_origin_sni: cdnSni(base) }),
     // The official example uses enable, while the parameter table says enabled.
     cdnFunction('origin_certificate_verification', {
-      [row.resources.certificateVerificationArg ?? 'enable']: 'on',
+      [row.resources.certificateVerificationArg ?? 'enable']: row.verifyOriginCertificate ? 'on' : 'off',
     }),
     cdnFunction('path_based_ttl_set', {
       path: '/',

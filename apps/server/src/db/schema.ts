@@ -95,12 +95,18 @@ export interface SiteCdnResources {
   cacheModel?: 'origin-v1';
   legacyConfigRemoval?: { id: string; digest: string }[];
   certificateVerificationArg?: 'enable' | 'enabled';
+  certificateVerificationChange?: {
+    from: string;
+    to: string;
+    enabled: boolean;
+    arg: 'enable' | 'enabled';
+  };
   certificateFingerprint?: string;
 }
 export const siteCdn = pgTable('site_cdn', {
   id: integer('id').primaryKey().default(1),
   enabled: boolean('enabled').notNull().default(false),
-  scope: text('scope').$type<'domestic' | 'global' | 'overseas'>().notNull().default('overseas'),
+  scope: text('scope').$type<'domestic' | 'global' | 'overseas'>().notNull().default('global'),
   credentialSource: text('credential_source')
     .$type<'independent' | 'alidns'>()
     .notNull()
@@ -109,6 +115,7 @@ export const siteCdn = pgTable('site_cdn', {
   accessKeySecretEncrypted: text('access_key_secret_encrypted'),
   originSecretEncrypted: text('origin_secret_encrypted').notNull(),
   autoDns: boolean('auto_dns').notNull().default(false),
+  verifyOriginCertificate: boolean('verify_origin_certificate').notNull().default(false),
   status: text('status').$type<SiteCdnStatus>().notNull().default('disabled'),
   connected: boolean('connected').notNull().default(false),
   phase: text('phase').notNull().default(''),

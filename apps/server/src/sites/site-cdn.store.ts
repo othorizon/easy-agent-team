@@ -41,9 +41,10 @@ export class SiteCdnStore {
     const key = r?.accessKeyIdEncrypted ? decryptSecret(r.accessKeyIdEncrypted) : '';
     return {
       enabled: r?.enabled ?? false,
-      scope: r?.scope ?? 'overseas',
+      scope: r?.scope ?? 'global',
       credentialSource: r?.credentialSource ?? 'independent',
       autoDns: r?.autoDns ?? false,
+      verifyOriginCertificate: r?.verifyOriginCertificate ?? false,
       status: r?.status ?? 'disabled',
       connected: r?.connected ?? false,
       cacheRefresh: {
@@ -123,11 +124,13 @@ export class SiteCdnStore {
           throw new ConflictException('新凭证无法验证本实例 CDN 资源归属，原凭证已保留');
         }
       }
+      const verifyOriginCertificate = dto.verifyOriginCertificate ?? r?.verifyOriginCertificate ?? false;
       const values = {
         enabled: dto.enabled,
         scope: dto.scope,
         credentialSource: dto.credentialSource,
         autoDns: dto.autoDns,
+        verifyOriginCertificate,
         accessKeyIdEncrypted: key,
         accessKeySecretEncrypted: secret,
         originSecretEncrypted: r?.originSecretEncrypted ?? encryptSecret(randomBytes(32).toString('hex')),
@@ -163,6 +166,7 @@ export class SiteCdnStore {
           scope: dto.scope,
           credentialSource: dto.credentialSource,
           autoDns: dto.autoDns,
+          verifyOriginCertificate,
           credentialsChanged: !!(dto.accessKeyId || dto.accessKeySecret),
         },
       });
@@ -174,7 +178,13 @@ export class SiteCdnStore {
     if (!r) throw new ConflictException('请先保存 CDN 配置');
     // Uses the same locking and auditing path, preserving the encrypted credentials.
     return this.save(
-      { enabled: r.enabled, scope: r.scope, credentialSource: r.credentialSource, autoDns: r.autoDns },
+      {
+        enabled: r.enabled,
+        scope: r.scope,
+        credentialSource: r.credentialSource,
+        autoDns: r.autoDns,
+        verifyOriginCertificate: r.verifyOriginCertificate,
+      },
       actorId,
     );
   }

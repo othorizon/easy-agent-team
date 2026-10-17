@@ -119,7 +119,18 @@ const api = {
           if (required.some((name) => !rule.functionArgs.some((a: any) => a.argName === name)))
             throw new CdnApiError(action, 'MissingParameter');
         }
-        configs.push(...rules.map((v: any, i: number) => asCloudConfig(v, 100 + configs.length + i)));
+        for (const rule of rules) {
+          const index = rule.functionName === 'origin_certificate_verification'
+            ? configs.findIndex((v) => v.FunctionName === rule.functionName) : -1;
+          if (index >= 0) {
+            configs[index] = asCloudConfig(rule, configs[index].ConfigId);
+            if (fail === 'verification-deploying') configs[index].Status = 'configuring';
+            if (fail === 'after-verification-update') {
+              fail = '';
+              throw new Error('lost provider response');
+            }
+          } else configs.push(asCloudConfig(rule, 100 + configs.length));
+        }
         return {};
       }
       case 'DeleteSpecificConfig':
@@ -197,6 +208,7 @@ async function request(method: any, path: string, token = admin, payload?: unkno
 const dto = {
   enabled: true,
   scope: 'overseas',
+  verifyOriginCertificate: true,
   credentialSource: 'independent',
   autoDns: true,
   accessKeyId: key,
@@ -301,6 +313,8 @@ describe('Folio CDN control and durable reconciliation (cloud substitutes)', () 
   it('upgraded Folio stays enabled, CDN defaults off; member access is denied', async () => {
     expect(await store.info()).toMatchObject({
       enabled: false,
+      scope: 'global',
+      verifyOriginCertificate: false,
       connected: false,
       status: 'disabled',
       hasSecret: false,
@@ -323,6 +337,96 @@ describe('Folio CDN control and durable reconciliation (cloud substitutes)', () 
     expect(
       (await request('PUT', '/api/admin/site-settings/cdn', admin, { ...dto, scope: 'invalid' })).statusCode,
     ).toBe(400);
+  });
+  it('defaults a new API configuration to global acceleration and verification off while retaining HTTPS', async () => {
+    const saved = await save({
+      enabled: true, credentialSource: 'independent', autoDns: true,
+      accessKeyId: key, accessKeySecret: secret,
+    });
+    expect(saved).toMatchObject({ scope: 'global', verifyOriginCertificate: false });
+    expect(await store.row()).toMatchObject({ scope: 'global', verifyOriginCertificate: false });
+    expect(await tick()).toMatchObject({ status: 'enabled', scope: 'global', verifyOriginCertificate: false });
+    expect(domain.Scope).toBe('global');
+    expect(configs.find((c) => c.FunctionName === 'origin_certificate_verification').FunctionArgs.FunctionArg)
+      .toEqual([{ ArgName: 'enable', ArgValue: 'off' }]);
+    expect(configs.find((c) => c.FunctionName === 'forward_scheme').FunctionArgs.FunctionArg)
+      .toContainEqual({ ArgName: 'scheme_origin', ArgValue: 'https' });
+  });
+  it('persists an explicit off choice through API reads, omitted fields and retry while retaining HTTPS', async () => {
+    expect(await save({ ...dto, verifyOriginCertificate: false })).toMatchObject({ verifyOriginCertificate: false });
+    expect((await request('GET', '/api/admin/site-settings/cdn')).json().verifyOriginCertificate).toBe(false);
+    expect((await tick()).status).toBe('enabled');
+    expect(configs.find((c) => c.FunctionName === 'origin_certificate_verification').FunctionArgs.FunctionArg)
+      .toEqual([{ ArgName: 'enable', ArgValue: 'off' }]);
+    expect(configs.find((c) => c.FunctionName === 'forward_scheme').FunctionArgs.FunctionArg)
+      .toContainEqual({ ArgName: 'scheme_origin', ArgValue: 'https' });
+    const { verifyOriginCertificate: _verification, ...withoutVerification } = dto;
+    expect(await save(withoutVerification)).toMatchObject({ verifyOriginCertificate: false });
+    expect((await request('POST', '/api/admin/site-settings/cdn/retry')).json().verifyOriginCertificate).toBe(false);
+    expect(await tick()).toMatchObject({ status: 'enabled', connected: true, verifyOriginCertificate: false });
+    expect((await request('PUT', '/api/admin/site-settings/cdn', admin, { ...dto, verifyOriginCertificate: 'false' })).statusCode).toBe(400);
+    expect((await db.select().from(schema.auditLogs)).some((a) =>
+      a.action === 'site.cdn.saved' && a.meta?.verifyOriginCertificate === false)).toBe(true);
+  });
+  it('updates only the verification rule on an already connected CDN in either direction', async () => {
+    await save(); await tick();
+    const otherRules = structuredClone(configs.filter((c) => c.FunctionName !== 'origin_certificate_verification'));
+    for (const enabled of [false, true]) {
+      await save({ ...dto, verifyOriginCertificate: enabled });
+      expect(await tick()).toMatchObject({ status: 'enabled', connected: true, verifyOriginCertificate: enabled });
+      expect(configs.find((c) => c.FunctionName === 'origin_certificate_verification').FunctionArgs.FunctionArg)
+        .toEqual([{ ArgName: 'enable', ArgValue: enabled ? 'on' : 'off' }]);
+      expect(configs.filter((c) => c.FunctionName !== 'origin_certificate_verification')).toEqual(otherRules);
+    }
+    expect(calls.filter((c) => c.action === 'AddCdnDomain')).toHaveLength(1);
+    expect(calls.some((c) => c.action === 'DeleteSpecificConfig')).toBe(false);
+  });
+  it('resumes a verification update after a lost response without treating its own change as external', async () => {
+    await save(); await tick();
+    await save({ ...dto, verifyOriginCertificate: false });
+    fail = 'after-verification-update';
+    expect((await tick()).status).toBe('failed');
+    expect((await store.row())!.resources.certificateVerificationChange?.enabled).toBe(false);
+    const applied = calls.filter((c) => c.action === 'BatchSetCdnDomainConfig').length;
+    expect(await tick()).toMatchObject({ status: 'enabled', verifyOriginCertificate: false });
+    expect((await store.row())!.resources.certificateVerificationChange).toBeUndefined();
+    expect(calls.filter((c) => c.action === 'BatchSetCdnDomainConfig')).toHaveLength(applied);
+  });
+  it('waits for verification deployment and rejects unrelated edits during the pending change', async () => {
+    await save(); await tick();
+    await save({ ...dto, verifyOriginCertificate: false });
+    fail = 'verification-deploying';
+    expect((await tick()).status).toBe('failed');
+    const applied = calls.filter((c) => c.action === 'BatchSetCdnDomainConfig').length;
+    expect((await tick()).status).toBe('failed');
+    expect(calls.filter((c) => c.action === 'BatchSetCdnDomainConfig')).toHaveLength(applied);
+    configs.find((c) => c.FunctionName === 'self_defined_cachekey').FunctionArgs.FunctionArg[0].ArgValue = 'external';
+    expect((await tick()).status).toBe('conflict');
+    expect(calls.filter((c) => c.action === 'BatchSetCdnDomainConfig')).toHaveLength(applied);
+  });
+  it('keeps an explicit off choice when the provider requires the alternate flag spelling', async () => {
+    certificateVerificationArg = 'enabled';
+    await save({ ...dto, verifyOriginCertificate: false });
+    expect((await tick()).status).toBe('enabled');
+    expect(configs.find((c) => c.FunctionName === 'origin_certificate_verification').FunctionArgs.FunctionArg)
+      .toEqual([{ ArgName: 'enabled', ArgValue: 'off' }]);
+    await save({ ...dto, verifyOriginCertificate: true });
+    expect((await tick()).status).toBe('enabled');
+    expect(configs.find((c) => c.FunctionName === 'origin_certificate_verification').FunctionArgs.FunctionArg)
+      .toEqual([{ ArgName: 'enabled', ArgValue: 'on' }]);
+  });
+  it('finishes a pending update before applying a newly saved choice', async () => {
+    await save(); await tick();
+    await save({ ...dto, verifyOriginCertificate: false });
+    fail = 'verification-deploying';
+    expect((await tick()).status).toBe('failed');
+    await save({ ...dto, verifyOriginCertificate: true });
+    configs.find((c) => c.FunctionName === 'origin_certificate_verification').Status = 'success';
+    fail = '';
+    expect(await tick()).toMatchObject({ status: 'enabled', verifyOriginCertificate: true });
+    expect((await store.row())!.resources.certificateVerificationChange).toBeUndefined();
+    expect(configs.find((c) => c.FunctionName === 'origin_certificate_verification').FunctionArgs.FunctionArg)
+      .toEqual([{ ArgName: 'enable', ArgValue: 'on' }]);
   });
   it('checks real API permission failures before any DNS/cloud mutation', async () => {
     await save();

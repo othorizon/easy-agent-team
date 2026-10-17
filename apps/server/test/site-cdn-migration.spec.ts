@@ -7,7 +7,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 const url = process.env.TEST_DATABASE_URL ?? 'postgres://dev@127.0.0.1:5433/eat_test';
 const pool = new Pool({ connectionString: url });
-let previous: string, withPurges: string;
+let previous: string, withPurges: string, beforeVerification: string;
 async function migrationFolder(before: number) {
   const destination = await mkdtemp(join(tmpdir(), 'eat-pre-cdn-'));
   await mkdir(join(destination, 'meta'));
@@ -38,6 +38,7 @@ beforeAll(async () => {
     throw new Error('Migration test requires isolated _test database');
   previous = await migrationFolder(20);
   withPurges = await migrationFolder(22);
+  beforeVerification = await migrationFolder(24);
 });
 beforeEach(async () => {
   await pool.query('drop schema public cascade;create schema public;drop schema if exists drizzle cascade');
@@ -49,6 +50,7 @@ afterAll(async () => {
   await pool.end();
   if (previous) await rm(previous, { recursive: true, force: true });
   if (withPurges) await rm(withPurges, { recursive: true, force: true });
+  if (beforeVerification) await rm(beforeVerification, { recursive: true, force: true });
 });
 describe('CDN additive migration', () => {
   it('preserves every old setting and leaves CDN absent/off without enqueuing DNS or cloud mutations', async () => {
@@ -88,7 +90,8 @@ describe('CDN additive migration', () => {
     await migrate(drizzle(pool), { migrationsFolder: resolve('drizzle') });
     await expectInvalidation();
     expect((await pool.query('select * from site_setting')).rows).toEqual(settings);
-    expect((await pool.query('select * from site_cdn')).rows).toEqual(cdn);
+    expect((await pool.query('select * from site_cdn')).rows)
+      .toEqual(cdn.map((r) => ({ ...r, verify_origin_certificate: true })));
     expect((await pool.query('select * from site')).rows).toEqual(sites);
     expect((await pool.query('select * from site_cdn_purge')).rows).toEqual([]);
     await pool.query('update site set current_version_id = gen_random_uuid() where id = $1', [site]);
@@ -108,5 +111,27 @@ describe('CDN additive migration', () => {
     const jobs = (await pool.query('select url, task_ids from site_cdn_purge')).rows;
     expect(jobs).toHaveLength(2);
     expect(jobs.every((j) => j.url === `https://migration.sites.example.com/__eat/cdn/${site}/` && !j.task_ids.length)).toBe(true);
+  });
+  it.each([undefined, true, false])('preserves an existing explicit verification override (%s) without changing resources', async (override) => {
+    await migrate(drizzle(pool), { migrationsFolder: beforeVerification });
+    const resources = {
+      owned: true, configured: true, configDigest: 'accepted-cloud-digest',
+      ...(override === undefined ? {} : { originCertificateVerification: { enabled: override } }),
+    };
+    await pool.query(`insert into site_cdn(enabled, connected, status, origin_secret_encrypted, resources)
+      values(true, true, 'enabled', 'existing-encrypted-secret', $1::jsonb)`, [JSON.stringify(resources)]);
+    await migrate(drizzle(pool), { migrationsFolder: resolve('drizzle') });
+    expect((await pool.query('select verify_origin_certificate, resources, connected, status from site_cdn')).rows[0])
+      .toEqual({ verify_origin_certificate: override !== false, resources, connected: true, status: 'enabled' });
+  });
+  it('defaults new database rows to global and verification off while preserving saved choices on migration reruns', async () => {
+    await migrate(drizzle(pool), { migrationsFolder: resolve('drizzle') });
+    expect((await pool.query(`insert into site_cdn(origin_secret_encrypted)
+      values('isolated-secret') returning scope, verify_origin_certificate`)).rows[0])
+      .toEqual({ scope: 'global', verify_origin_certificate: false });
+    await pool.query("update site_cdn set scope='overseas', verify_origin_certificate=true");
+    await migrate(drizzle(pool), { migrationsFolder: resolve('drizzle') });
+    expect((await pool.query('select scope, verify_origin_certificate from site_cdn')).rows[0])
+      .toEqual({ scope: 'overseas', verify_origin_certificate: true });
   });
 });
