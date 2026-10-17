@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { createServer } from 'node:http';
+import { captureFolioUI } from './folio-ui-evidence.mjs';
 
 const platform = process.env.EAT_UI_URL ?? 'http://127.0.0.1:5173';
 const output = process.env.EAT_UI_SHOTS ?? '/tmp/eat-site-ui';
@@ -239,6 +240,8 @@ const waitText = (page, text) => page.getByText(text, { exact: true }).first().w
 const shot = (page, name) => page.screenshot({ path: output + '/' + name + '.png', fullPage: true });
 try {
   await mkdir(output, { recursive: true });
+  if (process.env.EAT_UI_CAPTURE === '1')
+    await captureFolioUI({ context, platform, published, output, site, user });
   const ctx = await context();
   const page = await ctx.newPage();
   await page.goto(platform + '/folios');

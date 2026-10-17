@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
@@ -15,6 +15,7 @@ import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
+import './folios/folio.css';
 
 const statuses: Record<string, string> = {
   disabled: '未启用',
@@ -40,6 +41,10 @@ const defaults: UpdateSiteSettings = {
   upstreamPort: 3000,
   gatewayTarget: '',
   autoDns: false,
+  ossAccessKeyId: '',
+  ossAccessKeySecret: '',
+  dnsAccessKeyId: '',
+  dnsAccessKeySecret: '',
 };
 const formValues = (r: SiteSettingsInfo): UpdateSiteSettings => ({
   ...r,
@@ -59,6 +64,7 @@ export function FolioSettingsCard() {
     refetchInterval: (q) => (busyStatuses.includes(q.state.data?.status ?? '') ? 1500 : false),
   });
   const form = useForm<UpdateSiteSettings>({ defaultValues: defaults });
+  const initialized = useRef(false);
   const {
     register,
     watch,
@@ -67,7 +73,10 @@ export function FolioSettingsCard() {
     formState: { isDirty },
   } = form;
   useEffect(() => {
-    if (settings.data && !isDirty) reset(formValues(settings.data));
+    if (settings.data && (!initialized.current || !isDirty)) {
+      reset(formValues(settings.data));
+      initialized.current = true;
+    }
   }, [settings.data, isDirty, reset]);
   const mode = watch('tlsMode');
   const applicationId = watch('platformApplicationId');
@@ -99,7 +108,8 @@ export function FolioSettingsCard() {
     onError: (e: Error) => toast.error(e.message),
   });
   const action = useMutation({
-    mutationFn: (name: 'enable' | 'disable') => api<SiteSettingsInfo>('POST', `/api/admin/site-settings/${name}`),
+    mutationFn: (name: 'enable' | 'disable') =>
+      api<SiteSettingsInfo>('POST', `/api/admin/site-settings/${name}`),
     onSuccess: (data) => {
       cache.setQueryData(['site-settings'], data);
       refresh();
@@ -111,7 +121,7 @@ export function FolioSettingsCard() {
       void cache.invalidateQueries({ queryKey: ['sites-capability'] });
   }, [r?.status, cache]);
   return (
-    <Card id="static-sites">
+    <Card id="static-sites" className="folio-admin-settings">
       <CardContent className="space-y-5 pt-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="font-semibold">Folio 发布</h2>
@@ -140,6 +150,9 @@ export function FolioSettingsCard() {
             disabled={frozen || save.isPending || action.isPending}
             className="grid min-w-0 gap-4 sm:grid-cols-2 [&_input:disabled]:opacity-100 [&_select:disabled]:opacity-100"
           >
+            <div className="folio-config-heading sm:col-span-2">
+              <span>1</span>访问入口
+            </div>
             <label className="space-y-1 text-sm sm:col-span-2">
               EAT 控制台 HTTPS 地址
               <Input {...register('platformUrl')} placeholder="https://eat.example.com" required />
@@ -150,7 +163,9 @@ export function FolioSettingsCard() {
             <label className="space-y-1 text-sm">
               发布域名后缀
               <Input {...register('domain')} placeholder="sites.example.com" required />
-              <span className="text-xs text-muted-foreground">应与控制台域名分开，例如 demo.sites.example.com</span>
+              <span className="text-xs text-muted-foreground">
+                应与控制台域名分开，例如 demo.sites.example.com
+              </span>
             </label>
             <label className="space-y-1 text-sm">
               部署入口 IP / 主机名
@@ -171,7 +186,9 @@ export function FolioSettingsCard() {
                 />
                 <DokployAppPicker
                   value={applicationId}
-                  onPick={(app) => setValue('platformApplicationId', app.applicationId, { shouldDirty: true })}
+                  onPick={(app) =>
+                    setValue('platformApplicationId', app.applicationId, { shouldDirty: true })
+                  }
                 />
               </div>
             </div>
@@ -188,8 +205,13 @@ export function FolioSettingsCard() {
             <label className="space-y-1 text-sm">
               EAT 内部地址（可选）
               <Input {...register('upstreamUrl')} placeholder="留空自动使用所选应用的容器地址" />
-              <span className="text-xs text-muted-foreground">需要自定义时填写 Traefik 能访问的服务根地址。</span>
+              <span className="text-xs text-muted-foreground">
+                需要自定义时填写 Traefik 能访问的服务根地址。
+              </span>
             </label>
+            <div className="folio-config-heading sm:col-span-2">
+              <span>2</span>文件存储
+            </div>
             <label className="space-y-1 text-sm">
               OSS 地域
               <Input {...register('ossRegion')} placeholder="oss-cn-hangzhou" required />
@@ -204,7 +226,9 @@ export function FolioSettingsCard() {
                 type="password"
                 autoComplete="new-password"
                 {...register('ossAccessKeyId')}
-                placeholder={r?.ossAccessKeyIdMasked ? `已保存 ${r.ossAccessKeyIdMasked}，留空保留` : 'AccessKey ID'}
+                placeholder={
+                  r?.ossAccessKeyIdMasked ? `已保存 ${r.ossAccessKeyIdMasked}，留空保留` : 'AccessKey ID'
+                }
               />
             </label>
             <label className="space-y-1 text-sm">
@@ -216,6 +240,9 @@ export function FolioSettingsCard() {
                 placeholder={r?.hasOssSecret ? '已保存，留空保留' : 'AccessKey Secret'}
               />
             </label>
+            <div className="folio-config-heading sm:col-span-2">
+              <span>3</span>HTTPS 与证书
+            </div>
             <label className="space-y-1 text-sm sm:col-span-2">
               HTTPS 证书方式
               <select className={selectClass} {...register('tlsMode')}>
@@ -263,7 +290,8 @@ export function FolioSettingsCard() {
                 </p>
                 <label className="flex items-center gap-2 text-sm sm:col-span-2">
                   <input type="checkbox" {...register('autoDns')} />
-                  自动添加 *.{domain || 'Folio 域名'} → {target || '部署入口'} 的解析（仅在不存在时添加，不覆盖已有记录）
+                  自动添加 *.{domain || 'Folio 域名'} → {target || '部署入口'}{' '}
+                  的解析（仅在不存在时添加，不覆盖已有记录）
                 </label>
               </>
             )}
@@ -272,7 +300,9 @@ export function FolioSettingsCard() {
                 <label className="space-y-1 text-sm sm:col-span-2">
                   已有泛域名证书
                   <select className={selectClass} {...register('certificateId')} required>
-                    <option value="">{options.isLoading ? '正在读取…' : '请选择 EAT 所在服务器上的证书'}</option>
+                    <option value="">
+                      {options.isLoading ? '正在读取…' : '请选择 EAT 所在服务器上的证书'}
+                    </option>
                     {options.data?.certificates.map((c) => (
                       <option value={c.id} key={c.id}>
                         {c.name} · {c.domains} · 到期 {c.expiresAt.slice(0, 10)}

@@ -8,15 +8,17 @@ import {
   MessageSquare,
   MousePointer2,
   RefreshCw,
-  Send,
   Trash2,
   X,
 } from 'lucide-react';
 import { api, ApiError, getStoredUser, getToken } from '../api';
 import { Button } from '../components/ui/button';
-import { Input, Textarea } from '../components/ui/input';
+import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
 import { cn } from '../lib/utils';
+import { FolioConnectionState } from './folios/folio-ui';
+import { FolioComposer as Composer, type MentionUser } from './folios/FolioComposer';
+import './folios/folio.css';
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -26,130 +28,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '../components/ui/alert-dialog';
-
-type MentionUser = { id: string; name: string; email: string };
-
-function Composer({
-  users,
-  submit,
-  label,
-  onCancel,
-  autoFocus = false,
-}: {
-  users: MentionUser[];
-  submit: (content: string, mentions: string[]) => Promise<void>;
-  label: string;
-  onCancel?: () => void;
-  autoFocus?: boolean;
-}) {
-  const [content, setContent] = useState('');
-  const [mentions, setMentions] = useState<MentionUser[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const query = /(?:^|\s)@([^\s@]*)$/.exec(content)?.[1];
-  const matches =
-    query === undefined
-      ? []
-      : users.filter((u) => `${u.name} ${u.email}`.toLowerCase().includes(query.toLowerCase())).slice(0, 12);
-  return (
-    <form
-      className="space-y-2"
-      onSubmit={async (e) => {
-        e.preventDefault();
-        if (busy || !content.trim()) return;
-        setBusy(true);
-        setError('');
-        try {
-          await submit(
-            content,
-            mentions.map((u) => u.id),
-          );
-          setContent('');
-          setMentions([]);
-        } catch (e) {
-          setError((e as Error).message);
-        } finally {
-          setBusy(false);
-        }
-      }}
-    >
-      <div className="relative">
-        <Textarea
-          aria-label={onCancel ? '回复内容' : '评论内容'}
-          autoFocus={autoFocus}
-          required
-          maxLength={10000}
-          disabled={busy}
-          className="min-h-24 max-h-40 resize-y rounded-xl bg-background"
-          value={content}
-          placeholder={onCancel ? '写下回复，输入 @ 提及同事…' : '分享想法或提出建议，输入 @ 提及同事…'}
-          onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              e.currentTarget.form?.requestSubmit();
-            }
-          }}
-          onChange={(e) => {
-            setContent(e.target.value);
-            setMentions(mentions.filter((u) => e.target.value.includes('@' + u.name)));
-          }}
-        />
-        {query !== undefined && (
-          <div
-            className="absolute inset-x-0 bottom-full z-10 mb-1 max-h-40 overflow-auto rounded-lg border bg-popover shadow-md"
-            aria-label="提及同事"
-          >
-            {matches.length ? (
-              matches.map((u) => (
-                <button
-                  key={u.id}
-                  type="button"
-                  className="block w-full px-3 py-2 text-left text-sm hover:bg-accent focus-visible:bg-accent"
-                  onClick={() => {
-                    setContent(content.replace(/@[^\s@]*$/, '@' + u.name + ' '));
-                    setMentions([...mentions.filter((m) => m.id !== u.id), u]);
-                  }}
-                >
-                  {u.name} <span className="text-xs text-muted-foreground">{u.email}</span>
-                </button>
-              ))
-            ) : (
-              <p className="p-3 text-xs text-muted-foreground">没有匹配的同事</p>
-            )}
-          </div>
-        )}
-      </div>
-      {!!mentions.length && (
-        <div className="flex flex-wrap gap-1">
-          {mentions.map((u) => (
-            <Badge key={u.id} variant="secondary">
-              @{u.name}
-            </Badge>
-          ))}
-        </div>
-      )}
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-muted-foreground">Ctrl / ⌘ + Enter 发送</span>
-        <div className="flex gap-2">
-          {onCancel && (
-            <Button type="button" variant="ghost" disabled={busy} onClick={onCancel}>
-              取消
-            </Button>
-          )}
-          <Button type="submit" loading={busy} disabled={!content.trim()}>
-            <Send />
-            {label}
-          </Button>
-        </div>
-      </div>
-    </form>
-  );
-}
 
 export function FolioDiscussion({
   slug,
@@ -328,9 +206,15 @@ export function FolioDiscussion({
     };
   }, [slug, user?.id, session, proof]);
   useEffect(() => {
-    if (targetThread && !loading && threads.some((t) => t.id === targetThread))
-      document.getElementById('thread-' + targetThread)?.scrollIntoView({ block: 'nearest' });
-  }, [targetThread, threads, loading]);
+    if (targetThread && !loading && threads.some((t) => t.id === targetThread)) {
+      const target = document.getElementById('thread-' + targetThread);
+      const list = target?.parentElement;
+      if (target && list && embedded)
+        list.scrollTop += target.getBoundingClientRect().top - list.getBoundingClientRect().top;
+      else if (target && !embedded)
+        window.scrollTo({ top: window.scrollY + target.getBoundingClientRect().top - 24 });
+    }
+  }, [targetThread, threads, loading, embedded]);
   useEffect(() => {
     if (!embedded || window.parent === window) return;
     // 由服务器验证父源为本站固定域名或此版本域名，不信任 URL 参数本身。
@@ -425,7 +309,7 @@ export function FolioDiscussion({
   const composer = versionId && !needsAccess && (
     <div
       className={cn(
-        'space-y-3',
+        'folio-composer space-y-3',
         embedded ? 'shrink-0 border-t bg-background px-4 py-3' : 'rounded-xl border bg-muted/20 p-4',
       )}
     >
@@ -506,8 +390,16 @@ export function FolioDiscussion({
   );
 
   return (
-    <section className={cn(embedded ? 'flex h-full min-h-0 flex-col' : 'space-y-5')} aria-label="Folio 评论">
-      <div className={cn('space-y-4', embedded && 'shrink-0 border-b px-4 pb-3 pt-4')}>
+    <section
+      className={cn(
+        'folio-discussion',
+        embedded ? 'folio-discussion-embedded flex h-full min-h-0 flex-col' : 'folio-discussion-workspace',
+      )}
+      aria-label="Folio 评论"
+    >
+      <div
+        className={cn('folio-discussion-heading space-y-4', embedded && 'shrink-0 border-b px-4 pb-3 pt-4')}
+      >
         <div className="flex items-start justify-between gap-2">
           <div>
             <h2 className="flex items-center gap-2 font-semibold">
@@ -536,7 +428,7 @@ export function FolioDiscussion({
           </div>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="inline-flex rounded-lg bg-muted p-1" role="group" aria-label="评论状态">
+          <div className="folio-comment-filters" role="group" aria-label="评论状态">
             {(
               [
                 ['', '全部'],
@@ -604,7 +496,10 @@ export function FolioDiscussion({
         </div>
       )}
       <div
-        className={cn('space-y-3', embedded && 'min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3')}
+        className={cn(
+          'folio-thread-list space-y-3',
+          embedded && 'min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3',
+        )}
         aria-busy={loading}
       >
         {error && (
@@ -676,7 +571,7 @@ export function FolioDiscussion({
                 id={'thread-' + t.id}
                 key={t.id}
                 className={cn(
-                  'space-y-3 rounded-xl border bg-card p-4',
+                  'folio-thread space-y-3 rounded-xl border bg-card p-4',
                   t.id === targetThread && 'ring-2 ring-ring/40',
                 )}
               >
@@ -708,7 +603,12 @@ export function FolioDiscussion({
                     className={cn('space-y-2', index > 0 && 'ml-2 border-l-2 pl-3')}
                   >
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-                      <span className="font-medium">{c.authorName}</span>
+                      <span className="folio-author">
+                        <span className="folio-avatar" aria-hidden="true">
+                          {c.authorName.slice(0, 1)}
+                        </span>
+                        {c.authorName}
+                      </span>
                       <time
                         className="text-muted-foreground"
                         dateTime={c.createdAt}
@@ -937,7 +837,7 @@ export function FolioCommentPanelPage() {
   const { slug = '' } = useParams();
   const [params] = useSearchParams();
   return (
-    <main className="h-dvh overflow-hidden bg-background">
+    <main className="folio-embed-page h-dvh overflow-hidden bg-background">
       <FolioDiscussion
         key={slug}
         slug={slug}
@@ -979,5 +879,5 @@ export function FolioCommentLoginPage() {
     window.opener.postMessage({ type: 'eat:login-ready' }, location.origin);
     return () => window.removeEventListener('message', listener);
   }, []);
-  return <p role="status">{error || '正在连接评论面板…'}</p>;
+  return <FolioConnectionState error={error} message="正在连接评论面板…" />;
 }

@@ -1,0 +1,983 @@
+/* Folio uses the platform's neutral tokens; these rules stay within Folio surfaces. */
+.folio-surface {
+  min-width: 0;
+  text-wrap: pretty;
+}
+.folio-heading {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.folio-heading > div:last-child {
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+}
+.folio-heading h1 {
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: -0.04em;
+  overflow-wrap: anywhere;
+}
+.folio-heading h1 + p {
+  margin-top: 6px;
+}
+.folio-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  flex-shrink: 0;
+  border-radius: 14px;
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+.folio-mark > svg {
+  width: 25px;
+  height: 25px;
+  stroke-width: 1.5;
+}
+.folio-mark-small {
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--muted);
+  color: var(--foreground);
+}
+.folio-mark-small > svg {
+  width: 20px;
+  height: 20px;
+}
+.folio-library {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+.folio-library-intro {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.folio-library-intro > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--foreground);
+  font-size: 13px;
+}
+.folio-library-intro svg {
+  width: 15px;
+  height: 15px;
+}
+.folio-library-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.folio-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.folio-filter > button {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 36px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 150ms;
+}
+.folio-filter > button:hover {
+  background: var(--muted);
+}
+.folio-filter > button[aria-pressed='true'] {
+  background: var(--secondary);
+  color: var(--foreground);
+  font-weight: 600;
+}
+.folio-filter > button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.folio-filter > button > span {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+.folio-search {
+  position: relative;
+  display: block;
+  width: 260px;
+}
+.folio-search > svg {
+  position: absolute;
+  left: 12px;
+  top: 11px;
+  width: 15px;
+  height: 15px;
+  color: var(--muted-foreground);
+}
+.folio-search input {
+  padding-left: 35px;
+  box-shadow: none;
+  height: 38px;
+  border-radius: 8px;
+}
+.folio-library-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.folio-project {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px 22px 16px;
+  background: var(--card);
+  transition:
+    border-color 150ms,
+    box-shadow 150ms;
+}
+.folio-project:hover,
+.folio-project:focus-within {
+  border-color: var(--ring);
+  box-shadow: 0 4px 16px #00000006;
+}
+.folio-project-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 22px;
+}
+.folio-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+  color: var(--success);
+  font-size: 12px;
+  font-weight: 500;
+}
+.folio-status i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.folio-status-draft {
+  color: var(--muted-foreground);
+}
+.folio-project h2 {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+.folio-project h2 a:hover {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.folio-project-description {
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.7;
+  margin-top: 8px;
+  min-height: 44px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.folio-project-url {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 14px 0 22px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted-foreground);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.folio-project-url:hover {
+  color: var(--foreground);
+}
+.folio-project-url svg,
+.folio-project-action svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+.folio-project-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 15px;
+}
+.folio-access {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.folio-access svg {
+  width: 13px;
+  height: 13px;
+}
+.folio-project-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 0;
+}
+.folio-project-date {
+  margin-top: 12px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.folio-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  padding: 56px 24px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  text-align: center;
+}
+.folio-empty > svg {
+  width: 32px;
+  height: 32px;
+  color: var(--muted-foreground);
+  margin-bottom: 4px;
+  stroke-width: 1.25;
+}
+.folio-empty h2 {
+  font-weight: 600;
+  font-size: 17px;
+}
+.folio-empty p {
+  max-width: 440px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--muted-foreground);
+}
+.folio-empty button {
+  margin-top: 8px;
+}
+.folio-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.folio-back {
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.folio-back:hover {
+  color: var(--foreground);
+}
+.folio-linkbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--muted) 45%, var(--background));
+}
+.folio-link-url {
+  flex: 1;
+  min-width: 0;
+  flex-basis: 120px;
+  overflow-wrap: anywhere;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.folio-link-url:hover {
+  color: var(--foreground);
+  text-decoration: underline;
+}
+.folio-linkbar button {
+  height: 30px;
+  padding-inline: 10px;
+  font-size: 12px;
+  background: var(--background);
+  box-shadow: none;
+}
+.folio-detail-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.folio-tabs[data-slot='tabs-list'] {
+  width: 100%;
+  gap: 28px;
+  padding: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+}
+.folio-tabs [data-slot='tabs-trigger'] {
+  position: relative;
+  padding: 0 2px 14px;
+  gap: 7px;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  font-size: 13px;
+}
+.folio-tabs [data-slot='tabs-trigger'][data-state='active'] {
+  background: transparent;
+  box-shadow: none;
+  border-bottom-color: var(--foreground);
+  font-weight: 600;
+}
+.folio-discussion-card[data-slot='card'] {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.folio-discussion-body[data-slot='card-content'] {
+  padding: 0;
+}
+.folio-discussion {
+  min-width: 0;
+  text-wrap: pretty;
+}
+.folio-discussion-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 286px;
+  gap: 20px 24px;
+  align-items: start;
+}
+.folio-discussion-heading {
+  grid-column: 1 / -1;
+}
+.folio-discussion-heading h2 {
+  font-size: 16px;
+  letter-spacing: -0.02em;
+}
+.folio-discussion-workspace > .folio-composer {
+  grid-column: 2;
+  grid-row: 2;
+  position: sticky;
+  top: 24px;
+  padding: 18px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklch, var(--muted) 45%, var(--background));
+}
+.folio-composer textarea {
+  min-height: 128px;
+  font-size: 13px;
+  line-height: 1.7;
+  border-radius: 8px;
+  box-shadow: none;
+}
+.folio-composer form > div:last-child {
+  flex-wrap: wrap;
+  row-gap: 12px;
+}
+.folio-composer form > div:last-child > span {
+  font-size: 10px;
+}
+.folio-composer form > div:last-child > div {
+  margin-left: auto;
+}
+.folio-composer button[type='submit'] {
+  font-size: 12px;
+  padding-inline: 12px;
+}
+.folio-thread-list {
+  min-width: 0;
+}
+.folio-discussion-workspace > .folio-thread-list {
+  grid-column: 1;
+  grid-row: 2 / span 3;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--card);
+}
+.folio-discussion-workspace > .folio-thread-list > .folio-thread {
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  padding: 22px;
+  margin-top: 0;
+}
+.folio-discussion-workspace > .folio-thread-list > .folio-thread:last-child {
+  border-bottom: 0;
+}
+.folio-thread p {
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.folio-thread > div:first-child {
+  font-size: 11px;
+  gap: 10px;
+}
+.folio-author {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 12px;
+}
+.folio-avatar {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  color: var(--muted-foreground);
+  border-radius: 50%;
+  font-size: 11px;
+}
+.folio-thread time {
+  font-size: 11px;
+}
+.folio-thread > div > p {
+  padding-left: 34px;
+}
+.folio-thread > div > p.italic {
+  padding-left: 0;
+}
+.folio-thread button,
+.folio-thread a[data-slot='button'] {
+  box-shadow: none;
+  font-size: 11px;
+}
+.folio-thread > details {
+  padding-top: 1px;
+  font-size: 11px;
+}
+.folio-thread blockquote {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 9px 12px;
+  background: var(--muted);
+}
+.folio-comment-filters {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  background: var(--muted);
+  border-radius: 8px;
+}
+.folio-comment-filters > button {
+  font-size: 12px;
+  height: 29px;
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+.folio-comment-filters > button[aria-pressed='true'] {
+  background: var(--card);
+  border-color: var(--border);
+  color: var(--foreground);
+}
+.folio-releases > div:first-child h1 {
+  font-size: 17px;
+}
+.folio-releases > div:first-child p {
+  font-size: 12px;
+}
+.folio-release-table {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.folio-release-table table {
+  min-width: 600px;
+}
+.folio-release-table th {
+  padding: 14px 20px;
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.folio-release-table td {
+  padding: 22px 20px;
+  vertical-align: top;
+  font-size: 13px;
+}
+.folio-release-table tbody tr {
+  transition: background-color 150ms;
+}
+.folio-release-table tbody tr:hover {
+  background: var(--muted);
+}
+.folio-release-table td button,
+.folio-release-table td a[data-slot='button'] {
+  box-shadow: none;
+}
+.folio-settings-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.folio-settings-panel {
+  box-shadow: none;
+}
+.folio-settings-panel > div {
+  padding: 24px;
+}
+.folio-settings-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px;
+}
+.folio-settings-title {
+  grid-column: 1 / -1;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.folio-settings-title > p {
+  font-size: 12px;
+}
+.folio-settings-form > label {
+  min-width: 0;
+}
+.folio-settings-form textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+.folio-settings-form input,
+.folio-settings-form textarea {
+  box-shadow: none;
+}
+.folio-settings-section {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 24px;
+  padding-top: 22px;
+  border-top: 1px solid var(--border);
+}
+.folio-settings-section h3 {
+  grid-column: 1 / -1;
+  font-size: 14px;
+  font-weight: 600;
+}
+.folio-settings-section > p {
+  margin-top: 22px;
+  line-height: 1.7;
+}
+.folio-settings-save {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 22px;
+}
+.folio-settings-save p {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.folio-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+}
+.folio-checkbox input {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  margin-top: 3px;
+  accent-color: var(--primary);
+}
+.folio-checkbox small,
+.folio-routing span > span {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.folio-routing {
+  grid-column: 1 / -1;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--muted);
+}
+.folio-danger[data-slot='card'] {
+  border-color: color-mix(in oklch, var(--destructive) 25%, var(--border));
+  box-shadow: none;
+}
+.folio-danger > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px 24px;
+}
+.folio-danger h2 {
+  font-size: 14px;
+}
+.folio-danger p {
+  max-width: 580px;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.folio-dialog {
+  text-wrap: pretty;
+}
+.folio-dialog-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--muted);
+}
+.folio-dialog-icon svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 1.5;
+}
+.folio-create-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+.folio-create-fields > label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  min-width: 0;
+}
+.folio-create-fields input,
+.folio-create-fields textarea {
+  box-shadow: none;
+  font-weight: 400;
+}
+.folio-create-fields small {
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.7;
+  color: var(--muted-foreground);
+}
+.folio-create-fields > .folio-checkbox {
+  flex-direction: row;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.folio-field-wide {
+  grid-column: 1 / -1;
+}
+.folio-select {
+  width: 100%;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 400;
+}
+.folio-static-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.folio-static-note svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.folio-form-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+.folio-upload-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 36px 16px;
+  border: 1px dashed var(--ring);
+  background: var(--muted);
+  border-radius: 10px;
+}
+.folio-upload-zone > p {
+  font-size: 14px;
+  font-weight: 500;
+}
+.folio-upload-zone > svg {
+  width: 36px;
+  height: 36px;
+  stroke-width: 1.25;
+  margin-bottom: 18px;
+}
+.folio-connection {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 65vh;
+  text-align: center;
+  padding: 24px;
+}
+.folio-connection-icon {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--muted);
+}
+.folio-connection h1 {
+  font-size: 20px;
+  font-weight: 600;
+}
+.folio-connection p,
+.folio-connection a {
+  max-width: 400px;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+.folio-connection a {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.folio-discussion-embedded .folio-discussion-heading {
+  padding: 18px 16px 14px;
+}
+.folio-discussion-embedded .folio-thread-list {
+  background: var(--muted);
+  padding: 12px;
+}
+.folio-discussion-embedded .folio-thread {
+  padding: 16px;
+  box-shadow: none;
+  border-radius: 10px;
+}
+.folio-discussion-embedded .folio-thread > div > p {
+  padding-left: 0;
+}
+.folio-discussion-embedded .folio-composer {
+  padding: 14px 16px;
+  background: var(--background);
+}
+.folio-discussion-embedded .folio-composer textarea {
+  min-height: 86px;
+}
+.folio-admin-settings[data-slot='card'] {
+  box-shadow: none;
+}
+.folio-admin-settings > div {
+  padding: 24px;
+}
+.folio-config-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 22px;
+  margin-top: 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.folio-config-heading span {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted-foreground);
+  background: var(--muted);
+}
+.folio-admin-settings label {
+  font-size: 12px;
+  line-height: 1.8;
+}
+.folio-admin-settings input,
+.folio-admin-settings select {
+  margin-top: 6px;
+  box-shadow: none;
+}
+.folio-admin-settings input[type='checkbox'] {
+  margin-top: 0;
+}
+@media (max-width: 1199px) and (min-width: 1024px) {
+  .folio-discussion-workspace {
+    grid-template-columns: minmax(0, 1fr) 250px;
+    gap: 20px;
+  }
+}
+@media (max-width: 767px) {
+  .folio-heading {
+    align-items: flex-start;
+  }
+  .folio-heading h1 {
+    font-size: 24px;
+  }
+  .folio-heading .folio-mark {
+    display: none;
+  }
+  .folio-library-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .folio-library {
+    gap: 22px;
+  }
+  .folio-library-intro > span:last-child {
+    display: none;
+  }
+  .folio-library-toolbar {
+    gap: 14px;
+  }
+  .folio-search {
+    width: 100%;
+  }
+  .folio-project {
+    padding: 20px;
+  }
+  .folio-project-description {
+    min-height: auto;
+  }
+  .folio-project-top {
+    margin-bottom: 18px;
+  }
+  .folio-discussion-workspace {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .folio-discussion-workspace > .folio-composer {
+    position: static;
+    width: 100%;
+  }
+  .folio-discussion-workspace > .folio-thread-list {
+    width: 100%;
+  }
+  .folio-discussion-heading {
+    width: 100%;
+  }
+  .folio-discussion-workspace .folio-thread {
+    padding: 18px;
+  }
+  .folio-settings-form,
+  .folio-settings-section {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .folio-settings-section > p {
+    margin-top: 0;
+  }
+  .folio-settings-save {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .folio-settings-panel > div {
+    padding: 20px;
+  }
+  .folio-danger > div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 16px;
+    padding: 20px;
+  }
+  .folio-create-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .folio-create-fields > label {
+    grid-column: 1;
+  }
+  .folio-tabs[data-slot='tabs-list'] {
+    gap: 24px;
+  }
+  .folio-linkbar {
+    gap: 12px;
+  }
+  .folio-link-url {
+    flex-basis: 100%;
+  }
+  .folio-linkbar > button {
+    order: 2;
+  }
+  .folio-comment-filters {
+    flex-wrap: wrap;
+  }
+  .folio-surface button,
+  .folio-surface input:not([type='checkbox']),
+  .folio-surface select,
+  .folio-discussion button,
+  .folio-discussion input:not([type='checkbox']),
+  .folio-dialog button,
+  .folio-dialog input:not([type='checkbox']),
+  .folio-dialog select {
+    min-height: 44px;
+  }
+  .folio-search > svg {
+    top: 15px;
+  }
+  .folio-thread-list .folio-thread > div.flex {
+    gap: 8px;
+  }
+  .folio-admin-settings > div {
+    padding: 20px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .folio-surface *,
+  .folio-dialog *,
+  .folio-discussion *,
+  .folio-connection * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

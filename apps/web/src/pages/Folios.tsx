@@ -7,7 +7,6 @@ import {
   SITE_MAX_FILES,
   siteFileSchema,
   type SiteFile,
-  type SiteCapabilityInfo,
   type SiteInfo,
   type SiteVersion,
 } from '@eat/shared';
@@ -30,15 +29,10 @@ import { Input, Textarea } from '../components/ui/input';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { FolioDiscussion } from './FolioComments';
+import { FolioAccess, FolioConnectionState, FolioMark, folioAccessModes } from './folios/folio-ui';
+import './folios/folio.css';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '../components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -51,186 +45,9 @@ import {
 } from '../components/ui/alert-dialog';
 
 const selectClass = 'h-9 rounded-md border bg-background px-2 text-sm';
-const modes: Record<string, string> = {
-  authenticated: '仅登录用户',
-  public: '公开访问',
-  password: '密码访问',
-};
+const modes = folioAccessModes;
 
-export function FoliosPage() {
-  const cache = useQueryClient();
-  const capability = useQuery({
-    queryKey: ['sites-capability'],
-    queryFn: () => api<SiteCapabilityInfo>('GET', '/api/sites/capability'),
-    refetchInterval: 15000,
-  });
-  const list = useQuery({
-    queryKey: ['sites'],
-    queryFn: () => api<SiteInfo[]>('GET', '/api/sites'),
-    enabled: capability.data?.enabled === true,
-  });
-  const [creating, setCreating] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [access, setAccess] = useState('authenticated');
-  return (
-    <Dialog
-      open={creating}
-      onOpenChange={(open) => {
-        if (busy) return;
-        if (open) setAccess('authenticated');
-        setCreating(open);
-      }}
-    >
-      <div className="space-y-5">
-        <PageHeader
-          title="Folio"
-          description="发布和分享网页、演示与报告，支持版本管理和评论。"
-          actions={
-            <DialogTrigger asChild>
-              <Button disabled={!capability.data?.enabled}>创建 Folio</Button>
-            </DialogTrigger>
-          }
-        />
-        {capability.data && !capability.data.enabled && (
-          <Card>
-            <CardContent className="space-y-2 pt-5">
-              <p>Folio 发布尚未启用，或正在检查配置。</p>
-              <p className="text-sm text-muted-foreground">
-                请管理员在系统设置中配置 OSS、域名和 HTTPS，并完成启用检查。已有文件、历史版本与评论会保留。
-              </p>
-            </CardContent>
-          </Card>
-        )}
-        {capability.error && (
-          <p role="alert" className="text-destructive">
-            {capability.error.message}
-          </p>
-        )}
-        <DialogContent className="sm:max-w-xl">
-          <DialogHeader>
-            <DialogTitle>创建 Folio</DialogTitle>
-            <DialogDescription>设置 Folio 信息和访问方式，创建后上传文件即可发布。</DialogDescription>
-          </DialogHeader>
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              if (busy || !capability.data?.enabled) return;
-              const data = new FormData(e.currentTarget);
-              setBusy(true);
-              try {
-                await api('POST', '/api/sites', {
-                  slug: data.get('slug'),
-                  name: data.get('name'),
-                  description: data.get('description'),
-                  access,
-                  password: data.get('password') || undefined,
-                  spa: data.get('spa') === 'on',
-                });
-                setCreating(false);
-                void cache.invalidateQueries({ queryKey: ['sites'] });
-                toast.success('Folio 已创建，可以上传文件发布');
-              } catch (e) {
-                toast.error((e as Error).message);
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            <fieldset disabled={busy} className="grid gap-4 sm:grid-cols-2">
-              <label className="space-y-1 text-sm">
-                Folio 标识
-                <Input
-                  name="slug"
-                  required
-                  maxLength={40}
-                  pattern="[a-z0-9][a-z0-9-]*"
-                  placeholder="my-folio"
-                />
-              </label>
-              <label className="space-y-1 text-sm">
-                名称
-                <Input name="name" required maxLength={100} placeholder="Folio 名称" />
-              </label>
-              <label className="space-y-1 text-sm sm:col-span-2">
-                说明
-                <Textarea name="description" maxLength={2000} />
-              </label>
-              <label className="space-y-1 text-sm">
-                访问方式
-                <select
-                  className={selectClass + ' block w-full'}
-                  value={access}
-                  onChange={(e) => setAccess(e.target.value)}
-                >
-                  {Object.entries(modes).map(([v, label]) => (
-                    <option key={v} value={v}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {access === 'password' && (
-                <label className="space-y-1 text-sm">
-                  访问密码
-                  <Input type="password" name="password" required minLength={4} maxLength={128} />
-                </label>
-              )}
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" name="spa" />
-                单页应用路由回退
-              </label>
-              <div className="flex justify-end gap-2 border-t pt-4 sm:col-span-2">
-                <Button type="button" variant="outline" onClick={() => setCreating(false)}>
-                  取消
-                </Button>
-                <Button type="submit" loading={busy}>
-                  {busy ? '正在创建…' : '创建 Folio'}
-                </Button>
-              </div>
-            </fieldset>
-          </form>
-        </DialogContent>
-        {list.isLoading && <p className="text-muted-foreground">正在读取 Folio…</p>}
-        {list.error && (
-          <p role="alert" className="text-destructive">
-            {list.error.message}
-          </p>
-        )}
-        {capability.data?.enabled && !list.isLoading && !list.error && !list.data?.length && (
-          <p className="py-12 text-center text-muted-foreground">创建 Folio 后，即可上传目录或 ZIP 发布。</p>
-        )}
-        <div className="grid gap-4 sm:grid-cols-2">
-          {capability.data?.enabled &&
-            list.data?.map((s) => (
-              <Card key={s.id}>
-                <CardContent className="space-y-3 pt-5">
-                  <div className="flex items-center justify-between gap-2">
-                    <Link to={'/folios/' + s.slug} className="font-semibold hover:text-primary">
-                      {s.name}
-                    </Link>
-                    <Badge variant="secondary">{modes[s.access]}</Badge>
-                  </div>
-                  <p className="text-sm text-muted-foreground">{s.description || s.slug}</p>
-                  <a
-                    className="break-all text-sm text-primary hover:underline"
-                    href={s.url}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {s.url}
-                  </a>
-                  <div className="text-xs text-muted-foreground">
-                    {s.currentVersionId ? '已发布' : '尚未发布'} ·{' '}
-                    {s.canManage ? '你可以管理' : '可查看与评论'}
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-        </div>
-      </div>
-    </Dialog>
-  );
-}
+export { FoliosPage } from './folios/FolioLibrary';
 
 function base64(content: Uint8Array) {
   let out = '';
@@ -348,39 +165,44 @@ export function FolioDetailPage() {
   }
   if (!s) return <p role={detail.error ? 'alert' : 'status'}>{detail.error?.message || '正在读取 Folio…'}</p>;
   return (
-    <div className="space-y-6">
-      <Link
-        to="/folios"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-      >
+    <div className="folio-surface folio-detail">
+      <Link to="/folios" className="folio-back">
         <ArrowLeft className="size-4" /> Folio
       </Link>
-      <PageHeader
-        title={s.name}
-        description={s.description || s.slug}
-        actions={
-          <>
-            {s.currentVersionId && (
-              <Button asChild variant="outline">
-                <a href={s.url} target="_blank" rel="noreferrer">
-                  <ExternalLink />
-                  打开 Folio
-                </a>
-              </Button>
-            )}
-            {s.canManage && (
-              <Button onClick={() => setPublishing(true)}>
-                <Upload />
-                {s.currentVersionId ? '发布新版' : '发布 Folio'}
-              </Button>
-            )}
-          </>
-        }
-      />
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-muted/20 p-3">
-        <Badge variant="secondary">{s.currentVersionId ? '已发布' : '待发布'}</Badge>
-        <Badge variant="outline">{modes[s.access]}</Badge>
-        <span className="min-w-0 flex-1 basis-48 break-all text-sm text-muted-foreground">{s.url}</span>
+      <div className="folio-heading">
+        <FolioMark />
+        <PageHeader
+          title={s.name}
+          description={s.description || s.slug}
+          actions={
+            <>
+              {s.currentVersionId && (
+                <Button asChild variant="outline">
+                  <a href={s.url} target="_blank" rel="noreferrer">
+                    <ExternalLink />
+                    打开 Folio
+                  </a>
+                </Button>
+              )}
+              {s.canManage && (
+                <Button onClick={() => setPublishing(true)}>
+                  <Upload />
+                  {s.currentVersionId ? '发布新版' : '发布 Folio'}
+                </Button>
+              )}
+            </>
+          }
+        />
+      </div>
+      <div className="folio-linkbar">
+        <span className={s.currentVersionId ? 'folio-status' : 'folio-status folio-status-draft'}>
+          <i />
+          {s.currentVersionId ? '已发布' : '待发布'}
+        </span>
+        <FolioAccess access={s.access} />
+        <a className="folio-link-url" href={s.url} target="_blank" rel="noreferrer">
+          {s.url}
+        </a>
         <Button
           variant="outline"
           disabled={!s.currentVersionId}
@@ -411,8 +233,8 @@ export function FolioDetailPage() {
           </Button>
         )}
       </div>
-      <Tabs value={tab} onValueChange={changeTab} className="space-y-5">
-        <TabsList aria-label="Folio 详情">
+      <Tabs value={tab} onValueChange={changeTab} className="folio-detail-tabs">
+        <TabsList aria-label="Folio 详情" className="folio-tabs">
           <TabsTrigger value="comments">
             <MessageSquare className="size-4" />
             评论
@@ -430,8 +252,8 @@ export function FolioDetailPage() {
         </TabsList>
         <TabsContent value="comments" forceMount hidden={tab !== 'comments'}>
           {s.currentVersionId ? (
-            <Card>
-              <CardContent className="pt-5">
+            <Card className="folio-discussion-card">
+              <CardContent className="folio-discussion-body">
                 {commentVersion && (
                   <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/40 p-3 text-sm">
                     <span>正在查看发布记录 v{commentVersion.number} 的评论</span>
@@ -467,7 +289,7 @@ export function FolioDetailPage() {
             </Card>
           )}
         </TabsContent>
-        <TabsContent value="releases" className="space-y-4">
+        <TabsContent value="releases" className="folio-releases space-y-5">
           <PageHeader
             title="发布记录"
             description="每次发布后 Folio 链接保持不变。需要时可查看历史内容或恢复某次发布。"
@@ -492,11 +314,12 @@ export function FolioDetailPage() {
             </div>
           )}
           {!!versions.data?.length && (
-            <div className="overflow-x-auto rounded-xl border">
+            <div className="folio-release-table overflow-x-auto">
               <table className="w-full min-w-[600px] text-left text-sm">
+                <caption className="sr-only">Folio 发布记录</caption>
                 <thead className="bg-muted/50">
                   <tr>
-                    <th className="p-4">发布时间</th>
+                    <th className="p-4">发布版本</th>
                     <th className="p-4">内容</th>
                     <th className="p-4">操作</th>
                   </tr>
@@ -505,17 +328,19 @@ export function FolioDetailPage() {
                   {versions.data.map((v) => (
                     <tr key={v.id} className="border-t">
                       <td className="p-4">
-                        <p>{new Date(v.createdAt).toLocaleString()}</p>
-                        <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                          v{v.number}
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-base font-medium">v{v.number}</span>
                           {s.currentVersionId === v.id && <Badge variant="secondary">当前在线</Badge>}
                         </div>
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          {new Date(v.createdAt).toLocaleString()}
+                        </p>
                       </td>
                       <td className="p-4">
-                        {v.fileCount} 个文件 · {(v.totalBytes / 1024).toFixed(1)} KiB
-                        {v.message && (
-                          <p className="mt-1 max-w-sm break-words text-muted-foreground">{v.message}</p>
-                        )}
+                        <p className="max-w-sm break-words font-medium">{v.message || '发布 v' + v.number}</p>
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          {v.fileCount} 个文件 · {(v.totalBytes / 1024).toFixed(1)} KiB
+                        </p>
                       </td>
                       <td className="p-4">
                         <div className="flex flex-wrap gap-2">
@@ -560,7 +385,7 @@ export function FolioDetailPage() {
           )}
         </TabsContent>
         {s.canManage && (
-          <TabsContent value="settings" className="space-y-6">
+          <TabsContent value="settings" className="folio-settings-layout">
             <FolioSettingsForm key={s.id + s.updatedAt} folio={s} onSaved={refresh} />
             <FolioDelete folio={s} disabled={busy || restoring} />
           </TabsContent>
@@ -572,15 +397,18 @@ export function FolioDetailPage() {
           if (!busy) setPublishing(open);
         }}
       >
-        <DialogContent>
+        <DialogContent className="folio-dialog folio-publish-dialog">
           <DialogHeader>
+            <div className="folio-dialog-icon">
+              <Upload />
+            </div>
             <DialogTitle>{s.currentVersionId ? '发布新版' : '发布 Folio'}</DialogTitle>
-            <DialogDescription>上传构建好的 Folio 文件，发布后即可通过 Folio 链接访问。</DialogDescription>
+            <DialogDescription>上传构建好的静态网站，发布后固定链接自动展示新版。</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="rounded-xl border border-dashed bg-muted/20 p-5 text-center">
+            <div className="folio-upload-zone">
               <Upload className="mx-auto mb-3 size-7 text-muted-foreground" />
-              <p className="mb-4 text-sm">选择 ZIP 或整个文件夹</p>
+              <p className="mb-4 text-sm">把准备好的作品，发布给大家</p>
               <div className="flex flex-wrap justify-center gap-2">
                 <Button disabled={busy} onClick={() => zipInput.current?.click()}>
                   <Upload />
@@ -612,7 +440,8 @@ export function FolioDetailPage() {
               />
             </div>
             <p className="text-xs leading-relaxed text-muted-foreground">
-              根目录需包含 index.html，最多 2000 个文件、50 MiB。发布成功后自动上线，历史内容和评论会保留。
+              根目录需包含 index.html，最多 2000 个文件、50
+              MiB。仅托管静态网站，不执行构建或服务端代码。发布成功后历史内容和评论会保留。
             </p>
             {busy && (
               <p role="status" className="text-sm">
@@ -725,7 +554,7 @@ function FolioDelete({ folio: s, disabled }: { folio: SiteInfo; disabled: boolea
   }
   return (
     <>
-      <Card className="border-destructive/30">
+      <Card className="folio-danger">
         <CardContent className="space-y-4 pt-5">
           <div>
             <h2 className="font-semibold">删除 Folio</h2>
@@ -756,7 +585,8 @@ function FolioDelete({ folio: s, disabled }: { folio: SiteInfo; disabled: boolea
           <AlertDialogHeader>
             <AlertDialogTitle className="break-words">永久删除「{s.name}」？</AlertDialogTitle>
             <AlertDialogDescription>
-              将删除此 Folio 的全部发布记录、文件、评论和回复。固定链接、历史版本链接和分享链接都会失效，此操作无法恢复。
+              将删除此 Folio
+              的全部发布记录、文件、评论和回复。固定链接、历史版本链接和分享链接都会失效，此操作无法恢复。
             </AlertDialogDescription>
           </AlertDialogHeader>
           {error && (
@@ -787,10 +617,10 @@ function FolioSettingsForm({ folio: s, onSaved }: { folio: SiteInfo; onSaved: ()
   const [access, setAccess] = useState(s.access);
   const [saving, setSaving] = useState(false);
   return (
-    <Card>
+    <Card className="folio-settings-panel">
       <CardContent className="pt-5">
         <form
-          className="max-w-2xl space-y-6"
+          className="folio-settings-form"
           onSubmit={async (e) => {
             e.preventDefault();
             if (saving) return;
@@ -813,7 +643,7 @@ function FolioSettingsForm({ folio: s, onSaved }: { folio: SiteInfo; onSaved: ()
             }
           }}
         >
-          <div>
+          <div className="folio-settings-title">
             <h2 className="font-semibold">Folio 设置</h2>
             <p className="mt-1 text-sm text-muted-foreground">管理 Folio 信息和访问权限。</p>
           </div>
@@ -825,7 +655,8 @@ function FolioSettingsForm({ folio: s, onSaved }: { folio: SiteInfo; onSaved: ()
             <span>Folio 说明</span>
             <Textarea name="description" maxLength={2000} defaultValue={s.description} />
           </label>
-          <div className="space-y-4 border-t pt-5">
+          <div className="folio-settings-section">
+            <h3>访问权限</h3>
             <label className="block space-y-2 text-sm">
               <span>谁可以访问</span>
               <select
@@ -862,7 +693,7 @@ function FolioSettingsForm({ folio: s, onSaved }: { folio: SiteInfo; onSaved: ()
               </label>
             )}
           </div>
-          <label className="flex items-start gap-3 rounded-lg border p-4 text-sm">
+          <label className="folio-checkbox folio-routing">
             <input className="mt-1" type="checkbox" name="spa" defaultChecked={s.spa} />
             <span>
               单页应用路由回退
@@ -871,9 +702,12 @@ function FolioSettingsForm({ folio: s, onSaved }: { folio: SiteInfo; onSaved: ()
               </span>
             </span>
           </label>
-          <Button loading={saving} type="submit">
-            保存设置
-          </Button>
+          <div className="folio-settings-save">
+            <p>变更访问方式或密码后，旧的分享凭据将失效。</p>
+            <Button loading={saving} type="submit">
+              保存设置
+            </Button>
+          </div>
         </form>
       </CardContent>
     </Card>
@@ -898,5 +732,5 @@ export function FolioAuthorizePage() {
         .then((r) => location.replace(r.url))
         .catch((e) => setError(e.message));
   }, []);
-  return <p role="status">{error || '正在验证 Folio 访问身份…'}</p>;
+  return <FolioConnectionState error={error} message="正在验证 Folio 访问身份…" />;
 }
