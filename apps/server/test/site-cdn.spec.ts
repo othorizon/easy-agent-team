@@ -23,6 +23,7 @@ import { SiteInfrastructure } from '../src/sites/site-infrastructure.service';
 import { SiteSettingsStore } from '../src/sites/site-settings.store';
 import { SiteDns, SiteSetupError, type DnsRecord } from '../src/sites/site-dns.service';
 import { SiteStorage } from '../src/sites/site-storage.service';
+import { aliyunCdnContract } from './fixtures/aliyun-cdn-contract';
 
 let app: NestFastifyApplication, db: Db, admin: string, member: string, actor: string;
 let store: SiteCdnStore, worker: SiteCdnService, settings: SiteSettingsStore;
@@ -34,6 +35,7 @@ let domain: any,
   calls: { action: string; params: any }[] = [],
   fail = '',
   cert = 'certificate-1',
+  certificateVerificationArg: 'enable' | 'enabled' | 'unsupported' = 'enable',
   verificationPending = false,
   failDns = false;
 const cname = 'cdn.example.net';
@@ -95,9 +97,28 @@ const api = {
         return { TagResources: { TagResource: [{ TagKey: 'eat-instance', TagValue: base.resourceKey }] } };
       case 'DescribeCdnDomainConfigs':
         return { DomainConfigs: { DomainConfig: configs } };
-      case 'BatchSetCdnDomainConfig':
-        configs.push(...JSON.parse(params.Functions).map((v: any, i: number) => asCloudConfig(v, 100 + i)));
+      case 'BatchSetCdnDomainConfig': {
+        const rules = JSON.parse(params.Functions);
+        for (const rule of rules) {
+          if (fail === `config:${rule.functionName}`)
+            throw new CdnApiError(action, 'InvalidArgName.ValueNotSupported', {
+              functionName: rule.functionName, parameter: rule.functionArgs[0]?.argName,
+            });
+          const documented = aliyunCdnContract[rule.functionName];
+          if (!documented) throw new CdnApiError(action, 'InvalidFunction.NotSupported');
+          const required = rule.functionName === 'origin_certificate_verification'
+            ? [certificateVerificationArg] : documented.required;
+          const allowed = [...required, ...(documented.optional ?? [])];
+          const unsupported = rule.functionArgs.find((a: any) => !allowed.includes(a.argName));
+          if (unsupported) throw new CdnApiError(action, 'InvalidArgName.ValueNotSupported', {
+            functionName: rule.functionName, parameter: unsupported.argName,
+          });
+          if (required.some((name) => !rule.functionArgs.some((a: any) => a.argName === name)))
+            throw new CdnApiError(action, 'MissingParameter');
+        }
+        configs.push(...rules.map((v: any, i: number) => asCloudConfig(v, 100 + configs.length + i)));
         return {};
+      }
       case 'SetCdnDomainSSLCertificate':
         return {};
       case 'StopCdnDomain':
@@ -241,6 +262,7 @@ beforeEach(async () => {
   calls = [];
   fail = '';
   cert = 'certificate-1';
+  certificateVerificationArg = 'enable';
   verificationPending = false;
   failDns = false;
   cdnInfra.verify.mockReset();
@@ -355,6 +377,61 @@ describe('Folio CDN control and durable reconciliation (cloud substitutes)', () 
       ArgValue: 'on',
     });
     expect((await tick()).status).toBe('enabled');
+  });
+  it('uses the official example flag and negotiates the documented alternative without disabling verification', async () => {
+    await save();
+    certificateVerificationArg = 'enabled';
+    expect((await tick()).status).toBe('enabled');
+    expect((await store.row())!.resources.certificateVerificationArg).toBe('enabled');
+    const verificationCalls = calls
+      .filter((c) => c.action === 'BatchSetCdnDomainConfig')
+      .flatMap((c) => JSON.parse(c.params.Functions))
+      .filter((c) => c.functionName === 'origin_certificate_verification');
+    expect(verificationCalls.map((c) => c.functionArgs)).toEqual([
+      [{ argName: 'enable', argValue: 'on' }],
+      [{ argName: 'enabled', argValue: 'on' }],
+    ]);
+    const applied = calls.filter((c) => c.action === 'BatchSetCdnDomainConfig').length;
+    expect((await tick()).status).toBe('enabled');
+    expect(calls.filter((c) => c.action === 'BatchSetCdnDomainConfig')).toHaveLength(applied);
+  });
+  it('adopts an already applied legacy certificate flag without rewriting a partial configuration', async () => {
+    await save();
+    certificateVerificationArg = 'enabled';
+    configs.push(asCloudConfig({
+      functionName: 'origin_certificate_verification',
+      functionArgs: [{ argName: 'enabled', argValue: 'on' }],
+    }));
+    expect((await tick()).status).toBe('enabled');
+    expect((await store.row())!.resources.certificateVerificationArg).toBe('enabled');
+    expect(calls.filter((c) => c.action === 'BatchSetCdnDomainConfig')
+      .flatMap((c) => JSON.parse(c.params.Functions))
+      .some((c) => c.functionName === 'origin_certificate_verification')).toBe(false);
+  });
+  it('reports the failing function and resumes only missing rules after a partial apply', async () => {
+    await save();
+    fail = 'config:cdn_remote_auth';
+    expect(await tick()).toMatchObject({
+      status: 'failed', connected: false,
+      lastError: expect.stringContaining('功能：cdn_remote_auth'),
+    });
+    expect(dnsRecords.find((r) => r.name.startsWith('*'))?.type).toBe('A');
+    fail = '';
+    expect((await tick()).status).toBe('enabled');
+    const rules = calls.filter((c) => c.action === 'BatchSetCdnDomainConfig')
+      .flatMap((c) => JSON.parse(c.params.Functions));
+    expect(rules.filter((c) => c.functionName === 'forward_scheme')).toHaveLength(1);
+    expect(rules.filter((c) => c.functionName === 'cdn_remote_auth')).toHaveLength(2);
+  });
+  it('keeps direct DNS when neither mandatory certificate verification spelling is supported', async () => {
+    await save();
+    certificateVerificationArg = 'unsupported';
+    expect(await tick()).toMatchObject({
+      status: 'failed', connected: false,
+      lastError: expect.stringContaining('origin_certificate_verification'),
+    });
+    expect(dnsRecords.find((r) => r.name.startsWith('*'))?.type).toBe('A');
+    expect(cdnInfra.verify).not.toHaveBeenCalled();
   });
   it('keeps waiting for ownership when VerifyDomainOwner returns HTTP 200 with verification Content', async () => {
     await save();

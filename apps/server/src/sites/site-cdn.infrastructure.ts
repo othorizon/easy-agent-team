@@ -58,7 +58,10 @@ export function cdnFunctions(row: SiteCdnRow, base: SiteSettingRow) {
     cdnFunction('forward_scheme', { enable: 'on', scheme_origin: 'https', scheme_origin_port: '443' }),
     // HTTP Host remains the actual incoming Folio host; SNI selects its wildcard certificate.
     cdnFunction('https_origin_sni', { enabled: 'on', https_origin_sni: cdnSni(base) }),
-    cdnFunction('origin_certificate_verification', { enabled: 'on' }),
+    // The official example uses enable, while the parameter table says enabled.
+    cdnFunction('origin_certificate_verification', {
+      [row.resources.certificateVerificationArg ?? 'enable']: 'on',
+    }),
     cdnFunction('origin_request_header', {
       header_operation_type: 'modify',
       header_name: 'X-Eat-Cdn-Origin',

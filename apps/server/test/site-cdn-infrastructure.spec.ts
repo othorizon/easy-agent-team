@@ -17,6 +17,7 @@ import { SiteDns } from '../src/sites/site-dns.service';
 import { encryptSecret } from '../src/common/crypto';
 import type { SiteCdnRow } from '../src/sites/site-cdn.store';
 import type { SiteSettingRow } from '../src/sites/site-settings.store';
+import { aliyunCdnContract } from './fixtures/aliyun-cdn-contract';
 
 let root: string, pem: string, key: string;
 const base = {
@@ -185,6 +186,51 @@ describe('CDN certificate, signing and DNS adapter contracts', () => {
       expect(String(e)).not.toContain('SECRET');
       expect(String(e)).not.toContain('test-secret');
     }
+  });
+  it('matches the published function argument contract and requires origin certificate verification on', () => {
+    for (const fn of cdnFunctions(row, base)) {
+      const contract = aliyunCdnContract[fn.functionName];
+      expect(contract, fn.functionName).toBeDefined();
+      const names = fn.functionArgs.map((arg) => arg.argName);
+      expect(contract.required.every((name) => names.includes(name)), fn.functionName).toBe(true);
+      expect(names.every((name) => [...contract.required, ...(contract.optional ?? [])].includes(name)), fn.functionName).toBe(true);
+    }
+    expect(cdnFunctions(row, base).find((f) => f.functionName === 'origin_certificate_verification')!.functionArgs)
+      .toEqual([{ argName: 'enable', argValue: 'on' }]);
+  });
+  it('identifies a rejected function and argument without exposing any response text or argument value', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      Code: 'InvalidArgName.ValueNotSupported',
+      Message: 'The specified ArgName[enable] is not supported. PRIVATE_RESPONSE test-secret-value',
+    }), { status: 400 })));
+    const client = new SiteCdnClient();
+    try {
+      await client.call({ accessKeyId: 'test-id', accessKeySecret: 'test-secret' }, 'BatchSetCdnDomainConfig', {
+        DomainNames: '.sites.example.com',
+        Functions: JSON.stringify([{ functionName: 'origin_certificate_verification', functionArgs: [{ argName: 'enable', argValue: 'test-secret-value' }] }]),
+      });
+      throw new Error('Expected cloud rejection');
+    } catch (e) {
+      expect(String(e)).toContain('功能：origin_certificate_verification');
+      expect(String(e)).toContain('参数：enable');
+      expect(String(e)).not.toContain('PRIVATE_RESPONSE');
+      expect(String(e)).not.toContain('test-secret-value');
+      expect(String(e)).not.toContain('RAM');
+    }
+  });
+  it('limits concurrent configuration calls to the documented 3 requests per second', async () => {
+    const times: number[] = [];
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      times.push(Date.now());
+      return new Response('{}');
+    }));
+    const client = new SiteCdnClient();
+    await Promise.all([1, 2, 3].map(() => client.call(
+      { accessKeyId: 'test-id', accessKeySecret: 'test-secret' }, 'BatchSetCdnDomainConfig',
+    )));
+    expect(times).toHaveLength(3);
+    expect(times[1] - times[0]).toBeGreaterThanOrEqual(300);
+    expect(times[2] - times[1]).toBeGreaterThanOrEqual(300);
   });
   it('compares cloud configs independent of IDs and ordering while detecting drift', () => {
     const functions = cdnFunctions(row, base);

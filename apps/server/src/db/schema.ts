@@ -92,6 +92,7 @@ export interface SiteCdnResources {
     managed: { id: string; name: string; type: string; content: string; ttl: number };
   }[];
   configDigest?: string;
+  certificateVerificationArg?: 'enable' | 'enabled';
   certificateFingerprint?: string;
 }
 export const siteCdn = pgTable('site_cdn', {

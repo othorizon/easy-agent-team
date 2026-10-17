@@ -110,7 +110,9 @@ CDN 域名已有但没有本实例标签时，不接管、不删除。DNS 类型
 - [添加域名](https://help.aliyun.com/zh/cdn/developer-reference/api-cdn-2018-05-10-addcdndomain)：泛域名为前导点，创建及配置下发是异步的。[查询配置](https://help.aliyun.com/zh/cdn/developer-reference/api-cdn-2018-05-10-describecdndomainconfigs) 提供 success / configuring / failed 状态；HTTP API 成功不能代替下发完成。
 - [HTTPS 配置](https://help.aliyun.com/zh/cdn/user-guide/configure-an-ssl-certificate/) 与 [泛域名证书限制](https://help.aliyun.com/zh/cdn/support/configure-an-ssl-certificate-for-a-wildcard-domain-name)：CDN 控制台免费证书不支持泛域名，因此上传现有 Traefik / Let's Encrypt 证书，不调用 CDN 免费证书申请，也不购买证书。[Let's Encrypt FAQ](https://letsencrypt.org/docs/faq/) 明确泛域名需 DNS-01；[Traefik ACME](https://doc.traefik.io/traefik/v3.5/reference/install-configuration/tls/certificate-resolvers/acme/) 负责存储与续期。
 
-`origin_certificate_verification` 的官方参数表使用 `enabled`，同页示例使用 `enable`，二者有文档不一致。当前按参数表发送 `enabled`，实际账号若拒绝该参数会停留失败，不会切 DNS；必须纳入真实云验收。已有 resolver 的 ACME 文件目前要求标准 `/etc/dokploy/traefik/` 范围内的 JSON 路径，其他路径会明确拒绝。ACME JSON 仅读取目标 resolver 下匹配 SAN 的证书，不写入账户私钥，也不修改 ACME 存储。
+`origin_certificate_verification` 的官方参数表使用 `enabled`，同页示例使用 `enable`，二者有文档不一致。当前优先使用示例中的 `enable=on`；只有该功能明确返回 `InvalidArgName.ValueNotSupported` 时，才尝试另一种 `enabled=on` 并记录采用的参数名。不会通过关闭证书校验绕过失败，两种写法均不支持时保留直连解析。已有部分配置可按原参数名继续恢复，无需重建 CDN。配置逐功能提交，按照官方每用户每秒 3 次的限制节流；中断后只提交缺失的规则。错误显示当前功能及可安全识别的参数名，不回显云端原始错误正文、请求头值或凭证。参数接受与全网生效仍需真实云验收。
+
+已有 resolver 的 ACME 文件目前要求标准 `/etc/dokploy/traefik/` 范围内的 JSON 路径，其他路径会明确拒绝。ACME JSON 仅读取目标 resolver 下匹配 SAN 的证书，不写入账户私钥，也不修改 ACME 存储。
 
 本地测试使用真实 PostgreSQL、测试证书、可注入云/DNS/链路替身和浏览器 API 替身。真实账号验证了 CDN 服务、域名验证接口及隔离 DNS 记录的创建、读取、更新、切换、恢复与删除，测试记录已清理；未创建 CDN、签发公网证书、切换实际 Folio 解析或验证公网 HIT。替身测试不能证明该账号的泛域名功能组合、配额、全网规则下发、所有加速区域、TLS 回源和跨运营商 DNS 传播均已通过。
 
@@ -122,8 +124,8 @@ CDN 域名已有但没有本实例标签时，不接管、不删除。DNS 类型
 
 | 验证 | 结果与范围 |
 | --- | --- |
-| `pnpm test` | 服务端 367 项、CLI 222 项通过；Web 使用下列浏览器脚本另行验证 |
-| CDN / 网关回归（包含于全量测试） | 39 项通过，覆盖阿里云默认配置和 `ParentId=0`、旧冲突及 TXT 指引恢复、HTTP 200 验证未通过、30 天 TTL、版本隔离 / 历史缓存命中 / 权限收紧 / 删除、签名、证书读取、缓存别名、重启和 DNS 恢复 |
+| `pnpm test` | 服务端 374 项、CLI 222 项通过；Web 使用下列浏览器脚本另行验证 |
+| CDN / 网关回归（包含于全量测试） | 46 项通过，覆盖独立 API 参数契约、证书校验参数变体、逐功能恢复、限流和错误脱敏、阿里云默认配置和 `ParentId=0`、旧冲突及 TXT 指引恢复、HTTP 200 验证未通过、30 天 TTL、版本隔离 / 历史缓存命中 / 权限收紧 / 删除、签名、证书读取、缓存别名、重启和 DNS 恢复 |
 | `pnpm typecheck`、`pnpm build` | 最终变更全工作区通过 |
 | `pnpm db:migrate` | 在独立本地 PostgreSQL 测试库执行两次均成功；另有旧配置升级保持不变、已有刷新任务和触发器清除且 Folio / CDN 状态保留的真实迁移测试 |
 | `node scripts/test-folio-cdn-ui.mjs` | 浏览器 API 替身；桌面及手机配置、等待、失败恢复、DNS 指引、密钥输入清空、无横向溢出通过 |

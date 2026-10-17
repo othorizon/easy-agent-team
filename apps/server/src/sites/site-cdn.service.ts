@@ -7,7 +7,7 @@ import { getDomain } from 'tldts';
 import { PG_POOL } from '../db/db.module';
 import { AuditService } from '../audit/audit.service';
 import { SiteCdnStore, type SiteCdnRow } from './site-cdn.store';
-import { SiteCdnClient, CdnApiError, type CdnCredentials } from './site-cdn.client';
+import { SiteCdnClient, CdnApiError, cdnFunction, type CdnCredentials } from './site-cdn.client';
 import {
   cdnDomain,
   cdnFunctions,
@@ -293,9 +293,22 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
     guard();
     await this.syncCertificate(row, base, c);
     await this.phase(row, '配置 HTTPS 回源和缓存命中前鉴权');
-    const functions = cdnFunctions(row, base);
     const configs = cdnConfigsToCheck(await this.infra.configurations(c, domain));
     guard();
+    if (
+      !row.resources.configured &&
+      !row.resources.certificateVerificationArg &&
+      configs.some(
+        (v) =>
+          configDigest([v]) ===
+          configDigest([cdnFunction('origin_certificate_verification', { enabled: 'on' })]),
+      )
+    ) {
+      // Resume a partially applied older configuration without rewriting its verified flag.
+      row.resources.certificateVerificationArg = 'enabled';
+      await this.journal(row);
+    }
+    const functions = cdnFunctions(row, base);
     if (row.resources.configDigest && configDigest(configs) !== row.resources.configDigest)
       throw new CdnConflict('CDN 配置发生外部修改，已暂停自动覆盖，请恢复原配置后重试');
     if (!row.resources.configured) {
@@ -304,11 +317,32 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
       );
       if (configs.some((v: any) => !functions.some((f) => configDigest([f]) === configDigest([v]))))
         throw new CdnConflict('CDN 存在未知或不匹配的回源、鉴权或缓存配置，保留现状，请核对后重试');
-      if (missing.length)
-        await this.api.call(c, 'BatchSetCdnDomainConfig', {
-          DomainNames: domain,
-          Functions: JSON.stringify(missing),
-        });
+      for (const rule of missing) {
+        guard();
+        await this.phase(row, `配置 CDN 功能：${rule.functionName}`);
+        const apply = () =>
+          this.api.call(c, 'BatchSetCdnDomainConfig', {
+            DomainNames: domain,
+            Functions: JSON.stringify([rule]),
+          });
+        try {
+          await apply();
+        } catch (e) {
+          if (
+            rule.functionName !== 'origin_certificate_verification' ||
+            !(e instanceof CdnApiError) ||
+            e.code !== 'InvalidArgName.ValueNotSupported'
+          )
+            throw e;
+          // Both names appear in current official documentation. Retry only this mandatory on flag.
+          const alternate = rule.functionArgs[0].argName === 'enable' ? 'enabled' : 'enable';
+          rule.functionArgs = [{ argName: alternate, argValue: 'on' }];
+          row.resources.certificateVerificationArg = alternate;
+          await this.journal(row);
+          guard();
+          await apply();
+        }
+      }
       const actual = cdnConfigsToCheck(await this.infra.configurations(c, domain));
       if (actual.some((v: any) => v.Status !== 'success'))
         throw new SiteSetupError('等待 CDN 规则成功下发，尚未开放缓存或切换 DNS');
