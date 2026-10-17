@@ -126,6 +126,25 @@ describe('静态发布打包', () => {
       Buffer.from([0, 128, 255]),
     );
   });
+  it('删除 Folio 命令与两种 MCP 共用 DELETE 端点，不携带发布或评论参数', async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true, cleanupFailed: false });
+    vi.spyOn(Api, 'fromSaved').mockReturnValue({ request } as unknown as Api);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const program = new Command().exitOverride();
+    registerFolioCommands(program);
+    await program.parseAsync(['node', 'eat', 'folio', 'delete', 'demo']);
+    expect(request).toHaveBeenCalledWith('DELETE', '/api/sites/demo', undefined, {});
+    for (const mode of ['local', 'remote'] as const) {
+      const tool = buildEatTools(mode).find((t) => t.name === 'delete_folio')!;
+      expect(tool.inputSchema.required).toEqual(['folio']);
+      expect(tool.inputSchema.properties).not.toHaveProperty('commentId');
+    }
+    expect(folioToolRequest('delete_folio', { folio: 'demo' })).toEqual({
+      method: 'DELETE', path: '/api/sites/demo', body: undefined, headers: {},
+    });
+    expect(() => folioToolRequest('delete_folio', { folio: '../demo' })).toThrow();
+    expect(() => folioToolRequest('delete_folio', {})).toThrow();
+  });
   it('拒绝软链接与缺少首页的目录', () => {
     const d = dir();
     expect(() => collectFolioFiles(d)).toThrow('index.html');

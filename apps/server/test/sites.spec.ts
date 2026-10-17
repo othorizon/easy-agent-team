@@ -7,7 +7,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
 import * as bcrypt from 'bcryptjs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
@@ -18,6 +18,7 @@ import { SiteSettingsStore } from '../src/sites/site-settings.store';
 import { TestSiteStorage } from './site-fixture';
 import { encryptSecret } from '../src/common/crypto';
 import { SiteStorage } from '../src/sites/site-storage.service';
+import { SitesService } from '../src/sites/sites.service';
 import { McpToolsService } from '../src/mcp-server/mcp-tools.service';
 import { AuthService } from '../src/auth/auth.service';
 import * as schema from '../src/db/schema';
@@ -673,5 +674,189 @@ describe('评论删除权限与占位', () => {
       }),
     ).toEqual({ ok: true });
     await api('PATCH', '/api/sites/demo', owner, { access: 'public' });
+  });
+});
+
+describe('Folio 永久删除', () => {
+  it('拒绝匿名、非所有者和仅持有分享凭据的用户，不触碰文件', async () => {
+    await api('POST', '/api/sites', owner, {
+      slug: 'delete-permission', name: 'Permission', access: 'password', password: 'private',
+    });
+    const member = (
+      await api('POST', '/api/auth/login', undefined, { email: 'other@site.test', password: 'password123' })
+    ).body.token;
+    const proof = (
+      await api('POST', '/api/sites/delete-permission/access', undefined, { password: 'private' })
+    ).body.accessToken;
+    const storage = vi.spyOn(app.get(SiteStorage), 'discard');
+    try {
+      expect((await api('DELETE', '/api/sites/delete-permission')).status).toBe(401);
+      expect(
+        (await api('DELETE', '/api/sites/delete-permission', member, undefined, { 'x-eat-site-access': proof })).status,
+      ).toBe(403);
+      const actor = (await app.get(AuthService).authenticate(member))!;
+      await expect(
+        app.get(McpToolsService).call(actor, 'delete_folio', { folio: 'delete-permission' }),
+      ).rejects.toThrow('仅 Folio 所有者或管理员');
+      expect(storage).not.toHaveBeenCalled();
+      expect((await api('GET', '/api/sites/delete-permission', owner)).status).toBe(200);
+    } finally {
+      storage.mockRestore();
+    }
+  });
+
+  it('清理全部历史文件、讨论、回复和会话，使旧链接和凭据失效，不影响其他 Folio', async () => {
+    const created = await api('POST', '/api/sites', owner, {
+      slug: 'delete-full', name: 'Delete', access: 'password', password: 'private',
+    });
+    const id = created.body.id;
+    const first = (
+      await api('POST', '/api/sites/delete-full/releases', owner, { files: files('delete v1') })
+    ).body;
+    const second = (
+      await api('POST', '/api/sites/delete-full/releases', owner, { files: files('delete v2') })
+    ).body;
+    const thread = (
+      await api('POST', '/api/sites/delete-full/threads', owner, {
+        versionId: first.id, page: '/', content: 'first',
+      })
+    ).body;
+    await api('POST', `/api/sites/delete-full/threads/${thread.id}/replies`, admin, {
+      versionId: second.id, content: 'reply',
+    });
+    await api('POST', '/api/sites/delete-full/comment-ticket', owner, {});
+    const share = (await api('POST', '/api/sites/delete-full/share', owner, {})).body;
+    const db = app.get<Db>(DB);
+    expect(await db.select().from(schema.siteSessions).where(eq(schema.siteSessions.siteId, id))).toHaveLength(1);
+    expect((await api('DELETE', '/api/sites/delete-full', owner)).body).toEqual({ ok: true, cleanupFailed: false });
+    expect(await db.select().from(schema.sites).where(eq(schema.sites.id, id))).toHaveLength(0);
+    expect(await db.select().from(schema.siteVersions).where(eq(schema.siteVersions.siteId, id))).toHaveLength(0);
+    expect(await db.select().from(schema.siteThreads).where(eq(schema.siteThreads.siteId, id))).toHaveLength(0);
+    expect(
+      await db.select().from(schema.siteComments).where(eq(schema.siteComments.threadId, thread.id)),
+    ).toHaveLength(0);
+    expect(await db.select().from(schema.siteSessions).where(eq(schema.siteSessions.siteId, id))).toHaveLength(0);
+    for (const version of [first, second]) {
+      await expect(access(join(dir, id, version.id))).rejects.toThrow();
+      expect(
+        (await content('/', { site: 'delete-full', version: version.number, token: owner })).statusCode,
+      ).toBe(404);
+    }
+    expect((await content('/', { site: 'delete-full', token: owner })).statusCode).toBe(404);
+    expect((await api('GET', '/api/sites/delete-full/threads', owner)).status).toBe(404);
+    expect((await api('GET', '/api/sites', owner)).body.some((s: any) => s.id === id)).toBe(false);
+    expect((await api('DELETE', '/api/sites/delete-full', owner)).status).toBe(404);
+    const audit = await db
+      .select().from(schema.auditLogs)
+      .where(and(eq(schema.auditLogs.action, 'site.deleted'), eq(schema.auditLogs.targetId, id)));
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ actorId: ownerId, meta: { slug: 'delete-full', versionCount: 2 } });
+    expect((await content('/', { site: 'demo', token: owner })).statusCode).toBe(200);
+    const recreated = await api('POST', '/api/sites', owner, {
+      slug: 'delete-full', name: 'New', access: 'password', password: 'private',
+    });
+    expect(recreated.body.id).not.toBe(id);
+    const accessToken = new URL(share.url).searchParams.get('eat_access');
+    expect(accessToken).toBeTruthy();
+    expect((await api('POST', '/api/sites/delete-full/access', undefined, { accessToken })).status).toBe(403);
+  });
+
+  it('管理员可通过 HTTP MCP 删除他人未发布的 Folio', async () => {
+    const actor = (await app.get(AuthService).authenticate(admin))!;
+    const tools = app.get(McpToolsService);
+    expect(tools.listTools().some((t) => t.name === 'delete_folio')).toBe(true);
+    expect(await tools.call(actor, 'delete_folio', { folio: 'delete-permission' })).toEqual({
+      ok: true, cleanupFailed: false,
+    });
+    expect((await api('GET', '/api/sites/delete-permission', owner)).status).toBe(404);
+    await expect(tools.call(actor, 'delete_folio', { folio: '../invalid' })).rejects.toThrow('工具参数不合法');
+  });
+
+  it('部分文件清理失败仍撤销访问、继续清理其他版本，并返回警告与审计记录', async () => {
+    const created = (
+      await api('POST', '/api/sites', owner, { slug: 'delete-storage-failure', name: 'Failure' })
+    ).body;
+    await api('POST', '/api/sites/delete-storage-failure/releases', owner, { files: files('first') });
+    await api('POST', '/api/sites/delete-storage-failure/releases', owner, { files: files('second') });
+    const storage = vi.spyOn(app.get(SiteStorage), 'discard')
+      .mockRejectedValueOnce(new Error('storage unavailable'));
+    try {
+      const result = await api('DELETE', '/api/sites/delete-storage-failure', owner);
+      expect(result.status).toBe(200);
+      expect(result.body).toEqual({ ok: true, cleanupFailed: true });
+      expect(storage).toHaveBeenCalledTimes(2);
+      expect((await content('/', { site: 'delete-storage-failure', token: owner })).statusCode).toBe(404);
+      const logs = await app.get<Db>(DB)
+        .select().from(schema.auditLogs)
+        .where(and(
+          eq(schema.auditLogs.action, 'site.storage_cleanup_failed'),
+          eq(schema.auditLogs.targetId, created.id),
+        ));
+      expect(logs).toHaveLength(1);
+      expect(logs[0].meta).toMatchObject({
+        slug: 'delete-storage-failure', versionIds: [storage.mock.calls[0][2]],
+      });
+    } finally {
+      storage.mockRestore();
+    }
+  });
+
+  it('上传途中删除 Folio 后拒绝激活新版本并清理未完成的文件', async () => {
+    const created = (
+      await api('POST', '/api/sites', owner, { slug: 'delete-during-publish', name: 'Race' })
+    ).body;
+    const storage = app.get(SiteStorage);
+    const put = storage.put.bind(storage);
+    let uploaded!: () => void;
+    let resume!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      uploaded = resolve;
+    });
+    const paused = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const spy = vi.spyOn(storage, 'put').mockImplementation(async (...args) => {
+      await put(...args);
+      uploaded();
+      await paused;
+    });
+    const publishing = api('POST', '/api/sites/delete-during-publish/releases', owner, {
+      files: [{ path: 'index.html', content: 'in flight' }],
+    });
+    try {
+      await ready;
+      expect((await api('DELETE', '/api/sites/delete-during-publish', owner)).status).toBe(200);
+      resume();
+      const result = await publishing;
+      expect(result.status).toBe(404);
+      expect(result.body.message).toContain('已删除');
+      const versionId = spy.mock.calls[0][1];
+      await expect(access(join(dir, created.id, versionId))).rejects.toThrow();
+      expect(
+        await app.get<Db>(DB).select().from(schema.siteVersions).where(eq(schema.siteVersions.siteId, created.id)),
+      ).toHaveLength(0);
+    } finally {
+      resume();
+      await publishing;
+      spy.mockRestore();
+    }
+  });
+
+  it('并发删除只有一次成功和一条删除审计', async () => {
+    const created = (
+      await api('POST', '/api/sites', owner, { slug: 'delete-twice', name: 'Twice' })
+    ).body;
+    const actor = (await app.get(AuthService).authenticate(owner))!;
+    const service = app.get(SitesService);
+    const result = await Promise.allSettled([
+      service.remove(actor, 'delete-twice'), service.remove(actor, 'delete-twice'),
+    ]);
+    expect(result.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const failed = result.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+    expect(failed.reason.getStatus()).toBe(404);
+    const audit = await app.get<Db>(DB)
+      .select().from(schema.auditLogs)
+      .where(and(eq(schema.auditLogs.action, 'site.deleted'), eq(schema.auditLogs.targetId, created.id)));
+    expect(audit).toHaveLength(1);
   });
 });

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { unzipSync } from 'fflate';
 import {
   SITE_MAX_BYTES,
@@ -20,6 +20,7 @@ import {
   History,
   MessageSquare,
   Settings,
+  Trash2,
   Upload,
 } from 'lucide-react';
 import { api } from '../api';
@@ -559,8 +560,9 @@ export function FolioDetailPage() {
           )}
         </TabsContent>
         {s.canManage && (
-          <TabsContent value="settings">
+          <TabsContent value="settings" className="space-y-6">
             <FolioSettingsForm key={s.id + s.updatedAt} folio={s} onSaved={refresh} />
+            <FolioDelete folio={s} disabled={busy || restoring} />
           </TabsContent>
         )}
       </Tabs>
@@ -691,6 +693,93 @@ function SiteAccessForm({ slug, onVerified }: { slug: string; onVerified: (proof
       />
       <Button loading={busy}>验证密码</Button>
     </form>
+  );
+}
+
+function FolioDelete({ folio: s, disabled }: { folio: SiteInfo; disabled: boolean }) {
+  const navigate = useNavigate();
+  const cache = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState('');
+  async function remove() {
+    if (deleting) return;
+    setDeleting(true);
+    setError('');
+    try {
+      const result = await api<{ ok: boolean; cleanupFailed: boolean }>('DELETE', '/api/sites/' + s.slug);
+      await cache.cancelQueries({ queryKey: ['sites'] });
+      cache.setQueryData<SiteInfo[]>(['sites'], (previous) => previous?.filter((site) => site.id !== s.id));
+      void cache.invalidateQueries({ queryKey: ['sites'] });
+      setOpen(false);
+      navigate('/folios', { replace: true });
+      cache.removeQueries({ queryKey: ['site', s.slug] });
+      cache.removeQueries({ queryKey: ['site-versions', s.slug] });
+      if (result.cleanupFailed) toast.warning('Folio 已删除，但部分发布文件清理失败，请联系管理员处理');
+      else toast.success('Folio 已删除');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setDeleting(false);
+    }
+  }
+  return (
+    <>
+      <Card className="border-destructive/30">
+        <CardContent className="space-y-4 pt-5">
+          <div>
+            <h2 className="font-semibold">删除 Folio</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              永久删除此 Folio、全部发布记录、文件和评论。所有访问链接将失效，删除后无法恢复。
+            </p>
+          </div>
+          <Button
+            variant="outline-destructive"
+            disabled={disabled || deleting}
+            onClick={() => {
+              setError('');
+              setOpen(true);
+            }}
+          >
+            <Trash2 />
+            删除 Folio
+          </Button>
+        </CardContent>
+      </Card>
+      <AlertDialog
+        open={open}
+        onOpenChange={(value) => {
+          if (!deleting) setOpen(value);
+        }}
+      >
+        <AlertDialogContent aria-busy={deleting}>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="break-words">永久删除「{s.name}」？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将删除此 Folio 的全部发布记录、文件、评论和回复。固定链接、历史版本链接和分享链接都会失效，此操作无法恢复。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              destructive
+              disabled={deleting}
+              onClick={(e) => {
+                e.preventDefault();
+                void remove();
+              }}
+            >
+              {deleting ? '正在删除…' : '确认删除'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 

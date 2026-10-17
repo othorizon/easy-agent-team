@@ -82,6 +82,9 @@ export class SitesController {
   ) {
     return this.sites.update(user, slug, body);
   }
+  @Delete(':slug') remove(@CurrentUser() user: AuthUser, @Param('slug') slug: string) {
+    return this.sites.remove(user, slug);
+  }
   @Get(':slug/versions') versions(
     @CurrentUser() user: AuthUser,
     @Param('slug') slug: string,

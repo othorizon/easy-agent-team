@@ -55,7 +55,7 @@ const values = {
   upstreamPort: 3000,
   gatewayTarget: '203.0.113.10',
 };
-async function api(method: 'GET' | 'POST' | 'PUT', url: string, token?: string, payload?: unknown) {
+async function api(method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, token?: string, payload?: unknown) {
   const r = await app.inject({
     method,
     url,
@@ -250,6 +250,7 @@ describe('系统设置启用静态发布', () => {
     expect(await db.select().from(schema.sites)).toHaveLength(1);
     expect((await app.inject({ url: '/', headers: { host: 'demo.sites.example.com' } })).statusCode).toBe(503);
     expect((await api('POST', '/api/sites', member, { slug: 'another', name: 'Another' })).status).toBe(503);
+    expect((await api('DELETE', '/api/sites/demo', member)).status).toBe(503);
     expect(
       (await api('PUT', '/api/admin/site-settings', admin, { ...values, domain: 'different.example.com' })).status,
     ).toBe(409);

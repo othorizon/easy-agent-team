@@ -120,6 +120,10 @@ export function registerFolioCommands(program: Command): void {
     .option('--no-spa', '关闭 SPA')
     .action((folio, o) => runFolioTool('update_folio', { ...o, folio }));
   folio
+    .command('delete <folio>')
+    .description('永久删除 Folio、全部历史版本和评论，链接立即失效，无法恢复；仅所有者或管理员可操作')
+    .action((folio) => runFolioTool('delete_folio', { folio }));
+  folio
     .command('push <folio> <directory-or-zip>')
     .description('上传构建好的静态目录或 ZIP，发布并保留完整历史版本')
     .option('-m, --message <text>', '版本说明')

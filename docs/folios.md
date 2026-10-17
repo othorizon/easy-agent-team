@@ -52,6 +52,8 @@ DNS 凭证与 OSS 凭证独立。AliDNS 需要 `DescribeDomains`、`DescribeDoma
 
 ## 发布与版本
 
+Folio 只能托管静态网站：HTML、CSS、JavaScript、图片等资源，以及 React / Vue 等项目预先构建生成的静态产物（含 SPA）。浏览器端交互和调用外部 API 均可；Folio 不执行依赖安装、构建命令或服务端代码，不提供后端、SSR 运行时或数据库服务。需要构建的项目须先在本地构建，再上传产物；需要后端、SSR 或常驻进程的项目应使用平台「应用」的 dockerfile 构建与部署流程。
+
 ```bash
 eat folio create demo --name "项目演示"
 eat folio push demo ./dist -m "第一版"
@@ -65,6 +67,12 @@ eat folio activate demo <version-id>
 固定入口 `https://demo.eat-sites.example` 直接返回当前版本，地址栏保持固定域名；发布新版本或回滚后，后续页面和资源请求使用新的当前版本。需要固定快照时，使用版本地址，例如 `https://v3--demo.eat-sites.example`：该域名下的页面、绝对路径资源、多页导航与 SPA 路由都保留在同一版本内，不会因其他人发布而变化。
 
 所有历史版本文件默认保留。发布先写入新快照，再在数据库事务内分配单调版本号并切换当前版本；并发发布不会产生重复版本号。上传失败不改变线上版本。回滚只修改当前版本指针，评论保持原样。保存的是 HTML/CSS/JS/图片等发布产物，不自动保存 React/Vue 源工程。
+
+## 删除 Folio
+
+所有者和管理员可在 Folio 详情的「设置 → 删除 Folio」确认删除，也可使用 `eat folio delete <folio>`、MCP `delete_folio`（参数 `folio`）或 `DELETE /api/sites/:slug`。删除会永久清除 Folio、全部发布版本、讨论、回复和访问会话，并清理各版本的 OSS 文件或旧本地文件。固定链接、历史版本链接和分享链接立即失效；删除后无法恢复。删除不会影响其他 Folio 或共享 HTTPS / DNS 配置；同一 slug 可重新创建，新 Folio 不接受旧分享凭据。
+
+删除与发布共用行锁；上传途中被删除的 Folio 无法激活新版本，未提交文件会清理。数据库删除与 `site.deleted` 审计在同一事务内完成，之后清理私有文件。若存储清理失败，响应仍为 `{ ok: true, cleanupFailed: true }`，Folio 保持不可访问，控制台提示联系管理员；管理员需按 `site.storage_cleanup_failed` 审计中的 Folio ID 与版本 ID 清理残留文件（OSS 前缀 `sites/<Folio ID>/<版本 ID>/`，旧本地目录 `data/static-sites/sites/<Folio ID>/<版本 ID>/`）。正常响应为 `{ ok: true, cleanupFailed: false }`。
 
 ## 访问方式
 
@@ -115,7 +123,7 @@ eat folio delete-comment demo '<评论或回复 ID>'
 
 ## MCP 与 API
 
-本机 stdio MCP 和平台 HTTP MCP 都提供：`list_folios`、`create_folio`、`update_folio`、`publish_folio`、`list_folio_versions`、`activate_folio_version`、`create_folio_share_link`、`unlock_folio`、`list_folio_comments`、`create_folio_comment`、`reply_folio_comment`、`delete_folio_comment`、`set_folio_thread_status`、`list_folio_mention_users`。
+本机 stdio MCP 和平台 HTTP MCP 都提供：`list_folios`、`create_folio`、`update_folio`、`delete_folio`、`publish_folio`、`list_folio_versions`、`activate_folio_version`、`create_folio_share_link`、`unlock_folio`、`list_folio_comments`、`create_folio_comment`、`reply_folio_comment`、`delete_folio_comment`、`set_folio_thread_status`、`list_folio_mention_users`。
 
 主要 REST 入口为 `/api/sites`、`/:slug/releases`、`/:slug/versions`、`/:slug/activate`、`/:slug/access`、`/:slug/share`、`/:slug/threads`、`/:slug/threads/:id/replies`；删除评论使用 `DELETE /api/sites/:slug/comments/:id`。密码访问的 Folio 可先调用 access 端点，再通过 `x-eat-site-access` 携带返回的访问凭据；它不代替发表评论所需的 EAT 身份。按版本筛选讨论使用发起版本，回复保留各自的浏览版本。
 

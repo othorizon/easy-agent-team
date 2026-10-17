@@ -34,6 +34,8 @@ export class FolioToolsService {
           return this.sites.create(user, createSiteSchema.parse(body));
         case 'update_folio':
           return this.sites.update(user, slug, updateSiteSchema.parse(body));
+        case 'delete_folio':
+          return this.sites.remove(user, slug);
         case 'publish_folio':
           return this.sites.publish(user, slug, publishSiteSchema.parse(body));
         case 'list_folio_versions':

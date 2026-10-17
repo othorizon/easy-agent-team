@@ -26,9 +26,14 @@ export const FOLIO_TOOL_SPECS = {
       '修改 Folio 名称、访问模式、访问密码或 SPA 设置。仅所有者或管理员；修改密码会使旧分享凭据失效。',
     schema: z.object({ ...folioArg, ...updateSiteSchema.shape }),
   },
+  delete_folio: {
+    description:
+      '永久删除 Folio、全部历史版本、评论与访问会话，并清理发布文件。仅所有者或管理员；链接立即失效，无法恢复，调用前须获得用户明确的删除指令。cleanupFailed 为 true 时需管理员清理残留的私有文件。',
+    schema: z.object({ folio: slugSchema }),
+  },
   publish_folio: {
     description:
-      '上传静态文件并发布不可变版本，无需审批。files 为相对路径及 utf8/base64 内容，根目录必须有 index.html，总量最多 50 MiB；较大目录建议用 eat folio push。保存发布产物，不等于保存源工程。',
+      '仅发布已构建的静态网站（HTML/CSS/JS/图片，可含 SPA），创建不可变版本，无需审批。不执行依赖安装、构建、后端代码或 SSR；需要服务端运行的项目请走应用部署。files 为相对路径及 utf8/base64 内容，根目录必须有 index.html，总量最多 50 MiB；较大目录建议用 eat folio push。保存发布产物，不等于保存源工程。',
     schema: z.object({ ...folioArg, ...publishSiteSchema.shape }),
   },
   list_folio_versions: {
@@ -108,6 +113,9 @@ export function folioToolRequest(name: FolioToolName, input: unknown) {
     case 'update_folio':
       method = 'PATCH';
       payload = updateSiteSchema.parse(body);
+      break;
+    case 'delete_folio':
+      method = 'DELETE';
       break;
     case 'publish_folio':
       method = 'POST';

@@ -24,7 +24,7 @@ import {
 } from '@eat/shared';
 import type { AuthUser } from '../auth/auth.decorators';
 import { DB, type Db } from '../db/db.module';
-import { apiTokens, sites, siteVersions, siteSessions, users, siteSettings } from '../db/schema';
+import { apiTokens, auditLogs, sites, siteVersions, siteSessions, siteThreads, users, siteSettings } from '../db/schema';
 import { sha256Hex } from '../common/crypto';
 import { loadConfig } from '../config';
 import { AuditService } from '../audit/audit.service';
@@ -163,6 +163,50 @@ export class SitesService {
     });
     return this.info(row, user);
   }
+  async remove(user: AuthUser, slug: string) {
+    const site = await this.get(slug);
+    this.manage(site, user);
+    const versions = await this.db.transaction(async (tx) => {
+      // 与发布共用行锁，确保已提交的全部版本都包含在清理范围内。
+      const [locked] = await tx.select().from(sites).where(eq(sites.id, site.id)).for('update');
+      if (!locked) throw new NotFoundException('Folio 不存在');
+      this.manage(locked, user);
+      const snapshots = await tx.select().from(siteVersions).where(eq(siteVersions.siteId, site.id));
+      // 评论引用版本，必须先删讨论（级联评论），再级联删除版本和会话。
+      await tx.delete(siteThreads).where(eq(siteThreads.siteId, site.id));
+      await tx.delete(sites).where(eq(sites.id, site.id));
+      await tx.insert(auditLogs).values({
+        actorId: user.id,
+        action: 'site.deleted',
+        targetType: 'site',
+        targetId: site.id,
+        meta: { slug, versionCount: snapshots.length },
+      });
+      return snapshots;
+    });
+    // 先撤销所有访问，再清理私有文件；存储故障不能让已删除的 Folio 重新可见。
+    const failedVersions: string[] = [];
+    for (const version of versions) {
+      try {
+        await this.storage.discard(version.storage, site.id, version.id, Object.keys(version.manifest));
+      } catch {
+        failedVersions.push(version.id);
+        this.logger.warn(`Folio 文件清理失败：site=${site.id} version=${version.id}`);
+      }
+    }
+    if (failedVersions.length) {
+      await this.audit
+        .record({
+          actorId: user.id,
+          action: 'site.storage_cleanup_failed',
+          targetType: 'site',
+          targetId: site.id,
+          meta: { slug, versionIds: failedVersions },
+        })
+        .catch(() => this.logger.warn(`Folio 文件清理失败审计未写入：site=${site.id}`));
+    }
+    return { ok: true, cleanupFailed: failedVersions.length > 0 };
+  }
   async versionInfo(site: SiteRow, row: typeof siteVersions.$inferSelect): Promise<SiteVersion> {
     return {
       id: row.id,
@@ -239,6 +283,7 @@ export class SitesService {
         const [capability] = await tx.select().from(siteSettings).where(eq(siteSettings.id, 1)).for('share');
         if (capability?.status !== 'enabled') throw new ServiceUnavailableException('Folio 已停用，本次发布未生效');
         const [locked] = await tx.select().from(sites).where(eq(sites.id, site.id)).for('update');
+        if (!locked) throw new NotFoundException('Folio 已删除，本次发布未生效');
         const [v] = await tx
           .insert(siteVersions)
           .values({
