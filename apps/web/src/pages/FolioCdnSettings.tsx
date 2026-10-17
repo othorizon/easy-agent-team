@@ -4,7 +4,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   updateSiteCdnSchema,
-  CDN_WILDCARD_CAPABILITY_WARNING,
   type SiteCdnInfo,
   type UpdateSiteCdn,
   type SiteSettingsInfo,
@@ -78,27 +77,10 @@ export function FolioCdnSettings({ folio }: { folio?: SiteSettingsInfo }) {
       </div>
       <p className="text-sm text-muted-foreground">
         复用 Folio
-        域名、部署入口与源站证书。通过全部验证后，仅公开静态资源进入共享缓存，每次命中前重新检查访问权限。
+        域名、部署入口与源站证书。网关响应头控制缓存，公开及密码 Folio 的静态资源缓存 30 天；HTML 保留入口验证。
       </p>
-      <p role="alert" className="break-words rounded-md border p-3 text-sm text-destructive">
-        {r?.capabilityWarning || CDN_WILDCARD_CAPABILITY_WARNING}{' '}
-        <a
-          className="underline"
-          href="https://help.aliyun.com/zh/cdn/user-guide/configure-custom-request-headers/"
-          target="_blank"
-          rel="noreferrer"
-        >
-          官方回源请求头限制
-        </a>
-        {' · '}
-        <a
-          className="underline"
-          href="https://help.aliyun.com/zh/cdn/user-guide/create-a-custom-http-response-header"
-          target="_blank"
-          rel="noreferrer"
-        >
-          官方响应头限制
-        </a>
+      <p className="rounded-md border p-3 text-sm text-muted-foreground">
+        改密码、改权限和删除会异步清理 CDN 缓存。静态文件命中缓存时不检查密码，持有文件链接的人可能直接访问；浏览器已经缓存的文件无法撤回。
       </p>
       {query.error && (
         <p role="alert" className="text-sm text-destructive">
@@ -212,6 +194,20 @@ export function FolioCdnSettings({ folio }: { folio?: SiteSettingsInfo }) {
                 ? '已上传，等待边缘验证'
                 : '尚未上传'}
           </p>
+          <p>
+            缓存维护：{r.cacheRefresh.pending ? `刷新未完成（${r.cacheRefresh.pending} 个目录）` : '无待处理任务'}
+          </p>
+          {r.cacheRefresh.lastCompletedAt && (
+            <p>最近刷新完成：{new Date(r.cacheRefresh.lastCompletedAt).toLocaleString()}</p>
+          )}
+          {r.cacheRefresh.lastError && (
+            <p role="alert" className="break-words text-destructive">{r.cacheRefresh.lastError}</p>
+          )}
+          {r.cacheRefresh.retryAt && (
+            <p className="text-xs text-muted-foreground">
+              下次刷新检查：{new Date(r.cacheRefresh.retryAt).toLocaleString()}；可点击“重新检查 / 恢复”重试。
+            </p>
+          )}
           {r.certificateSyncError && (
             <p role="alert" className="break-words text-destructive">
               {r.certificateSyncError}

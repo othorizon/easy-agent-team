@@ -1,31 +1,25 @@
 # Folio 阿里云 CDN
 
-**当前能力限制（2026-10-17）：普通阿里云 CDN 的泛域名方案尚不满足实际接入与缓存加速的交付条件。** 官方中英文文档明确说明：[泛域名不能修改出站请求头](https://help.aliyun.com/zh/cdn/user-guide/configure-custom-request-headers/)，[泛域名不能修改出站响应头](https://help.aliyun.com/zh/cdn/user-guide/create-a-custom-http-response-header)。当前实现依赖前者注入可信回源标记，依赖后者让缓存命中后的浏览器仍收到 `private, no-store`；API 接受参数、配置状态为 `success` 或替身测试通过，均不能消除这个功能限制。
+管理员在「系统设置 → Folio 发布 → 阿里云 CDN」配置一次后，成员继续按原方式发布、回滚、设置密码和发表评论。CDN 默认关闭；升级不会自动修改现有 Folio 的访问、DNS 或 Traefik 路由。配置意愿、实际接入、证书同步和缓存刷新状态分别展示，保存成功不表示已接入。
 
-控制台和管理员 API 的 `capabilityWarning` 会明确显示这个缺口。请保留直连解析，不要手动把 DNS 切到 CDN，不要通过删除回源验证、关闭证书校验或放宽浏览器缓存绕过检查。要完成原目标，需要先调整为供应商支持的接入方式并进行真实验证；本次没有完成该兼容方案，不能将当前实现或整体禁用缓存宣称为已完成加速。
+本方案以缓存体验为优先：公开和密码 Folio 的 CSS、JS、图片、字体缓存 30 天；HTML 保留入口鉴权，改密码、改权限和删除时异步清理 CDN。不使用缓存命中前远程鉴权、自定义回源请求头或出站响应头改写。密码用于页面入口，已缓存静态文件的链接可能直接访问；刷新有延迟，浏览器已有副本无法撤回。
 
-以下描述已经实现的控制流程及替身验证范围，使用条件仍受上述限制约束。管理员配置入口为「系统设置 → Folio 发布 → 阿里云 CDN」。成员继续按原方式发布、回滚、设置权限和发表评论。CDN 默认关闭；数据库只保留 CDN 配置与运行状态，不改旧 Folio 设置、域名、版本指针、DNS 或 Traefik 路由。
+## 首次准备
 
-迁移 `0020_folio_cdn` 新增 CDN 状态表。已执行历史迁移 `0021_folio_cdn_purge` 的环境通过 `0022_folio_cdn_no_purge` 删除刷新触发器、函数及队列，丢弃尚未提交或等待重试的维护任务，保留 Folio 和 CDN 接入状态。历史迁移保持不变，全新安装与旧环境升级都运行完整迁移链。
+1. 阿里云账号完成实名认证并开通 CDN。选择中国内地或全球范围时，域名需要有效 ICP 备案；`overseas` 为全球但不含中国内地。服务开通、备案、计费与额度由账号所有者处理，EAT 不代为购买服务。
+2. 按 [Folio 使用说明](folios.md) 先启用 Folio，确认私有 OSS、独立部署入口和 Traefik HTTPS 正常。CDN 源站必须是公网可达、独立于 Folio 域名的 IP 或主机名，避免切换 DNS 后循环回源。
+3. 准备下文 RAM 权限。可使用独立 CDN AccessKey，或明确选择复用现有 AliDNS AccessKey；复用后也要具有 CDN 权限。Cloudflare DNS 使用自己的 Token，CDN 仍使用独立阿里云 RAM 凭证。
+4. 选择加速区域、凭证来源和自动 DNS，勾选启用后保存。凭证加密存储、AccessKey 脱敏显示、Secret 不读回，留空保留原值。管理员 API 校验权限并记录不含凭证的审计。
+5. 自动 DNS 复用 Folio 的 AliDNS / Cloudflare 凭证，完成 TXT 验证并迁移预期的直连通配记录。关闭自动 DNS 时，按控制台每阶段的 TXT / CNAME 指引手动配置，再点击「重新检查 / 恢复」。TXT 使用注册主域名的 `verification`，与 ACME 的 `_acme-challenge` 用途不同。
+6. 后台验证源站 HTTPS、实际 Folio Host、SNI、实例标记、CDN 边缘证书和静态资源 HIT 后，才切 DNS 并检查实际访问。失败保留诊断与恢复入口，不能提前切 DNS 绕过检查。
 
-## 首次准备与开启
+源站端口为 HTTPS 443，不是容器内部 upstream 地址。HTTP Host 保留用户实际访问的固定或历史版本 Folio 域名；TLS SNI 使用源站泛域名证书覆盖的精确名称 `eat-origin-<实例标识前八位>.<Folio 后缀>`。连接地址仍为独立源站，该 SNI 名称无需指向 CDN。始终校验源站证书，不改 HTTP 回源，不跳过证书校验。
 
-1. 阿里云账号完成实名认证并开通 CDN。中国内地、全球范围需要域名具备有效 ICP 备案；`overseas` 表示全球但不含中国内地。服务开通、备案、额度及账单由账号所有者处理，EAT 不代为购买服务。
-2. 按 [Folio 使用说明](folios.md) 先检查并启用 Folio，保证独立域名、私有 OSS、Traefik 的免费 ACME 泛域名证书和控制台 HTTPS 已可用。证书模式也支持已有证书和已有 DNS resolver，续期责任仍归原管理流程。
-3. 准备下文 RAM 权限。独立 CDN AccessKey 与 OSS 凭证分离；选择「复用 AliDNS」必须明确勾选，后台仍实际调用 CDN API 检查权限。使用 Cloudflare DNS 时，CDN 仍使用独立阿里云 RAM 凭证。
-4. 选择范围、凭证来源及是否自动管理 DNS，勾选启用后保存。AccessKey 留空保留旧值，Secret 只接受写入，不会读回。配置已保存不代表接入成功。后台每 30 秒检查可执行任务；正在处理云操作时保存可能返回冲突，稍后重试即可。
-5. 自动管理复用 Folio 的 AliDNS / Cloudflare 凭证，验证 TXT 并迁移预期的直连通配记录。未授权自动管理时，控制台按阶段给出完整 TXT / CNAME 名称和值，手动完成后点击「重新检查 / 恢复」。验证使用注册主域名的 `verification` TXT，不是 `_acme-challenge`。TXT 与 ACME 的 DNS-01 是两个独立用途。
-6. 只有 HTTPS 证书指纹、Host/SNI、实际缓存 HIT、携带会话访问旧缓存被拒绝以及切换后的访问检查全部通过，状态才变为「已接入」。缺少相关 CDN 功能、权限不足或规则仍在配置中时保留诊断，不跳过安全检查。
+Folio 网关目前是 EAT 服务内的模块，Traefik 将 Folio 域名请求转发给该模块，不经过控制台前端。CDN 缓存命中时不访问 EAT；未命中、HTML 和动态接口回源。控制台域名不需要作为每次 CDN 访问的鉴权回调地址。
 
-上面是状态机的设计流程，尚不能按普通 CDN 泛域名的标准能力完成整条接入链路。额外增加 RAM 权限、手工添加 TXT / CNAME 或重复保存相同规则不能补齐供应商不支持的头部功能。
+## 最小 RAM / DNS 权限
 
-源站复用 Folio 的部署入口 IP / 主机名，端口固定 HTTPS 443，不使用容器内部 upstream 地址作为 CDN 公网源站。入口必须独立于 Folio 域名空间；推荐固定入口 IP 或直接指向该 IP 的独立源站域名。HTTP Host 保留真实固定 / 版本 Folio 域名；TLS SNI 使用同一泛域名证书覆盖的实例专用精确名称 `eat-origin-<实例标识前八位>.<Folio 后缀>`。连接地址仍是独立源站，不需要把该 SNI 名称解析到 CDN。开启回源证书校验，不配置跳过校验或 Common Name 宽泛白名单。
-
-EAT 控制台地址承担 `/api/sites/cdn-auth` 鉴权接口，必须独立可达，不能再次回到 Folio CDN。该接口固定返回 `private, no-store`，每次查询 PostgreSQL，不缓存允许结果。已有控制台代理也必须保留它的 no-store。
-
-## 最小权限
-
-下面使用保留示例域名。替换账号 ID、Folio 域名和实际 DNS 区域；不要将真实凭证提交到仓库。CDN 动作集对应实现实际调用，不需要 `AliyunCDNFullAccess`、购买证书、删除 CDN 域名、修改其他应用或公开 OSS Bucket 的权限。
+以下均为保留示例。替换账号 ID 和实际 Folio / DNS 域名，不提交真实凭证。无需 `AliyunCDNFullAccess`、购买证书、删除 CDN 域名或公开 OSS Bucket。
 
 ```json
 {
@@ -40,18 +34,26 @@ EAT 控制台地址承担 `/api/sites/cdn-auth` 鉴权接口，必须独立可�
       "Effect": "Allow",
       "Action": [
         "cdn:AddCdnDomain", "cdn:DescribeCdnDomainDetail", "cdn:ListTagResources",
-        "cdn:DescribeCdnDomainConfigs", "cdn:BatchSetCdnDomainConfig",
+        "cdn:DescribeCdnDomainConfigs", "cdn:BatchSetCdnDomainConfig", "cdn:DeleteSpecificConfig",
         "cdn:SetCdnDomainSSLCertificate", "cdn:StartCdnDomain", "cdn:StopCdnDomain"
       ],
       "Resource": "acs:cdn:*:1234567890123456:domain/.sites.example.com"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["cdn:RefreshObjectCaches", "cdn:DescribeRefreshTasks"],
+      "Resource": [
+        "acs:cdn:*:1234567890123456:domain/.sites.example.com",
+        "acs:cdn:*:1234567890123456:domain/*.sites.example.com"
+      ]
     }
   ]
 }
 ```
 
-API 中泛域名写作 `.sites.example.com`（前导点），证书 SAN 写作 `*.sites.example.com`，二者不能混用。前一组账号级接口不支持按 CDN 域名资源授权。EAT 不调用缓存刷新 API，已有 RAM 策略可移除 `cdn:RefreshObjectCaches` 权限及仅为刷新具体 Folio / 版本主机添加的资源范围。[CDN RAM 操作与资源参考](https://help.aliyun.com/zh/cdn/developer-reference/api-cdn-2018-05-10-ram)。
+CDN API 的泛域名写作 `.sites.example.com`，证书 SAN 为 `*.sites.example.com`。刷新提交具体 Folio / 版本主机 URL，RAM 中相应后缀范围仅用于刷新和查询；其他配置操作仍限制到本实例的泛域名资源。`DeleteSpecificConfig` 用于删除旧版 EAT 创建的三个规则，不能省略后用全量覆盖代替。服务和域名配置权限会在实际接入调用中验证；刷新权限在刷新任务执行时验证，权限不足会显示失败及重试，不能仅凭服务查询成功认定全部写权限可用。参见 [CDN RAM 参考](https://help.aliyun.com/zh/cdn/developer-reference/api-cdn-2018-05-10-ram)、[刷新 API](https://help.aliyun.com/zh/cdn/developer-reference/api-cdn-2018-05-10-refreshobjectcaches) 和 [任务查询](https://help.aliyun.com/zh/cdn/developer-reference/api-cdn-2018-05-10-describerefreshtasks)。
 
-AliDNS 现有 Folio / Traefik DNS-01 使用下列权限；自动迁移 CDN 解析还需要 `UpdateDomainRecord`。`DescribeDomains` 为账号级，其余限制到相应 DNS 区域。主域名与独立委派子域名分属不同区域时，需要涵盖证书挑战和 `verification` 所在的实际区域。
+AliDNS 自动 DNS / Traefik DNS-01 所需权限如下。`DescribeDomains` 为账号级，其余限定到对应 DNS 区域。独立委派子域名与注册主域名属于不同区域时，需要覆盖验证 TXT 和 ACME 挑战所在的区域。
 
 ```json
 {
@@ -70,87 +72,90 @@ AliDNS 现有 Folio / Traefik DNS-01 使用下列权限；自动迁移 CDN 解�
 }
 ```
 
-关闭自动管理 DNS 可从 **EAT DNS 自动迁移** 权限中去掉 `UpdateDomainRecord`；Traefik 自动证书仍需要 TXT 的读取、新增、删除权限。若完全使用外部证书 / resolver 且手动管理 TXT/CNAME，EAT 本身无需 DNS 凭证。Cloudflare Token 需要对应区域的 **Zone Read + DNS Edit**，记录使用 DNS only；不会开通或复用 Cloudflare 代理。DNS API 权限参考：[DescribeDomainRecords](https://help.aliyun.com/zh/dns/api-alidns-2015-01-09-describedomainrecords)、[UpdateDomainRecord](https://help.aliyun.com/zh/dns/api-alidns-2015-01-09-updatedomainrecord)。
+关闭自动 DNS 可从 EAT 的解析迁移权限中去掉 `UpdateDomainRecord`，Traefik DNS-01 仍需 TXT 读取、新增和删除权限。完全使用外部证书 / resolver 且手动管理 TXT/CNAME 时，EAT 无需 DNS 凭证。Cloudflare Token 需要对应区域的 **Zone Read + DNS Edit**，使用 DNS only，不启用 Cloudflare 代理。参考 [AliDNS 读取](https://help.aliyun.com/zh/dns/api-alidns-2015-01-09-describedomainrecords) 与 [修改记录](https://help.aliyun.com/zh/dns/api-alidns-2015-01-09-updatedomainrecord)。
 
-## 四种关键操作的资源与状态
+## 开启、关闭、续期与权限变更
 
-| 操作 | 资源变化 | 状态与安全边界 |
-| --- | --- | --- |
-| 开启 | 验证 TXT；创建带 `eat-instance=<resourceKey>` 标签的泛域名 CDN；上传源站证书；配置固定 SNI、回源密钥、鉴权及缓存；验证后迁移通配 DNS | checking → provisioning → verifying → enabled。手动 DNS 阶段为 awaiting_dns；故障为 failed，外部变更为 conflict。只有实际检查通过后 `connected=true` |
-| 关闭 | 恢复并验证原始 A/AAAA/CNAME 与 TTL；保留 CDN 在线及证书至少 24 小时或原 TTL 的两倍（较大者）；再次检查源站后停止带本实例标签的 CDN | enabled=false 表示停止发出新缓存重定向。draining 期间旧节点继续鉴权；确认 CDN 实际 offline 后才 disabled。Folio 服务、源站证书、OSS、版本及评论保留 |
-| 续期 | Traefik 执行 DNS-01 签发 / 续期并写 ACME 存储；EAT 读取匹配证书、核对 SAN/有效期/私钥，指纹变化后重新上传 CDN，并验证边缘证书指纹 | 源站证书检查时间 / 到期时间、CDN 实际验证时间和同步错误独立记录。正常每小时检查；失败持久化退避重试，退出等待期仍维护证书。21 天内到期在控制台提醒；不发送外部通知 |
-| 权限变更 | 数据库提交访问策略及 `accessRevision`，不调用 CDN API | 下一次缓存命中前实时检查最新策略。旧缓存路径包含旧修订号，立即被拒绝；旧在途回源完成也不能重新授权。所有历史版本同样受限 |
-
-`SiteCdnService` 与 Folio 启停共用 PostgreSQL 会话 advisory lock，配置保存使用同一锁的事务版本及设置行锁。云 API/DNS 操作前写归属、预期值及原始解析；进程重启会继续对账。创建超时可通过标签重新认领；DNS 修改使用原记录 ID，按前后状态恢复；后台失败从 30 秒起退避，最长一小时，管理员可立即重新检查。后台定时器停止后不再创建新任务，正常关闭等待当前任务结束。
-
-CDN 域名已有但没有本实例标签时，不接管、不删除。DNS 类型、值、记录 ID、TTL 或 CDN 配置（包括规则绑定条件）与记录不符时暂停覆盖。自动 DNS 只支持单条预期的直连通配记录；多条、代理、分线路或暂停记录应先人工整理。精确 Folio 域名记录优先于通配记录。自动模式从数据库中的现有 Folio 及历史版本生成允许名单，逐条检查；仅迁移预期的单条直连记录，并保存原值与扫描进度，关闭时恢复。其他应用的精确记录不会被枚举或修改。手动模式需按 CNAME 指引核对这些精确记录。已有 CDN 资源的加速区域不支持在线变更。凭证轮换必须先用新凭证验证同一资源的归属，否则保留旧凭证。
-
-首次 DNS 切换后实际访问失败时，自动管理模式尝试恢复原始解析并保留 CDN，恢复失败单独提示。手动模式显示原站解析指引，不擅自写 DNS。外部冲突需要先核对并恢复原记录 / 原规则，再点击恢复；“恢复”不会强制认领外部改动。停止 CDN 后仍保留带标签的域名配置，便于再次开启，不自动删除云资源。
-
-阿里云新建域名会返回 HTTPS、TLS、IPv6、调度、防护等服务默认配置，EAT 保留已识别且未绑定条件的这些配置，不将其计入内容规则指纹。除此之外的未知配置、EAT 回源 / 鉴权 / 缓存规则被修改或绑定条件时仍暂停，不覆盖外部设置。实际响应中无绑定条件的 `ParentId=0` 与省略参数、`-1` 按相同语义比较。域名归属验证完成后会清除 TXT 指引；自动管理模式只显示自动处理提示，手动模式才要求添加记录。阿里云控制台的「CNAME 待配置」在证书、鉴权与链路检查完成前属于尚未切换阶段，不能提前手动切 DNS 绕过这些检查。
-
-开启时先验证源站，再验证 CDN，最后切换 DNS 并验证实际解析。前两步直接连接独立源站和阿里云分配 CNAME 解析出的地址，同时保留 Folio Host/SNI，不要求 Folio 通配 CNAME 已存在。控制台中的 CDN CNAME 是解析目标，通常在自己的 DNS 区域创建 `*.sites.example.com CNAME <阿里云分配的目标>`，无需再创建一条名为 `all` 的记录。自动管理模式会在检查通过后迁移记录。
-
-探测逐次建立独立 HTTPS 连接，避免不同目标地址的检查被 Node.js 默认 Keep-Alive 连接池复用到错误目标。直连检查保留 Folio HTTP Host，同时使用 CDN 实际配置的 `eat-origin-<实例标识前八位>.<Folio 后缀>` 作为 SNI；访问 CDN 节点时使用 Folio Host 作为 SNI。证书域名、有效期、可信链、连接拒绝及超时分别提示，始终保留 TLS 验证。
-
-失败时分别提示源站 / CDN 阶段、HTTP 状态、实例标记或浏览器缓存头问题，不回显上游响应正文。CDN 返回 502 时，按 `X-Swift-Error` / `X-Tengine-Error` 的内容分类提示握手、超时或上游 5xx，不回显原始错误头。证书上传成功但边缘证书与链路尚未验证时显示「已上传，等待边缘验证」；同步时间只在边缘检查通过后记录。「尚未同步」不能单独用于判断证书上传失败。
-
-检查返回 404 不代表 CDN 已接入或之前的 502 已解决。若没有 `Via` / `EagleId` 等节点标记，先核对实际连接地址、完整 CNAME、Host 和检查路径，可能没有经过 CDN；源站没有收到可信回源标记时，检查路径也可能落入普通 Folio 路由并返回不存在。若已有节点标记，则核对检查路径、实例标识与回源请求头能力。不能只凭 HTTP 状态、JSON 类型或 no-store 判断是哪段链路。
-
-遇到 CDN 502 时，先保留现有 DNS 和证书校验。直连检查通过只说明 EAT 能访问源站，不能证明 CDN 回源节点也可访问：需结合错误类型及源站 Traefik 日志核对 SNI、完整证书链、443 监听、安全组 / 防火墙与回源 IP 限制。阿里云 API 的配置 `success` 也不能证明 TLS 握手成功。可以在部署服务器使用 `curl --connect-to '<Folio 探测主机>:443:<CDN CNAME>:443' -D - -o /dev/null 'https://<Folio 探测主机>/__eat/cdn-probe/<完整实例标识>'` 获取节点错误头，其中探测主机为 `eat-cdn-<实例标识前八位>.<Folio 后缀>`，实例标识对应 CDN 资源的 `eat-instance` 标签。必须使用该检查路径；不存在站点的首页会被鉴权拒绝，不能代替回源检查。该诊断保留 Host/SNI 和 TLS 校验，不依赖 Folio DNS 已指向 CDN，不携带密钥、不修改解析。修复确认的问题后点击「重新检查 / 恢复」，不能通过提前切 DNS、改用 HTTP 或关闭证书校验绕过失败。参考[官方回源排障指南](https://help.aliyun.com/zh/cdn/user-guide/back-to-origin-troubleshooting)。
-
-传播等待时间是对遵守 DNS TTL 的客户端的保护，不是对所有不遵守 TTL 的递归解析器的全网保证。等待期间浏览器曾收到的缓存资源路径也可在源站直接访问，但源站每次重新鉴权且返回 no-store。
-
-## 缓存与访问权限
-
-缓存范围是 **匿名公开静态资源**：CSS、JS/MJS、图片及字体，且 MIME 必须匹配允许的静态类型。HTML（含评论配置与访问证明）、任意查询参数、Cookie、Authorization、Service Worker、登录跳转、解锁、分享凭据兑换、评论及管理接口不进入共享缓存。公开资源带 `?v=...` 等参数或文件名含百分号字面量时保留原有访问，使用 no-store；不会忽略参数后错误合并缓存。
-
-匿名原始资源请求经已验证 CDN 回源时，网关临时重定向到同 Host 的 `/__eat/cdn/<Folio ID>/<版本 ID>/<访问修订号>/<文件路径>`。缓存键保留真实 Host 和完整路径；版本清单不可变，因此不同 Folio、固定 / 历史版本和删除后重建的同名 Folio不会复用身份。CSS 相对资源地址仍保留目录层次。固定主机的缓存路径必须与当前版本一致；历史版本主机必须与指定版本一致。
-
-源站仅在 CDN 规则成功、接入已验证、请求不带会话或凭据时，向 CDN 返回可共享的静态响应。CDN 出站统一改回 `private, no-store`，浏览器不保留离线副本；不覆盖源站的 no-store 来强制缓存。直接访问源站的同一资源路径仍返回 no-store。带会话的访问使用原始路径回源；不能把匿名缓存 URL 当作访问凭据或长期公共下载地址。
-
-远程鉴权使用官方 `cdn_remote_auth`：全部类型、请求透传原 Host/URI/方法及 Cookie/Authorization，成功仅允许 200，其他状态和超时均 reject。鉴权接口不在 Folio CDN 内，允许结果不缓存。对正常非缓存路径放行到原网关继续完整鉴权；缓存路径只允许仍为 public、修订号及版本匹配的匿名 GET/HEAD。编码分隔符、点路径等可能产生缓存别名的请求也被拒绝。
-
-权限收紧不修改 CDN 规则，因此不存在“新权限等待边缘规则传播”的窗口。初次接入要求全部规则 `Status=success`、域名 online，并用真实请求检查缓存 HIT 和在相同旧缓存 URL 上携带会话被拒绝；这些检查完成前不开放 Folio 内容缓存。缓存回源读完 OSS 后还会复查一次权限；即使更早的在途结果仍被填入缓存，后续请求仍须通过当前数据库鉴权。
-
-公开静态资源的 CDN 有效期为 **30 天（2592000 秒）**，缓存规则和源站公开响应使用同一时长；浏览器仍收到 `private, no-store`。发布、回滚、权限变化、SPA 变化及删除均不主动刷新 CDN，没有刷新队列、数据库触发器、刷新调用或刷新重试；接入、DNS 与证书维护的后台检查和重试继续运行。
-
-发布新版后，固定域名解析当前版本指针并生成新版本 ID 的资源路径；旧版本路径在固定域名下被实时鉴权拒绝。显式历史版本域名可继续命中对应的旧缓存，回滚也可复用仍有效的目标版本缓存，均受最新访问策略约束。权限收紧或删除后，即使旧字节仍留在 CDN，后续请求也无法通过实时鉴权获取；不等待 TTL 到期或云 API 传播。仍允许访问的内容过期后按需重新回源，实际缓存空间回收由 CDN 管理，不保证字节即时物理删除。
-
-## 官方能力依据与实际验收边界
-
-本次环境没有可调用的 ctx7 工具 / CLI，按要求回退到当前产品官方文档。实现依据：
-
-- [API 概览](https://help.aliyun.com/zh/cdn/developer-reference/api-cdn-2018-05-10-overview/) 与 [域名功能参数](https://help.aliyun.com/zh/cdn/developer-reference/parameters-for-configuring-features-for-domain-names)：`cdn_remote_auth`、`forward_scheme`、`https_origin_sni`、`origin_certificate_verification`、`origin_request_header`、`path_based_ttl_set`、`self_defined_cachekey`、`set_resp_header`。
-- [远程鉴权](https://help.aliyun.com/zh/cdn/user-guide/configure-remote-authentication)：每次请求先鉴权，再访问缓存；异常默认可能放行，故显式配置 reject。最多 3000ms，故障时缓存路径也拒绝访问，不使用陈旧允许结果。[规则引擎](https://help.aliyun.com/zh/cdn/user-guide/rules-engine) 不支持按条件绑定远程鉴权，因此在 EAT 内区分正常路径和缓存路径。
-- [添加域名](https://help.aliyun.com/zh/cdn/developer-reference/api-cdn-2018-05-10-addcdndomain)：泛域名为前导点，创建及配置下发是异步的。[查询配置](https://help.aliyun.com/zh/cdn/developer-reference/api-cdn-2018-05-10-describecdndomainconfigs) 提供 success / configuring / failed 状态；HTTP API 成功不能代替下发完成。
-- [HTTPS 配置](https://help.aliyun.com/zh/cdn/user-guide/configure-an-ssl-certificate/) 与 [泛域名证书限制](https://help.aliyun.com/zh/cdn/support/configure-an-ssl-certificate-for-a-wildcard-domain-name)：CDN 控制台免费证书不支持泛域名，因此上传现有 Traefik / Let's Encrypt 证书，不调用 CDN 免费证书申请，也不购买证书。[Let's Encrypt FAQ](https://letsencrypt.org/docs/faq/) 明确泛域名需 DNS-01；[Traefik ACME](https://doc.traefik.io/traefik/v3.5/reference/install-configuration/tls/certificate-resolvers/acme/) 负责存储与续期。
-- [Node.js 22 HTTPS](https://nodejs.org/docs/latest-v22.x/api/https.html#httpsglobalagent)：默认全局 Agent 启用 Keep-Alive；探测设置 `agent: false`，每次按指定目标建立连接并保留 TLS 校验。
-- [修改出站请求头](https://help.aliyun.com/zh/cdn/user-guide/configure-custom-request-headers/)（[英文](https://help.aliyun.com/en/cdn/user-guide/configure-custom-request-headers)）与[修改出站响应头](https://help.aliyun.com/zh/cdn/user-guide/create-a-custom-http-response-header)（[英文](https://help.aliyun.com/en/cdn/user-guide/create-a-custom-http-response-header)）：两项均不支持泛域名。当前实现依赖这两项，之前仅核对 API 参数及规则保存状态，遗漏了该产品限制；本次修正文档、API / 控制台提示和诊断，未完成替代架构。该限制直接影响可信回源和浏览器缓存语义，必须作为未满足项交付。
-
-`origin_certificate_verification` 的官方参数表使用 `enabled`，同页示例使用 `enable`，二者有文档不一致。当前优先使用示例中的 `enable=on`；只有该功能明确返回 `InvalidArgName.ValueNotSupported` 时，才尝试另一种 `enabled=on` 并记录采用的参数名。不会通过关闭证书校验绕过失败，两种写法均不支持时保留直连解析。已有部分配置可按原参数名继续恢复，无需重建 CDN。配置逐功能提交，按照官方每用户每秒 3 次的限制节流；中断后只提交缺失的规则。错误显示当前功能及可安全识别的参数名，不回显云端原始错误正文、请求头值或凭证。参数接受与全网生效仍需真实云验收。
-
-已有 resolver 的 ACME 文件目前要求标准 `/etc/dokploy/traefik/` 范围内的 JSON 路径，其他路径会明确拒绝。ACME JSON 仅读取目标 resolver 下匹配 SAN 的证书，不写入账户私钥，也不修改 ACME 存储。
-
-本地测试使用真实 PostgreSQL、测试证书、可注入云/DNS/链路替身和浏览器 API 替身。云 / 链路替身模拟头部功能正常的前提；这个前提不符合普通 CDN 泛域名的官方功能限制，状态机与权限逻辑测试通过不能作为完整云适配已完成的证据。真实账号验证了 CDN 服务、域名验证接口及隔离 DNS 记录的创建、读取、更新、切换、恢复与删除，测试记录已清理；未创建 CDN、签发公网证书、切换实际 Folio 解析或验证公网 HIT。替身测试不能证明该账号的泛域名功能组合、配额、全网规则下发、所有加速区域、TLS 回源和跨运营商 DNS 传播均已通过。
-
-首次真实云验收需在隔离域名和可公网访问的 EAT/Traefik 上执行完整开启 → 两次静态资源访问观察 HIT → 权限收紧 / 会话撤销 / 删除后旧缓存拒绝 → 测试证书更新并核对指纹 → 关闭并跨 TTL 检查。控制面保存、配置状态成功与抽样访问均不是供应商提供的全网原子性证明；本实现依赖供应商成功状态及已部署远程鉴权的契约，公网跨节点传播仍需实测。没有确认安全功能时应保持 CDN 未接入，不能用全部关闭缓存宣称缓存加速已完成。
-
-免费指 ACME 证书签发不收证书费；CDN 流量、HTTPS 请求（含被拒绝的请求）、可能的资源包及超额费用仍按阿里云账单计费。鉴权请求增加 EAT 请求量与可用性依赖。额度、备案、产品功能授权、计费方式和余额需在云账号首次配置及验收时确认。
-
-## 本次开发验证记录（2026-10-17）
-
-| 验证 | 结果与范围 |
+| 操作 | 资源与状态 |
 | --- | --- |
-| `pnpm test` | 服务端 390 项、CLI 222 项通过；Web 使用下列浏览器脚本另行验证；这些结果不证明当前泛域名方案符合供应商能力限制 |
-| CDN / 网关回归（包含于全量测试） | 62 项通过，覆盖 API 能力缺口提示、404 缺少节点标记诊断、本地双 HTTPS 服务确认指定 IP / Host、不复用错误目标连接，实际回源 SNI 与 HTTP Host 分离、证书域名不匹配拒绝、502 错误头分类不泄露任意正文，源站 / CDN 分段诊断与错误脱敏，证书上传与同步分离，独立 API 参数契约、证书校验参数变体、逐功能恢复、限流、阿里云默认配置和 `ParentId=0`、旧冲突及 TXT 指引恢复、HTTP 200 验证未通过、30 天 TTL、版本隔离 / 历史缓存命中 / 权限收紧 / 删除、签名、证书读取、缓存别名、重启和 DNS 恢复 |
-| `pnpm typecheck`、`pnpm build` | 最终变更全工作区通过 |
-| `pnpm db:migrate` | 在独立本地 PostgreSQL 测试库执行两次均成功；另有旧配置升级保持不变、已有刷新任务和触发器清除且 Folio / CDN 状态保留的真实迁移测试 |
-| `node scripts/test-folio-cdn-ui.mjs` | 浏览器 API 替身；桌面及手机官方能力限制提示与来源链接、配置、等待、证书已上传但尚未验证的状态、分段诊断、失败恢复、DNS 指引、密钥输入清空、无横向溢出通过 |
-| `node scripts/test-site-ui.mjs` | 原 Folio 发布、上传恢复、评论、登录/密码提示、删除及手机布局回归通过 |
-| 真实云 API 与隔离 DNS | 生产适配器验证 CDN 服务及域名验证接口；AliDNS 随机测试记录的 TXT 创建 / 读取 / 更新 / TTL 恢复 / 删除、A → CNAME → A 切换及记录 ID 保持通过。全部临时记录已清理，未创建 CDN |
-| 云端配置只读诊断 | 只读查询确认云端域名已 online、HTTPS 已 on、目标规则均为 success；修复代码重放实际返回的 10 项服务默认配置通过，没有为此修改云资源或 DNS，也不代表完整 CDN 链路验收已通过 |
-| 回源 502 只读诊断 | 实时 HTTP 统计确认 502，查询时对应离线日志尚不可用；当前环境未放行部署源站 / CDN 域名，无法直接获取握手及错误头，线上根因仍需部署端检查路径的响应头和 Traefik 日志确认，不能据此认定是 TLS 配置或防火墙问题 |
-| 仓库隐私检查 | 检查全部改动及新增文件，没有发现真实 AccessKey、Secret 或个人域名 |
+| 开启 | 验证 TXT；创建或复用带 `eat-instance` 本实例标签的泛域名 CDN；上传源站证书；配置 HTTPS、SNI 和源站优先的缓存策略；验证链路后迁移通配及已知精确 DNS。checking → provisioning → verifying → enabled，实际检查成功后 connected=true |
+| 关闭 | 先恢复原始 A/AAAA/CNAME 与 TTL 并验证源站；保留 CDN 在线至少 24 小时或原 TTL 两倍的较大者；继续维护证书，传播等待后再停用本实例 CDN。Folio、源站证书、OSS、版本和评论保留 |
+| 续期 | Traefik ACME 是唯一的自动签发 / 续期方；EAT 只读取匹配证书，指纹变化时上传 CDN，再检查边缘指纹。源站检查时间 / 到期时间、CDN 同步时间和错误分别记录；通常每小时检查，失败持续退避重试，21 天内到期在控制台提醒 |
+| 改密码 / 改权限 / 删除 | 数据库策略变更与刷新任务同一事务提交；删除前保存固定及全部历史版本域名的目录快照。后台提交强制目录刷新，查询完成状态；旧缓存允许持续到刷新生效，浏览器副本不撤回 |
 
-公网测试因缺少隔离公网部署入口及环境网络访问条件，按要求暂缓。尚未完成公网 CDN 接入、真实 ACME 续期、证书全网下发、跨节点权限竞态、多区域及跨运营商 DNS 传播验收。当前结果不能替代这些真实云服务验收。生产部署及生产 DNS 变更未执行。
+已有 resolver 的 ACME 存储路径目前须为 `/etc/dokploy/traefik/` 范围内的 JSON 文件；EAT 只读目标 resolver 中匹配 SAN 的证书，不写 ACME 账户私钥。外部证书 / resolver 延续原有续期责任。
+
+CDN 和 Folio 启停共用 PostgreSQL 会话 advisory lock；配置保存使用同一锁的事务版本和设置行锁。多实例只由持锁者处理云端任务，进程重启从数据库继续。云 API / DNS 操作前保存归属、原值和预期值；创建超时按标签认领，DNS 使用原记录 ID 恢复。失败从 30 秒起退避，最长一小时；管理员可立即重新检查。刷新失败独立显示，不把已接入 CDN 错报为未接入。
+
+只管理本实例明确拥有的资源。CDN 标签不符、未知内容规则、绑定条件或 DNS 的 ID / 类型 / 值 / TTL 不符时暂停覆盖。自动 DNS 仅迁移预期的单条直连记录；多条、代理、分线路及暂停记录需先人工整理。精确域名优先于通配记录，EAT 只扫描数据库已知的固定及历史版本域名，记录原值与进度，不修改其他应用记录。已有 CDN 资源不支持直接变更区域；轮换凭证需先确认同一资源的归属，否则保留原凭证。
+
+首次切换后访问失败，自动 DNS 模式尝试恢复原解析并保留 CDN，恢复失败单独提示；手动模式给出源站解析指引。关闭不会删除 CDN 配置，便于以后复用。DNS 传播等待保护遵守 TTL 的解析器，不承诺所有异常缓存同时更新。
+
+阿里云的服务默认 TLS、IPv6、调度等无条件规则保留原样。内容规则按参数和条件计算指纹，`ParentId=0`、省略和 `-1` 视作无条件。旧版 EAT 的远程鉴权、自定义回源头及出站缓存头规则仅在归属、指纹和参数完全匹配时按 ConfigId 删除；先写迁移日志，删除响应丢失或重启后继续检查，不重建域名。旧鉴权回调只保留作规则传播期间兼容，新配置不调用它。
+
+## 缓存行为
+
+- **公开 / 密码 Folio 的静态文件**：允许的 CSS、JS/MJS、图片和字体，扩展名及 MIME 都匹配，响应为 `public, max-age=2592000`。允许携带 Cookie 的文件响应缓存，文件内容不按用户个性化。首次回源仍检查页面策略，密码模式需有效会话；缓存 HIT 不检查会话，链接持有者可能直接读取。
+- **HTML、登录、解锁、分享凭据兑换、评论和管理接口**：`private, no-store`。HTML 包含访问证明和页面配置，始终回源；带 `Set-Cookie` 的响应不标记公共缓存。需要 EAT 登录的 Folio 保留原有私有响应语义，不纳入本次密码缓存放宽。
+- **查询参数与特殊请求**：含任意查询参数的原始资源保持 no-store，不忽略参数后合并；缓存路径带参数直接拒绝。Service Worker 请求不缓存，注册仍被阻止。文件名含百分号字面量时保留原始私有响应。
+- **缓存隔离**：原始资源通过不缓存的临时跳转，进入同 Host 的 `/__eat/cdn/<Folio ID>/<版本 ID>/<访问修订号>/<文件路径>`。Host、版本、修订号和文件路径隔离；固定域名提供当前版本，显式历史版本域名固定对应快照，删除后重建同名 Folio 也不会串缓存。
+- **发布与回滚**：HTML 读取最新版本指针并产生对应版本的文件地址，不刷新 CDN。历史版本缓存可继续复用，回滚可命中之前的缓存；旧的已缓存文件链接允许继续访问。
+- **改密码、改权限和删除**：源站立即使用最新策略，旧会话及旧修订地址失效；CDN 对旧缓存的清理由后台异步完成。不会通过每次 HIT 鉴权或规则传播实现即时撤销，不承诺浏览器缓存、在途响应或缓存重新填充的原子撤销。源站读取 OSS 后再次检查修订，减少过时填充，但不将其当作严格全网保证。
+
+CDN 开启「优先遵循源站缓存策略」，不启用「忽略源站不缓存标头」，也不把 HTML / 错误 / 会话响应强制缓存。直连源站的合格静态响应也可被浏览器缓存，无需判断请求是否来自 CDN。新文件重定向只在实际接入验证完成后启用；关闭后停止产生新缓存地址，既有地址仍可回源并检查访问策略。
+
+刷新使用 `RefreshObjectCaches(ObjectType=Directory, Force=true)`，按具体主机和该 Folio 的目录提交，不使用泛域名 URL，不清理其他 Folio。最多十个目录一批，重复目标合并后提交；收到任务 ID 后持久化并用 `DescribeRefreshTasks` 查询，只有 Complete 才显示完成。网络查询失败保留任务 ID，云端明确失败或超出查询窗口才重新提交。重复提交是幂等的缓存清理，不会改变 DNS 或版本。
+
+官方刷新通常约 5～6 分钟生效，并非请求提交即完成。默认每账号每天 10000 条 URL / 100 个目录刷新，历史版本域名也消耗目录额度；合并请求不增加额度。额度不足会保留任务、显示原因并退避重试，需要时由账号所有者申请提高配额。控制台显示待处理目录数、最近完成时间、失败原因和下次检查；「重新检查 / 恢复」同时唤醒刷新重试。后续处理时清理超过七天的完成记录。
+
+## 数据库迁移与升级
+
+历史 `0020`～`0022` 保持不变。新增 `0023_folio_cdn_origin_cache` 建立精简的持久化刷新队列及事务触发器，仅在访问策略 / 修订变化或删除时入队，发布和回滚不入队。从未接入且关闭时不产生任务；已管理的 CDN 停用期间仍记录变更，重新开启后处理，避免复用旧缓存。队列不关联 Folio 外键，删除后仍可清理快照中的缓存；升级本身不产生云操作或修改 Folio / CDN 配置意愿。
+
+先执行 `pnpm db:migrate` 再启动新服务。已有 CDN 点击「重新检查 / 恢复」会迁移旧规则；不要手动删掉归属标签或覆盖规则来绕过冲突。证书上传与边缘验证分别记录，尚未验证时显示「已上传，等待边缘验证」，不会误报为同步成功。
+
+## 链路诊断
+
+CNAME 是阿里云分配的解析目标；在自己的 DNS 区域配置 `*.sites.example.com CNAME <分配的完整目标>`，通常无需创建名为 `all` 的记录。接入检查先直接连接该目标的地址并保留 Folio Host / SNI，不依赖通配 DNS 已切换。每次探测建立独立 HTTPS 连接，避免连接池复用到错误目标。
+
+502 应检查 HTTPS 回源、Host / SNI、完整证书链、443 监听、安全组 / 防火墙及源站日志，简化鉴权不会自动修复这些问题。404 且无 Via / EagleId 节点标记时，先核对实际连接地址和完整 CNAME；HTTP 200 也需核对实例标记。错误只展示阶段及安全分类，不回显上游正文、任意错误头或凭证。
+
+部署服务器可执行只读诊断：
+
+```sh
+curl --connect-to '<Folio 探测主机>:443:<CDN CNAME>:443' -D - -o /dev/null \
+  'https://<Folio 探测主机>/__eat/cdn-probe/<完整实例标识>'
+```
+
+探测主机为 `eat-cdn-<实例标识前八位>.<Folio 后缀>`，完整实例标识对应 `eat-instance` 标签。保留 TLS 校验，不携带密钥、不修改 DNS；不存在 Folio 的首页不能代替探测路径。
+
+## 官方依据与验收边界
+
+当前环境无可调用的 ctx7，按要求使用产品官方文档：
+
+- [缓存时间与源站响应头](https://help.aliyun.com/zh/cdn/user-guide/configure-the-cdn-cache-expiration-time)：支持源站策略优先、no-store 和 30 天缓存；30 天为 TTL，不保证冷门文件一定驻留满 30 天。
+- [泛域名刷新限制](https://help.aliyun.com/zh/cdn/user-guide/refresh-and-warm-up-related-faq)、[强制刷新 API](https://help.aliyun.com/zh/cdn/developer-reference/api-cdn-2018-05-10-refreshobjectcaches)、[刷新状态查询](https://help.aliyun.com/zh/cdn/developer-reference/api-cdn-2018-05-10-describerefreshtasks)：具体主机、配额、Force 和异步完成状态。
+- [HTTPS](https://help.aliyun.com/zh/cdn/user-guide/configure-an-ssl-certificate/)、[回源 SNI](https://help.aliyun.com/zh/cdn/user-guide/configure-sni)、[回源 Host](https://help.aliyun.com/zh/cdn/user-guide/configure-the-default-origin-host)：使用上传证书、精确 SNI 和实际访问 Host，需与源站虚拟主机配置匹配。
+- [Let's Encrypt FAQ](https://letsencrypt.org/docs/faq/) 与 [Traefik ACME](https://doc.traefik.io/traefik/v3.5/reference/install-configuration/tls/certificate-resolvers/acme/)：泛域名使用 DNS-01，Traefik 独立签发、存储及续期。外部证书 / resolver 延续原维护责任，EAT 不另起签发流程。
+- [回源请求头限制](https://help.aliyun.com/zh/cdn/user-guide/configure-custom-request-headers/) 与 [出站响应头限制](https://help.aliyun.com/zh/cdn/user-guide/create-a-custom-http-response-header)：泛域名不支持，当前方案已不依赖；[删除指定配置](https://help.aliyun.com/zh/cdn/developer-reference/api-cdn-2018-05-10-deletespecificconfig) 用于迁移旧规则。
+- [域名功能 API 参数](https://help.aliyun.com/zh/cdn/developer-reference/parameters-for-configuring-features-for-domain-names)：回源证书校验优先使用示例 `enable=on`，仅遇明确不支持时尝试表格的 `enabled=on` 并记录，不关闭校验。配置逐功能按每秒不超过三次节流，中断后仅补缺失项。
+
+证书签发免费不等于 CDN 免费。CDN 流量、HTTPS 请求及资源包 / 超额费用按阿里云账单计费。
+
+本地验证使用隔离 PostgreSQL、云 / DNS / CDN 链路替身和浏览器 API 替身，不能代替真实公网验收。生产部署、生产 DNS 变更及完整真实云测试没有随代码交付执行。此前服务 / 域名验证 API 及隔离 AliDNS 记录 CRUD / 切换 / 恢复测试不能证明 CDN 回源或缓存 HIT 成功。
+
+首次真实验收仍需隔离公网 EAT / Traefik 和测试域名：开启与 DNS 切换、Host / SNI / 边缘证书、公开及密码文件 MISS → HIT、HTML 每次入口验证、改密码后的旧会话失效与 CDN 异步刷新、删除与历史域名清理、证书更新 / 同步重试、关闭跨 TTL 检查，以及多区域实际访问。既有 502 的线上根因仍需部署端链路诊断，不能宣称已因代码调整自动解决。
+
+## 本次验证记录（2026-10-17）
+
+| 验证 | 实际结果 |
+| --- | --- |
+| 服务端全量测试 | 398 项通过；覆盖原有登录、密码、分享、历史版本、发布、回滚和评论流程 |
+| CLI 全量测试 | 222 项通过 |
+| CDN / 网关针对性测试 | 70 项通过（包含于服务端测试），使用云 / DNS / 缓存链路替身；覆盖密码资源 HIT、刷新前允许旧缓存、完成后拒绝旧修订、删除及历史域名清理、查询失败保留任务、重启恢复、多实例锁、停用后重新开启、旧规则迁移与外部冲突 |
+| 类型检查、构建 | 全工作区通过；构建仍有既有前端大包提示 |
+| 数据库迁移 | 在隔离本地 PostgreSQL 执行 `pnpm db:migrate` 两次成功；真实升级测试确认旧设置不变、触发器与权限事务一起回滚、删除快照保留、发布不入队；生成的 Drizzle 快照仅新增刷新队列 |
+| CDN 控制台浏览器验证 | `node scripts/test-folio-cdn-ui.mjs` 通过；隔离 API 替身，桌面和手机配置、接入阶段、DNS 指引、证书上传 / 同步区分、刷新进度 / 失败 / 恢复、密钥清空、布局无横向溢出 |
+| 原 Folio 浏览器回归 | `node scripts/test-site-ui.mjs` 通过；发布、上传恢复、评论、登录 / 密码提示、历史版本及手机布局 |
+| 隐私检查 | 改动和新增文件未发现真实云凭证、个人域名、源站 IP 或实例标识 |
+| 真实云公网验收 | 本次未执行，按要求暂缓；未部署生产、未修改生产 DNS，既有线上 502 仍需实际链路验证 |

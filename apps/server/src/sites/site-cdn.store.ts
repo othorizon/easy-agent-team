@@ -1,8 +1,8 @@
 import { ConflictException, Injectable } from '@nestjs/common';
-import { eq, sql } from 'drizzle-orm';
+import { eq, isNull, sql } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
-import { CDN_WILDCARD_CAPABILITY_WARNING, type SiteCdnInfo, type UpdateSiteCdn } from '@eat/shared';
-import { siteCdn, siteSettings, auditLogs } from '../db/schema';
+import type { SiteCdnInfo, UpdateSiteCdn } from '@eat/shared';
+import { siteCdn, siteCdnPurges, siteSettings, auditLogs } from '../db/schema';
 import { decryptSecret, encryptSecret } from '../common/crypto';
 import { SiteCdnClient } from './site-cdn.client';
 import { SiteSettingsStore, setupBusy, type SiteSettingRow } from './site-settings.store';
@@ -30,6 +30,14 @@ export class SiteCdnStore {
   }
   async info(): Promise<SiteCdnInfo> {
     const r = await this.row();
+    const summary = await this.settings.db.execute(sql`select
+      count(*) filter (where completed_at is null)::int as pending,
+      max(completed_at) as completed,
+      (array_agg(last_error order by created_at desc) filter (where completed_at is null and last_error <> ''))[1] as error,
+      min(retry_at) filter (where completed_at is null) as retry
+      from site_cdn_purge`);
+    const refresh = summary.rows[0];
+    const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
     const key = r?.accessKeyIdEncrypted ? decryptSecret(r.accessKeyIdEncrypted) : '';
     return {
       enabled: r?.enabled ?? false,
@@ -38,7 +46,12 @@ export class SiteCdnStore {
       autoDns: r?.autoDns ?? false,
       status: r?.status ?? 'disabled',
       connected: r?.connected ?? false,
-      capabilityWarning: CDN_WILDCARD_CAPABILITY_WARNING,
+      cacheRefresh: {
+        pending: Number(refresh?.pending ?? 0),
+        lastCompletedAt: iso(refresh?.completed),
+        lastError: String(refresh?.error ?? ''),
+        retryAt: iso(refresh?.retry),
+      },
       accessKeyIdMasked: key ? (key.length > 8 ? `${key.slice(0, 4)}****${key.slice(-4)}` : '****') : '',
       hasSecret: !!r?.accessKeySecretEncrypted,
       phase: r?.phase ?? '',
@@ -136,6 +149,10 @@ export class SiteCdnStore {
       };
       if (r) await tx.update(siteCdn).set(values).where(eq(siteCdn.id, 1));
       else await tx.insert(siteCdn).values(values);
+      await tx
+        .update(siteCdnPurges)
+        .set({ retryAt: new Date(), attempts: 0 })
+        .where(isNull(siteCdnPurges.completedAt));
       await tx.insert(auditLogs).values({
         actorId,
         action: 'site.cdn.saved',

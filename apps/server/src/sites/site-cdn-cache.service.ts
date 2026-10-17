@@ -5,7 +5,7 @@ import type { FastifyRequest } from 'fastify';
 import { decryptSecret } from '../common/crypto';
 import { parseSiteHost } from './site-config';
 import { SitesService, type SiteRow } from './sites.service';
-import { SiteCdnStore, type SiteCdnRow } from './site-cdn.store';
+import { SiteCdnStore } from './site-cdn.store';
 import { cdnMarker, cdnProbeHost } from './site-cdn.infrastructure';
 
 export const CDN_PATH = '/__eat/cdn/';
@@ -27,13 +27,6 @@ export class SiteCdnCache {
     private readonly store: SiteCdnStore,
     private readonly sites: SitesService,
   ) {}
-  async origin(req: FastifyRequest, row?: SiteCdnRow) {
-    row ??= await this.store.row();
-    return (
-      !!row?.resources.owned &&
-      secretEquals(req.headers['x-eat-cdn-origin'], decryptSecret(row.originSecretEncrypted))
-    );
-  }
   async cacheableOrigin(req: FastifyRequest) {
     const row = await this.store.row();
     return (
@@ -41,9 +34,8 @@ export class SiteCdnCache {
       row.status === 'enabled' &&
       req.method === 'GET' &&
       !!row.resources.configured &&
-      !req.headers.cookie &&
-      !req.headers.authorization &&
-      (await this.origin(req, row))
+      row.resources.cacheModel === 'origin-v1' &&
+      !req.headers['service-worker']
     );
   }
   async redirect(
@@ -58,17 +50,17 @@ export class SiteCdnCache {
       !row?.enabled ||
       !row.connected ||
       row.status !== 'enabled' ||
-      site.access !== 'public' ||
+      row.resources.cacheModel !== 'origin-v1' ||
+      !['public', 'password'].includes(site.access) ||
       req.method !== 'GET' ||
-      !anonymous(req.headers) ||
+      !!req.headers['service-worker'] ||
       (req.raw.url ?? '').includes('?') ||
-      !asset(path, type) ||
-      !(await this.origin(req, row))
+      !asset(path, type)
     )
       return null;
     return `${CDN_PATH}${site.id}/${version.id}/${site.accessRevision}/${path.split('/').map(encodeURIComponent).join('/')}`;
   }
-  /** Called for every edge hit. The database remains the sole authority; no positive result cache. */
+  /** Compatibility callback for old edge rules while an upgrade removes them. New rules never call it. */
   async authorize(req: FastifyRequest): Promise<boolean> {
     try {
       const row = await this.store.row();
@@ -145,7 +137,7 @@ export class SiteCdnCache {
     )
       return null;
     const site = await this.sites.get(target.slug);
-    if (site.id !== match[1] || site.access !== 'public' || String(site.accessRevision) !== match[3])
+    if (site.id !== match[1] || !['public', 'password'].includes(site.access) || String(site.accessRevision) !== match[3])
       return null;
     const version = await this.sites.version(site, undefined, target.version);
     const file = version.manifest[path];
@@ -162,8 +154,8 @@ export class SiteCdnCache {
         path,
       ) ||
       !anonymous(req.headers) ||
-      !['GET', 'HEAD'].includes(req.method) ||
-      !(await this.origin(req, row))
+      !row.resources.owned ||
+      !['GET', 'HEAD'].includes(req.method)
     )
       return null;
     return cdnMarker(row, path);

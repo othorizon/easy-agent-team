@@ -22,16 +22,16 @@ async function migrationFolder(before: number) {
   await writeFile(join(destination, 'meta/_journal.json'), JSON.stringify({ ...journal, entries }));
   return destination;
 }
-async function expectNoInvalidation() {
+async function expectInvalidation() {
   expect(
     (await pool.query("select to_regclass('public.site_cdn_purge') as queue")).rows[0].queue,
-  ).toBeNull();
+  ).not.toBeNull();
   expect(
     (await pool.query("select to_regprocedure('eat_folio_cdn_invalidate()') as function")).rows[0].function,
-  ).toBeNull();
+  ).not.toBeNull();
   expect(
     (await pool.query("select 1 from pg_trigger where tgname = 'eat_folio_cdn_invalidate'")).rows,
-  ).toEqual([]);
+  ).toHaveLength(1);
 }
 beforeAll(async () => {
   if (!new URL(url).pathname.endsWith('_test'))
@@ -56,14 +56,15 @@ describe('CDN additive migration', () => {
     await migrate(drizzle(pool), { migrationsFolder: resolve('drizzle') });
     expect((await pool.query('select * from site_setting')).rows).toEqual(before);
     expect((await pool.query('select * from site_cdn')).rows).toEqual([]);
-    await expectNoInvalidation();
+    await expectInvalidation();
+    expect((await pool.query('select * from site_cdn_purge')).rows).toEqual([]);
     await migrate(drizzle(pool), { migrationsFolder: resolve('drizzle') });
     expect((await pool.query('select status,route_configured from site_setting')).rows[0]).toEqual({
       status: 'enabled',
       route_configured: true,
     });
   });
-  it('removes existing invalidation triggers and pending/retrying work while preserving CDN and Folio state', async () => {
+  it('replaces the historical outbox without changing Folio/CDN state and queues only permissions/deletion', async () => {
     await migrate(drizzle(pool), { migrationsFolder: withPurges });
     await pool.query(`insert into site_cdn(enabled, connected, status, origin_secret_encrypted, resources)
       values(true, true, 'enabled', 'existing-encrypted-secret', '{"owned":true,"configured":true}')`);
@@ -85,14 +86,27 @@ describe('CDN additive migration', () => {
     const sites = (await pool.query('select * from site')).rows;
 
     await migrate(drizzle(pool), { migrationsFolder: resolve('drizzle') });
-    await expectNoInvalidation();
+    await expectInvalidation();
     expect((await pool.query('select * from site_setting')).rows).toEqual(settings);
     expect((await pool.query('select * from site_cdn')).rows).toEqual(cdn);
     expect((await pool.query('select * from site')).rows).toEqual(sites);
-    // Publication/permission updates and deletion must work after the queue/function are gone.
+    expect((await pool.query('select * from site_cdn_purge')).rows).toEqual([]);
+    await pool.query('update site set current_version_id = gen_random_uuid() where id = $1', [site]);
+    expect((await pool.query('select * from site_cdn_purge')).rows).toEqual([]);
+    // Trigger and outbox insert roll back with the permission transaction.
+    const connection = await pool.connect();
+    try {
+      await connection.query('begin');
+      await connection.query('update site set access_revision = access_revision + 1 where id = $1', [site]);
+      await connection.query('rollback');
+    } finally { connection.release(); }
+    expect((await pool.query('select * from site_cdn_purge')).rows).toEqual([]);
     await pool.query('update site set access_revision = access_revision + 1 where id = $1', [site]);
     await pool.query('delete from site where id = $1', [site]);
     await migrate(drizzle(pool), { migrationsFolder: resolve('drizzle') });
-    await expectNoInvalidation();
+    await expectInvalidation();
+    const jobs = (await pool.query('select url, task_ids from site_cdn_purge')).rows;
+    expect(jobs).toHaveLength(2);
+    expect(jobs.every((j) => j.url === `https://migration.sites.example.com/__eat/cdn/${site}/` && !j.task_ids.length)).toBe(true);
   });
 });

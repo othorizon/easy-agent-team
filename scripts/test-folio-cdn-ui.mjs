@@ -14,9 +14,9 @@ let state = {
   scope: 'overseas',
   credentialSource: 'independent',
   autoDns: false,
+  cacheRefresh: { pending: 0, lastCompletedAt: null, lastError: '', retryAt: null },
   status: 'disabled',
   connected: false,
-  capabilityWarning: '普通阿里云 CDN 官方不支持泛域名自定义回源请求头和出站响应头。当前方案依赖这两项，尚未满足普通 CDN 泛域名接入条件；请保持直连 DNS，不要手动切换解析绕过检查。',
   accessKeyIdMasked: '',
   hasSecret: false,
   phase: '',
@@ -102,11 +102,12 @@ try {
           status: 'enabled',
           connected: true,
           lastError: '',
-          phase: 'CDN 已接入；公开静态资源可缓存',
+          phase: 'CDN 已接入；公开及密码 Folio 静态资源可缓存',
           dnsInstructions: [],
           certificateExpiresAt: '2026-12-17T00:00:00Z',
           certificateUploaded: true,
           certificateSyncedAt: new Date().toISOString(),
+          cacheRefresh: { pending: 0, lastCompletedAt: new Date().toISOString(), lastError: '', retryAt: null },
         };
         body = state;
       } else if (path === '/api/admin/site-settings') body = folio;
@@ -136,10 +137,8 @@ try {
     await page.goto(base + '/settings');
     const section = page.getByRole('region', { name: '阿里云 CDN' });
     await section.waitFor();
-    await section.getByText(state.capabilityWarning, { exact: false }).waitFor();
-    await section.getByRole('link', { name: '官方回源请求头限制' }).waitFor();
-    await section.getByRole('link', { name: '官方响应头限制' }).waitFor();
-    assert.equal(await section.getByText('缓存维护：', { exact: false }).count(), 0);
+    await section.getByText('改密码、改权限和删除会异步清理 CDN 缓存', { exact: false }).waitFor();
+    assert.equal(await section.getByText('缓存维护：', { exact: false }).count(), 1);
     if (viewport.width === 1440) {
       await section.getByText('CDN 证书同步：尚未上传', { exact: true }).waitFor();
       await section.getByRole('checkbox', { name: '启用 CDN' }).check();
@@ -173,7 +172,7 @@ try {
       state = {
         ...state,
         status: 'failed',
-        phase: '验证 CDN HTTPS、回源、实时鉴权和缓存命中',
+        phase: '验证 CDN HTTPS、回源和公开静态缓存命中',
         lastError: 'CDN 接入检查失败：HTTP 502，请检查 HTTPS 回源地址、Host/SNI 与源站证书；CDN 错误类型：TLS / 证书握手',
         certificateUploaded: true,
         dnsInstructions: [],
@@ -182,8 +181,16 @@ try {
       await section.getByText('CDN 证书同步：已上传，等待边缘验证', { exact: true }).waitFor();
       await section.getByText(state.lastError, { exact: true }).waitFor();
       await section.screenshot({ path: output + '/edge-verification-desktop.png' });
+      state = { ...state, cacheRefresh: { pending: 3, lastCompletedAt: null,
+        lastError: 'CDN 缓存刷新失败：RAM 权限不足，将自动重试', retryAt: new Date().toISOString() } };
+      await page.reload();
+      await section.getByText('缓存维护：刷新未完成（3 个目录）', { exact: true }).waitFor();
+      await section.getByText(state.cacheRefresh.lastError, { exact: true }).waitFor();
+      await section.screenshot({ path: output + '/cache-refresh-recovery-desktop.png' });
       await section.getByRole('button', { name: '重新检查 / 恢复' }).click();
       await section.getByText('配置意愿：开启 · 实际接入：已验证接入').waitFor();
+      await section.getByText('缓存维护：无待处理任务', { exact: true }).waitFor();
+      await section.getByText('最近刷新完成：', { exact: false }).waitFor();
       await section.screenshot({ path: output + '/enabled-desktop.png' });
     } else {
       state = {
@@ -192,9 +199,12 @@ try {
         connected: false,
         lastError: '证书同步失败，将自动重试',
         certificateSyncError: 'RAM 权限不足，请检查证书同步权限',
+        cacheRefresh: { pending: 1, lastCompletedAt: null, lastError: '缓存刷新失败，将自动重试', retryAt: new Date().toISOString() },
       };
       await page.reload();
       await section.getByText('证书同步失败，将自动重试', { exact: true }).waitFor();
+      await section.getByText('缓存维护：刷新未完成（1 个目录）', { exact: true }).waitFor();
+      await section.getByText('缓存刷新失败，将自动重试', { exact: true }).waitFor();
       await section.scrollIntoViewIfNeeded();
       assert.equal(
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
@@ -211,7 +221,7 @@ try {
   assert.equal(retries, 2);
   assert.deepEqual(errors, []);
   console.log(
-    'CDN browser checks passed: capability limitation warning, configuration, pending state, DNS guidance, upload versus edge verification, recovery, credential clearing, mobile layout',
+    'CDN browser checks passed: origin cache semantics, configuration, pending state, refresh progress/failure/recovery, DNS guidance, upload versus edge verification, recovery, credential clearing, mobile layout',
   );
 } finally {
   await browser.close();

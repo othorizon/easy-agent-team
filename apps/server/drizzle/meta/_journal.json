@@ -162,6 +162,13 @@
       "when": 1792224935528,
       "tag": "0022_folio_cdn_no_purge",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792236139670,
+      "tag": "0023_folio_cdn_origin_cache",
+      "breakpoints": true
     }
   ]
 }

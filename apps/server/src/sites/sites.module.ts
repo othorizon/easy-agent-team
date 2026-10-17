@@ -1,3 +1,4 @@
+import { SiteCdnPurgeService } from './site-cdn-purge.service';
 import { SiteCdnStore } from './site-cdn.store';
 import { SiteCdnClient } from './site-cdn.client';
 import { SiteCdnInfrastructure } from './site-cdn.infrastructure';
@@ -29,6 +30,7 @@ import { FolioToolsService } from './folio-tools.service';
     SiteCdnClient,
     SiteCdnInfrastructure,
     SiteCdnService,
+    SiteCdnPurgeService,
     SiteCdnCache,
     SiteRuntime,
     SiteSetupService,

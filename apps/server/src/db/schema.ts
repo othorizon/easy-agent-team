@@ -92,6 +92,8 @@ export interface SiteCdnResources {
     managed: { id: string; name: string; type: string; content: string; ttl: number };
   }[];
   configDigest?: string;
+  cacheModel?: 'origin-v1';
+  legacyConfigRemoval?: { id: string; digest: string }[];
   certificateVerificationArg?: 'enable' | 'enabled';
   certificateFingerprint?: string;
 }
@@ -127,6 +129,19 @@ export const siteCdn = pgTable('site_cdn', {
   actorId: uuid('actor_id'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** Permission/deletion invalidation outbox. No FK: work must survive deletion of its Folio. */
+export const siteCdnPurges = pgTable('site_cdn_purge', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  url: text('url').notNull(),
+  taskIds: jsonb('task_ids').$type<string[]>().notNull().default([]),
+  submittedAt: timestamp('submitted_at', { withTimezone: true }),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  retryAt: timestamp('retry_at', { withTimezone: true }).notNull().defaultNow(),
+  attempts: integer('attempts').notNull().default(0),
+  lastError: text('last_error').notNull().default(''),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('site_cdn_purge_pending_idx').on(t.retryAt).where(sql`${t.completedAt} is null`)]);
 
 export const siteVersions = pgTable('site_version', {
   id: uuid('id').primaryKey(),

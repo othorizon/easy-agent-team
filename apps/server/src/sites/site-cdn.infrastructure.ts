@@ -53,7 +53,6 @@ export async function checkCdnOrigin(
   throw new SiteSetupError('源站 CNAME 链过长，请使用独立源站地址');
 }
 export function cdnFunctions(row: SiteCdnRow, base: SiteSettingRow) {
-  const secret = decryptSecret(row.originSecretEncrypted);
   return [
     cdnFunction('forward_scheme', { enable: 'on', scheme_origin: 'https', scheme_origin_port: '443' }),
     // HTTP Host remains the actual incoming Folio host; SNI selects its wildcard certificate.
@@ -62,6 +61,30 @@ export function cdnFunctions(row: SiteCdnRow, base: SiteSettingRow) {
     cdnFunction('origin_certificate_verification', {
       [row.resources.certificateVerificationArg ?? 'enable']: 'on',
     }),
+    cdnFunction('path_based_ttl_set', {
+      path: '/',
+      ttl: '0',
+      weight: '1',
+      swift_origin_cache_high: 'on',
+      swift_no_cache_low: 'off',
+      swift_follow_cachetime: 'off',
+    }),
+    // Only versioned static files explicitly marked by the gateway have public origin headers.
+    cdnFunction('path_based_ttl_set', {
+      path: '/__eat/cdn/',
+      ttl: String(CDN_CACHE_TTL_SECONDS),
+      weight: '99',
+      swift_origin_cache_high: 'on',
+      swift_no_cache_low: 'off',
+      swift_follow_cachetime: 'off',
+    }),
+    cdnFunction('self_defined_cachekey', { headers: 'Host' }),
+  ];
+}
+/** Exact legacy rules, used only to remove configurations previously created by EAT. */
+export function legacyCdnFunctions(row: SiteCdnRow, base: SiteSettingRow) {
+  const secret = decryptSecret(row.originSecretEncrypted);
+  return [
     cdnFunction('origin_request_header', {
       header_operation_type: 'modify',
       header_name: 'X-Eat-Cdn-Origin',
@@ -82,24 +105,6 @@ export function cdnFunctions(row: SiteCdnRow, base: SiteSettingRow) {
       remote_auth_timeout: '3000',
       remote_auth_timeout_action: 'reject',
     }),
-    cdnFunction('path_based_ttl_set', {
-      path: '/',
-      ttl: '0',
-      weight: '1',
-      swift_origin_cache_high: 'on',
-      swift_no_cache_low: 'off',
-      swift_follow_cachetime: 'off',
-    }),
-    // Only the gateway's explicitly marked, anonymous static responses have public origin headers.
-    cdnFunction('path_based_ttl_set', {
-      path: '/__eat/cdn/',
-      ttl: String(CDN_CACHE_TTL_SECONDS),
-      weight: '99',
-      swift_origin_cache_high: 'on',
-      swift_no_cache_low: 'off',
-      swift_follow_cachetime: 'off',
-    }),
-    cdnFunction('self_defined_cachekey', { headers: 'Host' }),
     cdnFunction('set_resp_header', {
       key: 'Cache-Control',
       value: 'private, no-store',
@@ -304,7 +309,7 @@ export class SiteCdnInfrastructure {
         cdnProbeHost(base),
         targetAddress,
         path,
-        edge ? {} : { 'x-eat-cdn-origin': decryptSecret(row.originSecretEncrypted) },
+        {},
         edge ? cdnProbeHost(base) : cdnSni(base),
       );
     } catch (e) {
@@ -314,10 +319,10 @@ export class SiteCdnInfrastructure {
       const hint =
         edge && res.status === 404
           ? res.headers.via || res.headers.eagleid
-            ? '请核对检查路径、实例标识和可信回源请求头；泛域名自定义回源请求头存在官方功能限制'
+            ? '请核对检查路径、实例标识与 Folio 路由'
             : '未见 CDN 节点标记，可能直达源站；请核对实际连接 IP、完整 CNAME、Host 及检查路径'
           : edge && res.status === 403
-            ? '请检查远程鉴权地址是否可达及鉴权请求是否被正确转发'
+            ? '请检查源站访问策略及 Folio 路由'
             : edge && [502, 504].includes(res.status)
               ? '请检查 HTTPS 回源地址、Host/SNI 与源站证书'
               : '请检查 Dokploy 泛域名路由及代理是否转发到当前 EAT';
@@ -325,18 +330,12 @@ export class SiteCdnInfrastructure {
       throw new SiteSetupError(`${stage}失败：HTTP ${res.status}，${hint}${detail ? `；${detail}` : ''}`);
     }
     if (res.body !== cdnMarker(row, path))
-      throw new SiteSetupError(`${stage}失败：HTTP 200，但 EAT 实例标记不匹配，请检查路由、实例与回源密钥转发`);
+      throw new SiteSetupError(`${stage}失败：HTTP 200，但 EAT 实例标记不匹配，请检查路由与实例`);
     if (!String(res.headers['cache-control']).includes('no-store'))
       throw new SiteSetupError(`${stage}失败：HTTP 200，但客户端响应缺少 Cache-Control: no-store`);
     if (edge) {
       if (res.fingerprint !== row.resources.certificateFingerprint)
         throw new SiteSetupError('CDN 边缘证书尚未与源站同步，禁止切换 DNS');
-      const denied = await this.probe(
-        cdnProbeHost(base),
-        targetAddress,
-        `/__eat/cdn-deny/${base.resourceKey}`,
-      );
-      if (denied.status !== 403) throw new SiteSetupError('CDN 远程鉴权尚未拒绝测试请求，禁止切换 DNS');
       const asset = `/__eat/cdn/health/${base.resourceKey}/probe.css`;
       const first = await this.probe(cdnProbeHost(base), targetAddress, asset);
       const second = await this.probe(cdnProbeHost(base), targetAddress, asset);
@@ -345,13 +344,9 @@ export class SiteCdnInfrastructure {
         second.status !== 200 ||
         second.body !== cdnMarker(row, asset) ||
         !String(second.headers['x-cache']).includes('HIT') ||
-        !String(second.headers['cache-control']).includes('no-store')
+        !String(second.headers['cache-control']).includes(`max-age=${CDN_CACHE_TTL_SECONDS}`)
       )
-        throw new SiteSetupError('CDN 尚未验证静态资源缓存命中及浏览器 no-store，禁止切换 DNS');
-      const revoked = await this.probe(cdnProbeHost(base), targetAddress, asset, {
-        cookie: 'eat_site=cdn-probe-denied',
-      });
-      if (revoked.status !== 403) throw new SiteSetupError('CDN 旧缓存未执行命中前鉴权，禁止切换 DNS');
+        throw new SiteSetupError('CDN 尚未验证静态资源缓存命中及源站缓存头，禁止切换 DNS');
     }
   }
 }

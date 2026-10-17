@@ -24,12 +24,15 @@ export type SiteCdnStatus =
   | 'draining'
   | 'failed'
   | 'conflict';
-export const CDN_WILDCARD_CAPABILITY_WARNING =
-  '普通阿里云 CDN 官方不支持泛域名自定义回源请求头和出站响应头。当前方案依赖这两项，尚未满足普通 CDN 泛域名接入条件；请保持直连 DNS，不要手动切换解析绕过检查。';
 export interface SiteCdnInfo extends Omit<UpdateSiteCdn, 'accessKeyId' | 'accessKeySecret'> {
   status: SiteCdnStatus;
   connected: boolean;
-  capabilityWarning: string;
+  cacheRefresh: {
+    pending: number;
+    lastCompletedAt: string | null;
+    lastError: string;
+    retryAt: string | null;
+  };
   accessKeyIdMasked: string;
   hasSecret: boolean;
   phase: string;

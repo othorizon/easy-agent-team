@@ -71,7 +71,7 @@ export class SiteCdnClient {
   private configurationSlot = Promise.resolve();
   private nextConfigurationAt = 0;
   async call(credentials: CdnCredentials, action: string, extra: Record<string, string> = {}): Promise<any> {
-    if (action === 'BatchSetCdnDomainConfig') {
+    if (['BatchSetCdnDomainConfig', 'RefreshObjectCaches', 'DescribeRefreshTasks'].includes(action)) {
       // Official per-user limit: 3 calls/second. Serial slots also cover concurrent callers.
       const slot = this.configurationSlot.then(async () => {
         const wait = this.nextConfigurationAt - Date.now();

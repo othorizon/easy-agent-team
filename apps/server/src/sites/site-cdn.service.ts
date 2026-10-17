@@ -6,11 +6,13 @@ import { isIP } from 'node:net';
 import { getDomain } from 'tldts';
 import { PG_POOL } from '../db/db.module';
 import { AuditService } from '../audit/audit.service';
+import { SiteCdnPurgeService } from './site-cdn-purge.service';
 import { SiteCdnStore, type SiteCdnRow } from './site-cdn.store';
 import { SiteCdnClient, CdnApiError, cdnFunction, type CdnCredentials } from './site-cdn.client';
 import {
   cdnDomain,
   cdnFunctions,
+  legacyCdnFunctions,
   cdnConfigsToCheck,
   checkCdnOrigin,
   configDigest,
@@ -44,6 +46,7 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
     private readonly dns: SiteDns,
     private readonly origin: SiteInfrastructure,
     private readonly audit: AuditService,
+    private readonly purges: SiteCdnPurgeService,
     @Inject(PG_POOL) private readonly pool: Pool,
   ) {}
   onModuleInit() {
@@ -77,6 +80,10 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
       held = (await connection.query('select pg_try_advisory_lock($1) as acquired', [1950536502])).rows[0]
         .acquired;
       if (!held) return;
+      const guard = () => {
+        if (lost || this.stopped) throw new SiteSetupError('CDN 任务已中断');
+      };
+      await this.purges.tick(guard);
       const row = await this.store.row();
       if (
         !row ||
@@ -89,9 +96,6 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
       const base = await this.store.settings.required();
       base.gatewayTarget = base.gatewayTarget.replace(/^\[|\]$/g, '');
       const credentials = this.store.credentials(row, base);
-      const guard = () => {
-        if (lost || this.stopped) throw new SiteSetupError('后台连接中断，等待重试');
-      };
       try {
         guard();
         if (row.enabled) await this.enable(row, base, credentials, guard);
@@ -292,11 +296,10 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
     await this.phase(row, '读取源站证书并同步 CDN HTTPS');
     guard();
     await this.syncCertificate(row, base, c);
-    await this.phase(row, '配置 HTTPS 回源和缓存命中前鉴权');
-    const configs = cdnConfigsToCheck(await this.infra.configurations(c, domain));
+    await this.phase(row, '配置 HTTPS 回源和源站缓存策略');
+    let configs = cdnConfigsToCheck(await this.infra.configurations(c, domain));
     guard();
     if (
-      !row.resources.configured &&
       !row.resources.certificateVerificationArg &&
       configs.some(
         (v) =>
@@ -311,12 +314,43 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
     const functions = cdnFunctions(row, base);
     if (row.resources.configDigest && configDigest(configs) !== row.resources.configDigest)
       throw new CdnConflict('CDN 配置发生外部修改，已暂停自动覆盖，请恢复原配置后重试');
+    if (row.resources.cacheModel !== 'origin-v1') {
+      // Only remove exact old EAT rules on our tagged domain. Persist intent before each API call;
+      // a lost response/restart is safe because absence of an already deleted ConfigId is success.
+      const legacy = legacyCdnFunctions(row, base);
+      if (configs.some((v: any) => ![...functions, ...legacy].some(
+        (f) => configDigest([f]) === configDigest([v]),
+      ))) throw new CdnConflict('CDN 存在未知配置，无法安全迁移源站缓存策略，请核对后重试');
+      const obsolete = configs.filter((v: any) => legacy.some(
+        (f) => configDigest([f]) === configDigest([v]),
+      ));
+      if (obsolete.some((v: any) => !/^\d+$/.test(String(v.ConfigId))))
+        throw new CdnConflict('CDN 旧规则缺少有效配置 ID，保留现状');
+      row.resources.configured = false;
+      row.resources.configDigest = undefined;
+      row.resources.legacyConfigRemoval = obsolete.map((v: any) => ({
+        id: String(v.ConfigId), digest: configDigest([v]),
+      }));
+      await this.journal(row);
+      for (const rule of row.resources.legacyConfigRemoval) {
+        guard();
+        await this.phase(row, '迁移旧 CDN 规则为源站响应头控制缓存');
+        await this.api.call(c, 'DeleteSpecificConfig', { DomainName: domain, ConfigId: rule.id });
+        guard();
+      }
+      configs = cdnConfigsToCheck(await this.infra.configurations(c, domain));
+      if (configs.some((v: any) => legacy.some((f) => configDigest([f]) === configDigest([v]))))
+        throw new SiteSetupError('等待旧 CDN 规则删除下发，尚未切换 DNS');
+      row.resources.legacyConfigRemoval = undefined;
+      row.resources.cacheModel = 'origin-v1';
+      await this.journal(row);
+    }
     if (!row.resources.configured) {
       const missing = functions.filter(
         (f) => !configs.some((v: any) => configDigest([v]) === configDigest([f])),
       );
       if (configs.some((v: any) => !functions.some((f) => configDigest([f]) === configDigest([v]))))
-        throw new CdnConflict('CDN 存在未知或不匹配的回源、鉴权或缓存配置，保留现状，请核对后重试');
+        throw new CdnConflict('CDN 存在未知或不匹配的回源或缓存配置，保留现状，请核对后重试');
       for (const rule of missing) {
         guard();
         await this.phase(row, `配置 CDN 功能：${rule.functionName}`);
@@ -362,7 +396,7 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
     await this.phase(row, '验证直连源站 HTTPS、Host/SNI 和 EAT 实例标记', 'verifying');
     await this.infra.verify(base, row, base.gatewayTarget, false);
     guard();
-    await this.phase(row, '验证 CDN HTTPS、回源、实时鉴权和缓存命中', 'verifying');
+    await this.phase(row, '验证 CDN HTTPS、回源和公开静态缓存命中', 'verifying');
     await this.infra.verify(base, row, cname, true);
     guard();
     await this.store.patch({ certificateSyncedAt: new Date() });
@@ -376,7 +410,7 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
       status: 'enabled',
       connected: true,
       certificateSyncedAt: new Date(),
-      phase: 'CDN 已接入；公开静态资源可缓存',
+      phase: 'CDN 已接入；公开及密码 Folio 静态资源可缓存',
       lastError: '',
       dnsInstructions: [],
       attempts: 0,

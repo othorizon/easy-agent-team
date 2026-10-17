@@ -122,7 +122,7 @@ describe('CDN certificate, signing and DNS adapter contracts', () => {
     });
     await expect(f.service.certificate(base)).rejects.toThrow('无法安全读取');
   });
-  it('does not accept a successful API save as proof of certificate propagation, cache HIT or authentication', async () => {
+  it('does not accept a successful API save as proof of certificate propagation, cache HIT or origin cache policy', async () => {
     const f = fixture(),
       path = `/__eat/cdn-probe/${base.resourceKey}`;
     const probe = vi.spyOn(f.service, 'probe').mockResolvedValue({
@@ -134,10 +134,9 @@ describe('CDN certificate, signing and DNS adapter contracts', () => {
     row.resources.certificateFingerprint = 'expected';
     await expect(f.service.verify(base, row, 'cdn.example.net', true)).rejects.toThrow('边缘证书尚未');
     probe.mockImplementation(async (_host, _address, uri, headers) => {
-      if (uri.includes('cdn-deny')) return { status: 403, body: '', headers: {}, fingerprint: 'expected' };
       if (uri.endsWith('probe.css'))
         return {
-          status: headers?.cookie ? 403 : 200,
+          status: 200,
           body: cdnMarker(row, uri),
           headers: { 'x-cache': 'MISS', 'cache-control': 'private, no-store' },
           fingerprint: 'expected',
@@ -150,6 +149,21 @@ describe('CDN certificate, signing and DNS adapter contracts', () => {
       };
     });
     await expect(f.service.verify(base, row, 'cdn.example.net', true)).rejects.toThrow('缓存命中');
+  });
+  it('accepts source-controlled public static HIT without custom origin headers, edge response rewriting or remote authentication', async () => {
+    const f = fixture();
+    row.resources.certificateFingerprint = 'expected';
+    const probe = vi.spyOn(f.service, 'probe').mockImplementation(async (_host, _address, uri) => ({
+      status: 200, body: cdnMarker(row, uri), fingerprint: 'expected',
+      headers: uri.endsWith('probe.css')
+        ? { 'cache-control': 'public, max-age=2592000', 'x-cache': 'HIT' }
+        : { 'cache-control': 'private, no-store' },
+    }));
+    await f.service.verify(base, row, 'cdn.example.net', true);
+    expect(probe.mock.calls).toHaveLength(3);
+    expect(probe.mock.calls.some((c) => c[2].includes('cdn-deny'))).toBe(false);
+    expect(probe.mock.calls[0][3]).toEqual({});
+    expect(probe.mock.calls[0][4]).toBe(cdnProbeHost(base));
   });
   it('connects to each pinned destination instead of reusing the source socket for the CDN host', async () => {
     const realRequest = https.request;
@@ -255,7 +269,7 @@ describe('CDN certificate, signing and DNS adapter contracts', () => {
   it.each([
     { edge: false, status: 404, body: 'private upstream response', noStore: true, error: '源站直连检查失败：HTTP 404' },
     { edge: true, status: 404, body: 'private upstream response', noStore: true, error: 'CDN 接入检查失败：HTTP 404，未见 CDN 节点标记' },
-    { edge: true, status: 403, body: 'private upstream response', noStore: true, error: 'CDN 接入检查失败：HTTP 403，请检查远程鉴权' },
+    { edge: true, status: 403, body: 'private upstream response', noStore: true, error: 'CDN 接入检查失败：HTTP 403，请检查源站访问策略' },
     { edge: true, status: 502, body: 'private upstream response', noStore: true, error: 'CDN 接入检查失败：HTTP 502，请检查 HTTPS 回源' },
     { edge: false, status: 200, body: 'private upstream response', noStore: true, error: '源站直连检查失败：HTTP 200，但 EAT 实例标记不匹配' },
     { edge: true, status: 200, body: 'private upstream response', noStore: true, error: 'CDN 接入检查失败：HTTP 200，但 EAT 实例标记不匹配' },

@@ -14,7 +14,7 @@ import { AuthService } from '../auth/auth.service';
 import { parseSiteHost, SiteRuntime } from './site-config';
 import { SITE_EMBED_SCRIPT } from './site-embed';
 import { SiteStorage } from './site-storage.service';
-import { SitesService } from './sites.service';
+import { SitesService, type SiteRow } from './sites.service';
 
 import { siteProbeHost } from './site-infrastructure.service';
 import { siteProbeMarker } from './site-setup.service';
@@ -66,24 +66,23 @@ export class SiteGateway {
           )
           .type('text/plain')
           .send(probe);
-      if ((req.raw.url ?? '').startsWith('/__eat/cdn-deny/'))
-        return reply.status(418).send('CDN authentication was bypassed');
       if ((req.raw.url ?? '').startsWith(CDN_PATH)) {
         if (req.headers['service-worker'] || !['GET', 'HEAD'].includes(req.method))
           return reply.status(403).send('缓存资源不可访问');
         const resolved = await this.cdn.resolve(host, req.raw.url!);
         if (!resolved) return reply.status(403).send('缓存资源已失效');
+        const access = await this.identity(req, resolved.site, host);
+        this.sites.assertView(resolved.site, access.identity, access.proof);
         const content = await this.storage.getBlob(resolved.site.id, resolved.file.hash);
-        // Recheck after slow OSS I/O: an in-flight fill must not make revoked revisions usable.
+        // Recheck after slow OSS I/O: avoid publishing a stale public response after a permission change.
         if (!(await this.cdn.resolve(host, req.raw.url!))) return reply.status(403).send('缓存资源已失效');
         return reply
           .header(
             'cache-control',
-            (await this.cdn.cacheableOrigin(req))
+            !reply.hasHeader('set-cookie') && (await this.cdn.cacheableOrigin(req))
               ? `public, max-age=${CDN_CACHE_TTL_SECONDS}`
               : 'private, no-store',
           )
-          .header('vary', 'Cookie, Authorization')
           .header('x-eat-site-version', resolved.version.id)
           .type(resolved.file.type)
           .send(req.method === 'HEAD' ? '' : content);
@@ -122,16 +121,7 @@ export class SiteGateway {
         return reply.send({ ok: true });
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') return reply.status(405).send('仅支持静态文件访问');
-      const bearer = req.headers.authorization?.startsWith('Bearer ')
-        ? req.headers.authorization.slice(7)
-        : '';
-      const user = bearer ? await this.auth.authenticate(bearer) : null;
-      const cookie = req.headers.cookie
-        ?.split(';')
-        .map((s) => s.trim())
-        .find((s) => s.startsWith(`${COOKIE}=`))
-        ?.slice(COOKIE.length + 1);
-      const session = await this.sites.session(site, cookie, 'view', host);
+      const { identity, proof } = await this.identity(req, site, host);
       const share = url.searchParams.get('eat_access');
       if (share && site.access === 'password') {
         await this.sites.unlock(site, undefined, share, req.ip);
@@ -140,8 +130,6 @@ export class SiteGateway {
         url.searchParams.delete('eat_access');
         return reply.redirect(url.pathname + url.search + url.hash);
       }
-      const identity = user ?? session?.user;
-      const proof = session ? this.sites.proof(site) : undefined;
       try {
         this.sites.assertView(site, identity, proof);
       } catch (e) {
@@ -205,6 +193,19 @@ export class SiteGateway {
         message: status === 500 ? 'Folio 访问失败' : (e as Error).message,
       });
     }
+  }
+  private async identity(req: FastifyRequest, site: SiteRow, host: string) {
+    const bearer = req.headers.authorization?.startsWith('Bearer ')
+      ? req.headers.authorization.slice(7)
+      : '';
+    const user = bearer ? await this.auth.authenticate(bearer) : null;
+    const cookie = req.headers.cookie
+      ?.split(';')
+      .map((s) => s.trim())
+      .find((s) => s.startsWith(`${COOKIE}=`))
+      ?.slice(COOKIE.length + 1);
+    const session = await this.sites.session(site, cookie, 'view', host);
+    return { identity: user ?? session?.user, proof: session ? this.sites.proof(site) : undefined };
   }
   private cookie(reply: FastifyReply, token: string) {
     reply.header('set-cookie', `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200; Secure`);
