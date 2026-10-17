@@ -21,6 +21,8 @@ import {
   type PublishSite,
   type SiteInfo,
   type SiteVersion,
+  type SitePublishResult,
+  type SiteShareLink,
   type UpdateSite,
 } from '@eat/shared';
 import type { AuthUser } from '../auth/auth.decorators';
@@ -33,6 +35,7 @@ import { parseSiteHost, SiteRuntime } from './site-config';
 import { SiteStorage } from './site-storage.service';
 
 export type SiteRow = typeof sites.$inferSelect;
+const SHARE_EXPIRY_DAYS = 90;
 @Injectable()
 export class SitesService {
   private readonly logger = new Logger(SitesService.name);
@@ -80,7 +83,8 @@ export class SitesService {
   }
   async create(user: AuthUser, dto: CreateSite) {
     await this.runtime.settings.enabled();
-    const passwordHash = dto.password ? await bcrypt.hash(dto.password, 10) : null;
+    const password = dto.password ?? (dto.access === 'password' ? randomBytes(24).toString('base64url') : undefined);
+    const passwordHash = password ? await bcrypt.hash(password, 10) : null;
     try {
       const [site] = await this.db
         .insert(sites)
@@ -108,9 +112,9 @@ export class SitesService {
   async update(user: AuthUser, slug: string, dto: UpdateSite) {
     const site = await this.get(slug);
     this.manage(site, user);
-    if (dto.access === 'password' && !dto.password && !site.passwordHash)
-      throw new BadRequestException('请设置 Folio 密码');
-    const passwordHash = dto.password ? await bcrypt.hash(dto.password, 10) : undefined;
+    const password = dto.password ?? ((dto.access ?? site.access) === 'password' && !site.passwordHash
+      ? randomBytes(24).toString('base64url') : undefined);
+    const passwordHash = password ? await bcrypt.hash(password, 10) : undefined;
     const [row] = await this.db
       .update(sites)
       .set({
@@ -192,6 +196,9 @@ export class SitesService {
       url: await this.runtime.url(site.slug, row.number),
     };
   }
+  private async publicationInfo(site: SiteRow, version: SiteVersion): Promise<SitePublishResult> {
+    return site.access === 'password' ? { ...version, share: await this.shareInfo(site) } : { ...version };
+  }
   async versions(user: AuthUser, slug: string, proof?: string) {
     const site = await this.get(slug);
     this.assertView(site, user, proof);
@@ -264,7 +271,8 @@ export class SitesService {
         expiresAt: expiresAt.toISOString() });
     }
     return { id: row.id, state: row.state === 'completed' ? 'completed' : expired ? 'expired' : row.state,
-      expiresAt: row.expiresAt.toISOString(), files: row.files, missing, uploads, result: row.result };
+      expiresAt: row.expiresAt.toISOString(), files: row.files, missing, uploads,
+      result: row.result ? await this.publicationInfo(site, row.result) : null };
   }
   async prepareUpload(user: AuthUser, slug: string, input: PrepareSiteUpload, sign = true) {
     const parsed = prepareSiteUploadSchema.safeParse(input);
@@ -286,10 +294,10 @@ export class SitesService {
     const row = await this.uploadRow(user, site, id);
     return this.uploadStatus(site, row, renew);
   }
-  async completeUpload(user: AuthUser, slug: string, id: string): Promise<SiteVersion> {
+  async completeUpload(user: AuthUser, slug: string, id: string): Promise<SitePublishResult> {
     const site = await this.uploadActor(user, slug);
     const existing = await this.uploadRow(user, site, id);
-    if (existing.result) return existing.result;
+    if (existing.result) return this.publicationInfo(site, existing.result);
     if (existing.expiresAt.getTime() <= Date.now()) throw new BadRequestException('上传会话已过期，请重新准备发布');
     const lease = randomUUID();
     const [claimed] = await this.db.update(siteUploads).set({ state: 'verifying', lease, leaseUntil: new Date(Date.now() + 600_000) })
@@ -297,7 +305,7 @@ export class SitesService {
         or(isNull(siteUploads.leaseUntil), sql`${siteUploads.leaseUntil} < now()`))).returning();
     if (!claimed) {
       const row = await this.uploadRow(user, site, id);
-      if (row.result) return row.result;
+      if (row.result) return this.publicationInfo(site, row.result);
       throw new ConflictException({ error: 'UPLOAD_BUSY', message: '上传会话正在验证，请查询状态后重试完成' });
     }
     try {
@@ -327,7 +335,7 @@ export class SitesService {
             isNull(apiTokens.revokedAt), or(isNull(apiTokens.expiresAt), gt(apiTokens.expiresAt, new Date())))).for('share');
         if (!actor || (locked.ownerId !== actor.id && actor.role !== 'admin')) throw new ForbiddenException('发布权限已失效');
         const [session] = await tx.select().from(siteUploads).where(eq(siteUploads.id, id)).for('update');
-        if (session?.result) return session.result;
+        if (session?.result) return this.publicationInfo(locked, session.result);
         if (!session || session.lease !== lease || session.expiresAt.getTime() <= Date.now())
           throw new ConflictException('上传会话已失效，请重新查询');
         const versionId = randomUUID();
@@ -341,7 +349,7 @@ export class SitesService {
         await tx.update(siteUploads).set({ state: 'completed', result, lease: null, leaseUntil: null }).where(eq(siteUploads.id, id));
         await tx.insert(auditLogs).values({ actorId: user.id, action: 'site.published', targetType: 'site', targetId: site.id,
           meta: { versionId, number: version.number, totalBytes: version.totalBytes, uploadId: id } });
-        return result;
+        return this.publicationInfo(locked, result);
       });
     } catch (e) {
       // Fencing prevents an old worker from releasing a newer worker's lease or changing its result.
@@ -413,7 +421,7 @@ export class SitesService {
       siteId: site.id,
       revision: site.accessRevision,
       purpose,
-      exp: Date.now() + (purpose === 'share' ? 90 : 1) * 24 * 3600_000,
+      exp: Date.now() + (purpose === 'share' ? SHARE_EXPIRY_DAYS : 1) * 24 * 3600_000,
       nonce: randomBytes(12).toString('hex'),
     });
   }
@@ -456,9 +464,12 @@ export class SitesService {
     const site = await this.get(slug);
     this.manage(site, user);
     if (site.access !== 'password') throw new BadRequestException('仅密码访问的 Folio 需要免输密码链接');
+    return this.shareInfo(site);
+  }
+  private async shareInfo(site: SiteRow): Promise<SiteShareLink> {
     return {
-      url: `${await this.runtime.url(slug)}/?eat_access=${encodeURIComponent(this.proof(site, 'share'))}`,
-      expiresInDays: 90,
+      url: `${await this.runtime.url(site.slug)}/?eat_access=${encodeURIComponent(this.proof(site, 'share'))}`,
+      expiresInDays: SHARE_EXPIRY_DAYS,
     };
   }
   async ticket(user: AuthUser, slug: string, returnUrl: string) {

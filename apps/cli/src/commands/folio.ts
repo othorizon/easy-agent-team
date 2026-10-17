@@ -93,6 +93,10 @@ export async function folioPush(folio: string, directory: string, opts: { messag
   });
   rmSync(stateFile, { force: true });
   console.log(`已发布 v${result.number}：${result.url}`);
+  if (result.share) {
+    console.log(`免输密码链接：${result.share.url}`);
+    console.log(`链接有效期：${result.share.expiresInDays} 天；修改密码或访问方式后失效。`);
+  }
   return result;
 }
 export function folioComment(
@@ -134,7 +138,7 @@ export function registerFolioCommands(program: Command): void {
     .option('--name <name>', 'Folio 名称，默认同 slug')
     .option('--description <text>', '说明')
     .option('--access <mode>', 'authenticated / public / password', 'authenticated')
-    .option('--password <password>', 'Folio 访问密码')
+    .option('--password <password>', 'Folio 访问密码；密码访问时省略则自动生成随机密码')
     .option('--spa', '启用 SPA 路由回退')
     .action((slug, o) => runFolioTool('create_folio', { ...o, slug, name: o.name ?? slug }));
   folio
@@ -143,7 +147,7 @@ export function registerFolioCommands(program: Command): void {
     .option('--name <name>', 'Folio 名称')
     .option('--description <text>', '说明')
     .option('--access <mode>', 'authenticated / public / password')
-    .option('--password <password>', '新访问密码')
+    .option('--password <password>', '新访问密码；省略则保留已有密码，无密码时自动生成')
     .option('--spa', '启用 SPA')
     .option('--no-spa', '关闭 SPA')
     .action((folio, o) => runFolioTool('update_folio', { ...o, folio }));
@@ -153,7 +157,7 @@ export function registerFolioCommands(program: Command): void {
     .action((folio) => runFolioTool('delete_folio', { folio }));
   folio
     .command('push <folio> <directory-or-zip>')
-    .description('上传构建好的静态目录或 ZIP，发布并保留完整历史版本')
+    .description('上传静态目录或 ZIP 并保留历史版本；密码访问时输出免输密码链接及有效期')
     .option('-m, --message <text>', '版本说明')
     .option('--resume <upload-id>', '恢复指定上传会话，需选择相同内容')
     .option('--fresh', '放弃本地恢复记录，开始新的发布')

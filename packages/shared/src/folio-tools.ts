@@ -19,12 +19,12 @@ export const FOLIO_TOOL_SPECS = {
     schema: z.object({}),
   },
   create_folio: {
-    description: '创建 Folio 并自动分配域名，默认仅 EAT 登录用户访问。先创建再 publish_folio 上传构建产物。',
+    description: '创建 Folio 并自动分配域名，默认仅 EAT 登录用户访问。密码访问时省略 password 会生成随机密码。先创建再 publish_folio 上传构建产物。',
     schema: z.object(createSiteSchema.shape),
   },
   update_folio: {
     description:
-      '修改 Folio 名称、访问模式、访问密码或 SPA 设置。仅所有者或管理员；修改密码会使旧分享凭据失效。',
+      '修改 Folio 名称、访问模式、访问密码或 SPA 设置。密码访问时省略 password 保留已有密码，无旧密码则自动生成随机密码。仅所有者或管理员；修改密码会使旧分享凭据失效。',
     schema: z.object({ ...folioArg, ...updateSiteSchema.shape }),
   },
   delete_folio: {
@@ -34,7 +34,7 @@ export const FOLIO_TOOL_SPECS = {
   },
   publish_folio: {
     description:
-      '仅发布已构建的静态网站（HTML/CSS/JS/图片，可含 SPA），创建不可变版本，无需审批。不执行依赖安装、构建、后端代码或 SSR；需要服务端运行的项目请走应用部署。files 为相对路径及 utf8/base64 内容，根目录必须有 index.html，总量最多 50 MiB；较大目录建议用 eat folio push。保存发布产物，不等于保存源工程。',
+      '仅发布已构建的静态网站（HTML/CSS/JS/图片，可含 SPA），创建不可变版本，无需审批。不执行依赖安装、构建、后端代码或 SSR；需要服务端运行的项目请走应用部署。files 为相对路径及 utf8/base64 内容，根目录必须有 index.html，总量最多 50 MiB；较大目录建议用 eat folio push。密码访问时返回 share.url 免输密码链接及 share.expiresInDays（90 天），须一并告知用户。保存发布产物，不等于保存源工程。',
     schema: z.object({ ...folioArg, ...publishSiteSchema.shape }),
   },
   prepare_folio_upload: {
@@ -50,7 +50,7 @@ export const FOLIO_TOOL_SPECS = {
     schema: z.object({ ...folioArg, uploadId: z.string().uuid() }),
   },
   complete_folio_upload: {
-    description: '完成上传：服务端快照、流式核验真实 SHA-256 和大小、不可变封存后原子发布。幂等重试返回同一版本，UPLOAD_BUSY 时查询进度再重试；未改变内容也会生成完整新版本。',
+    description: '完成上传：服务端快照、流式核验真实 SHA-256 和大小、不可变封存后原子发布。密码访问时返回 share.url 免输密码链接及 share.expiresInDays（90 天），须一并告知用户。幂等重试返回同一版本并按当前访问设置生成分享链接，UPLOAD_BUSY 时查询进度再重试；未改变内容也会生成完整新版本。',
     schema: z.object({ ...folioArg, uploadId: z.string().uuid() }),
   },
   list_folio_versions: {

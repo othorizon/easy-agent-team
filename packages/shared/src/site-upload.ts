@@ -1,4 +1,4 @@
-import { prepareSiteUploadSchema, type SiteManifestFile, type SiteUploadStatus, type SiteVersion } from './site.js';
+import { prepareSiteUploadSchema, type SiteManifestFile, type SiteUploadStatus, type SitePublishResult } from './site.js';
 
 export interface FolioUploadFile extends SiteManifestFile { bytes: Uint8Array }
 export type FolioUploadRequest = (method: string, path: string, body?: unknown) => Promise<unknown>;
@@ -25,8 +25,8 @@ async function retry<T>(fn: () => Promise<T>, attempts = 4): Promise<T> {
 export function folioManifestKey(files: SiteManifestFile[]) {
   return JSON.stringify([...files].sort((a, b) => a.path.localeCompare(b.path)).map((f) => [f.path, f.hash, f.size, f.type]));
 }
-/** Bounded, binary-only transport shared by CLI and browser. Signed responses never reach logs/errors. */
-export async function uploadFolioFiles(request: FolioUploadRequest, folio: string, files: FolioUploadFile[], options: FolioUploadOptions): Promise<SiteVersion> {
+/** Bounded, binary-only transport shared by CLI and browser. OSS signed PUT URLs never reach logs/errors. */
+export async function uploadFolioFiles(request: FolioUploadRequest, folio: string, files: FolioUploadFile[], options: FolioUploadOptions): Promise<SitePublishResult> {
   const base = `/api/sites/${encodeURIComponent(folio)}/uploads`;
   const manifest = files.map(({ bytes: _, ...file }) => file);
   const body = prepareSiteUploadSchema.parse({ requestId: options.requestId, files: manifest, message: options.message ?? '' });
@@ -87,5 +87,5 @@ export async function uploadFolioFiles(request: FolioUploadRequest, folio: strin
   const failure = outcomes.find((r): r is PromiseRejectedResult => r.status === 'rejected');
   if (failure) throw failure.reason;
   options.onProgress?.('正在验证 SHA-256 并发布…');
-  return await retry(() => request('POST', `${base}/${session.id}/complete`, {}), 8) as SiteVersion;
+  return await retry(() => request('POST', `${base}/${session.id}/complete`, {}), 8) as SitePublishResult;
 }

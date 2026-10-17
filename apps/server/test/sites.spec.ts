@@ -9,7 +9,7 @@ import { Pool } from 'pg';
 import * as bcrypt from 'bcryptjs';
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
-import { uploadFolioFiles, siteContentType, type FolioUploadFile } from '@eat/shared';
+import { uploadFolioFiles, siteContentType, type FolioUploadFile, type SitePublishResult } from '@eat/shared';
 import { AuditService } from '../src/audit/audit.service';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
@@ -343,7 +343,7 @@ describe('登录、公开、密码与域名隔离', () => {
     expect((await content('/', { version: 1, cookie })).statusCode).toBe(302);
   });
   it('密码限制覆盖历史资源；免输密码链接不包含明文密码', async () => {
-    expect((await api('PATCH', '/api/sites/demo', owner, { access: 'password' })).status).toBe(400);
+    expect((await api('PATCH', '/api/sites/demo', owner, { access: 'password' })).status).toBe(200);
     await api('PATCH', '/api/sites/demo', owner, { access: 'password', password: 'site-password' });
     expect((await content('/', { version: 1 })).statusCode).toBe(403);
     expect((await content('/app.js', { version: 1, token: other })).statusCode).toBe(403);
@@ -883,6 +883,101 @@ async function putPlan(plan: any, files: FolioUploadFile[]) {
   }
 }
 const complete = (slug: string, id: string, token = owner) => api('POST', `/api/sites/${slug}/uploads/${id}/complete`, token, {});
+
+describe('随机访问密码和发布分享链接', () => {
+  it('省略密码时生成独立密码哈希，更新时保留旧密码，显式密码仍可使用', async () => {
+    const db = app.get<Db>(DB);
+    const saved = async (slug: string) => (await db.select().from(schema.sites).where(eq(schema.sites.slug, slug)))[0];
+    for (const slug of ['random-one', 'random-two']) {
+      const created = await api('POST', '/api/sites', owner, { slug, name: slug, access: 'password' });
+      expect(created.status).toBe(201);
+      expect(created.body.access).toBe('password');
+      expect(created.body.password).toBeUndefined();
+      expect(created.body.passwordHash).toBeUndefined();
+      expect((await saved(slug)).passwordHash).toMatch(/^\$2[aby]\$/);
+    }
+    expect((await saved('random-one')).passwordHash).not.toBe((await saved('random-two')).passwordHash);
+    await api('POST', '/api/sites', owner, { slug: 'random-switch', name: 'Switch' });
+    expect((await api('PATCH', '/api/sites/random-switch', owner, { access: 'password' })).status).toBe(200);
+    const initial = await saved('random-switch');
+    expect(initial.passwordHash).toMatch(/^\$2[aby]\$/);
+    await api('PATCH', '/api/sites/random-switch', owner, { access: 'password', name: 'Renamed' });
+    expect((await saved('random-switch')).passwordHash).toBe(initial.passwordHash);
+    expect((await saved('random-switch')).accessRevision).toBe(initial.accessRevision);
+    await api('PATCH', '/api/sites/random-switch', owner, { password: 'chosen-password' });
+    expect((await api('POST', '/api/sites/random-switch/access', undefined, { password: 'chosen-password' })).status).toBe(201);
+    expect((await api('POST', '/api/sites', owner, { slug: 'short-password', name: 'Short', access: 'password', password: 'x' })).status).toBe(400);
+  });
+
+  it('密码发布返回可访问的 90 天链接，恢复会话使用当前访问设置且不持久化凭据', async () => {
+    const slug = 'random-publish';
+    await api('POST', '/api/sites', owner, { slug, name: 'Private', access: 'password' });
+    const files = [binaryFile('index.html', '<body>private content</body>')];
+    const requestId = randomUUID();
+    const plan = (await uploadPlan(slug, files, requestId)).body;
+    await putPlan(plan, files);
+    const before = Date.now();
+    const published = await complete(slug, plan.id);
+    expect(published.status).toBe(201);
+    expect(published.body.share.expiresInDays).toBe(90);
+    const share = new URL(published.body.share.url);
+    expect(share.origin).toBe('http://random-publish.sites.test:3000');
+    const proof = share.searchParams.get('eat_access')!;
+    const payload = JSON.parse(Buffer.from(proof.split('.')[0], 'base64url').toString());
+    expect(payload.purpose).toBe('share');
+    expect(payload.exp).toBeGreaterThanOrEqual(before + 90 * 24 * 3600_000);
+    expect(payload.exp).toBeLessThanOrEqual(Date.now() + 90 * 24 * 3600_000);
+    const visit = await content('/' + share.search, { site: slug });
+    expect(visit.statusCode).toBe(302);
+    const cookie = String(visit.headers['set-cookie']).split(';')[0];
+    expect((await content('/', { site: slug, cookie })).body).toContain('private content');
+    expect((await content('/', { site: slug })).statusCode).toBe(403);
+
+    const db = app.get<Db>(DB);
+    const [stored] = await db.select().from(schema.siteUploads).where(eq(schema.siteUploads.id, plan.id));
+    expect(stored.result).not.toHaveProperty('share');
+    expect((await api('GET', `/api/sites/${slug}/versions`, owner)).body[0]).not.toHaveProperty('share');
+    expect((await api('GET', `/api/sites/${slug}`, owner)).body).not.toHaveProperty('share');
+    const member = (await api('POST', '/api/auth/login', undefined, { email: 'other@site.test', password: 'password123' })).body.token;
+    expect((await api('GET', `/api/sites/${slug}/uploads/${plan.id}`, member)).status).toBe(403);
+
+    await api('PATCH', `/api/sites/${slug}`, owner, { password: 'new-password' });
+    expect((await content('/' + share.search, { site: slug })).statusCode).toBe(403);
+    const refreshed = [
+      (await api('GET', `/api/sites/${slug}/uploads/${plan.id}`, owner)).body.result,
+      (await complete(slug, plan.id)).body,
+      (await uploadPlan(slug, files, requestId)).body.result,
+    ];
+    for (const result of refreshed) {
+      expect(result.id).toBe(published.body.id);
+      expect(result.share.expiresInDays).toBe(90);
+      expect((await content('/' + new URL(result.share.url).search, { site: slug })).statusCode).toBe(302);
+    }
+    expect((await api('GET', `/api/sites/${slug}/versions`, owner)).body).toHaveLength(1);
+    await api('PATCH', `/api/sites/${slug}`, owner, { access: 'public' });
+    expect((await complete(slug, plan.id)).body).not.toHaveProperty('share');
+    expect((await api('GET', `/api/sites/${slug}/uploads/${plan.id}`, owner)).body.result).not.toHaveProperty('share');
+    expect((await uploadPlan(slug, files, requestId)).body.result).not.toHaveProperty('share');
+  });
+
+  it('MCP 创建与内联发布共用随机密码和分享结果，普通访问不生成分享凭据', async () => {
+    const actor = (await app.get(AuthService).authenticate(owner))!;
+    const tools = app.get(McpToolsService);
+    await tools.call(actor, 'create_folio', { slug: 'random-mcp', name: 'MCP', access: 'password' });
+    const result = await tools.call(actor, 'publish_folio', {
+      folio: 'random-mcp', files: [{ path: 'index.html', content: '<body>MCP private</body>' }],
+    }) as SitePublishResult;
+    expect(result.share?.expiresInDays).toBe(90);
+    expect((await content('/' + new URL(result.share!.url).search, { site: 'random-mcp' })).statusCode).toBe(302);
+    for (const access of ['public', 'authenticated']) {
+      const slug = 'share-' + access;
+      await api('POST', '/api/sites', owner, { slug, name: slug, access });
+      const published = await api('POST', `/api/sites/${slug}/releases`, owner, { files: [{ path: 'index.html', content: '<body>hello</body>' }] });
+      expect(published.status).toBe(201);
+      expect(published.body).not.toHaveProperty('share');
+    }
+  });
+});
 
 describe('二进制直传、共享内容和持久化会话', () => {
   it('首发、仅增量上传、相同内容的路径 MIME、完整清单删除及固定版本/回滚', async () => {

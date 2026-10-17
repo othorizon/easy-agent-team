@@ -28,8 +28,7 @@ export const createSiteSchema = z
     access: siteAccessSchema.default('authenticated'),
     password: z.string().min(4).max(128).optional(),
     spa: z.boolean().default(false),
-  })
-  .refine((s) => s.access !== 'password' || !!s.password, { path: ['password'], message: '密码访问需要设置密码' });
+  });
 export const updateSiteSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
   description: z.string().max(2000).optional(),
@@ -89,7 +88,7 @@ export interface SiteUploadStatus {
   files: SiteManifestFile[];
   missing: { hash: string; size: number }[];
   uploads: { hash: string; size: number; url: string; headers: Record<string, string>; expiresAt: string }[];
-  result: SiteVersion | null;
+  result: SitePublishResult | null;
 }
 const SITE_MIME: Record<string, string> = {
   html: 'text/html; charset=utf-8', htm: 'text/html; charset=utf-8', css: 'text/css; charset=utf-8',
@@ -173,6 +172,14 @@ export interface SiteVersion {
   publisherId: string;
   createdAt: string;
   url: string;
+}
+export interface SiteShareLink {
+  url: string;
+  expiresInDays: number;
+}
+/** Share credentials are generated for publishing responses, never stored with version history. */
+export interface SitePublishResult extends SiteVersion {
+  share?: SiteShareLink;
 }
 export interface SiteComment {
   id: string;

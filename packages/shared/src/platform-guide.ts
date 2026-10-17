@@ -7,7 +7,7 @@ import type { SyncSkill } from './skill.js';
  * 内容随平台代码维护——改动本文件内容时必须递增 PLATFORM_GUIDE_VERSION，客户端才会更新。
  */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
-export const PLATFORM_GUIDE_VERSION = 34;
+export const PLATFORM_GUIDE_VERSION = 35;
 
 const CONTENT = `---
 name: eat-platform-guide
@@ -74,11 +74,13 @@ Folio 用于发布和分享网页、演示与报告，支持版本管理和评�
 
 - \`authenticated\`：仅 EAT 登录用户可访问。
 - \`public\`：任何人可访问，无需登录。
-- \`password\`：凭访问密码查看；选择此项后，还需确认访问密码的设置。
+- \`password\`：凭访问密码或免输密码链接查看；用户未指定密码时，平台自动生成随机密码，无需额外追问密码。
 
 用户尚未明确选择时，先等待答复，再创建 Folio、修改访问权限或执行发布；不要把平台默认的 \`authenticated\` 当作用户已经选择，也不要自行设为公开。用户已在本次任务中明确选择时，按其选择执行，无需重复询问。发布已有 Folio 的新版本时，先用 \`eat folio list\` / \`list_folios\` 查看并告知当前权限，再询问沿用还是调整；用户确认沿用时保留原设置，不重设已有密码。
 
-明确访问权限后，用 \`eat folio create <slug> --access <模式>\` / \`create_folio\`（传 \`access\`）创建 Folio；已有 Folio 需要调整权限时用 \`eat folio update <folio> --access <模式>\` / \`update_folio\`，密码模式需按用户确认设置 \`password\`。再用 \`eat folio push <slug> <目录或 ZIP>\` / \`publish_folio\` 上传构建好的静态文件，根目录需包含 index.html。每次最多 2000 个文件、50 MiB，历史发布产物完整保留；Folio 固定域名直接展示当前版本、地址栏不跳转，带版本域名用于固定快照，用 \`activate_folio_version\` 可回滚。
+明确访问权限后，用 \`eat folio create <slug> --access <模式>\` / \`create_folio\`（传 \`access\`）创建 Folio；已有 Folio 需要调整权限时用 \`eat folio update <folio> --access <模式>\` / \`update_folio\`。密码模式下，用户指定密码时传 \`--password\` / \`password\`；省略时保留已有密码，没有旧密码则由服务端生成随机密码，仅保存哈希。再用 \`eat folio push <slug> <目录或 ZIP>\` / \`publish_folio\` 上传构建好的静态文件，根目录需包含 index.html。每次最多 2000 个文件、50 MiB，历史发布产物完整保留；Folio 固定域名直接展示当前版本、地址栏不跳转，带版本域名用于固定快照，用 \`activate_folio_version\` 可回滚。
+
+**密码访问发布后直接交付免输密码链接和有效期**：\`eat folio push\` 自动输出免输密码链接及其有效期；MCP \`publish_folio\` / \`complete_folio_upload\` 的发布结果中，\`share.url\` 为免输密码链接，\`share.expiresInDays\` 为有效天数（当前为 90 天）。恢复已完成的上传会话时，\`result.share\` 同样按当前访问设置生成。向用户返回该链接并明确说明“有效期 90 天，修改密码或访问方式后失效”，不要只返回仍需输入密码的普通版本地址。用户需重新生成时使用 \`eat folio share <folio>\` / \`create_folio_share_link\`。分享链接使用 Folio 固定域名，打开后显示当前版本；固定快照仍使用版本地址。
 
 CLI/Web 每次提交完整文件清单，仅将缺失 SHA-256 内容以二进制直传私有 OSS；同一 Folio 的内容共享，版本仍保存完整清单。50 MiB/2000 文件按整版逻辑内容计算。CLI 中断后重跑同一命令可恢复，\`--resume <upload-id>\` 指定会话，\`--fresh\` 开始新的发布；会话有效 24 小时，短期签名可续签。浏览器刷新后需重新选择相同本地文件。服务端对新增对象的私有快照流式读取并核验 SHA-256 后封存，文件字节可能经过 EAT 验证一次。MCP 可用 \`prepare_folio_upload\` / \`get_folio_upload\` / \`renew_folio_upload\` / \`complete_folio_upload\`；只向返回的 OSS URL 发送原始二进制及签名头，绝不携带 EAT 令牌或 Cookie。远程 MCP 无法读取用户本地路径；小型内容也可用 \`publish_folio\` 的 utf8/base64 输入。
 

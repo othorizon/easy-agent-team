@@ -88,13 +88,19 @@ Folio 所有者与管理员可直接管理和访问自己管理的 Folio。其�
 
 ```bash
 eat folio update demo --access public
+eat folio create private-demo --access password
+eat folio push private-demo ./dist
 eat folio update demo --access password --password '<访问密码>'
 eat folio share demo
 eat folio unlock demo '<访问密码>'
 eat folio comments demo --access-token '<返回的 accessToken>'
 ```
 
-「复制链接」不带凭据，「复制免输密码链接」带随机签名访问凭据，打开后自动建立 Folio 访问会话并从地址栏移除凭据。分享凭据有效期 90 天，只允许访问该 Folio，不代表分享者身份，也不能代其发表评论。修改密码或访问模式会使旧分享凭据、密码访问会话和评论访问凭据失效。
+CLI / MCP 创建密码访问的 Folio 时可以省略密码，由服务端生成 32 字符的随机密码并仅保存 bcrypt 哈希。更新为密码访问且没有旧密码时同样自动生成；已有密码在未指定新密码时继续沿用。需要自行掌握访问密码时，可用 `--password` / `password` 显式设置。
+
+密码访问的 Folio 发布成功后，`eat folio push` 直接输出免输密码链接和“有效期 90 天，修改密码或访问方式后失效”的提示。REST / MCP 发布结果通过 `share: { url, expiresInDays }` 返回相同信息，包括内联发布和二进制上传完成；非密码访问不返回 `share`。上传会话只持久化版本结果，不保存分享凭据；查询、恢复或重试已完成会话时，按当前访问模式和密码版本生成链接，不重复发布，也不返回改密码前的旧凭据。版本列表和普通 Folio 查询不携带分享凭据。
+
+「复制链接」不带凭据，「复制免输密码链接」带随机签名访问凭据，打开后自动建立 Folio 访问会话并从地址栏移除凭据。分享凭据有效期 90 天，只允许访问该 Folio，不代表分享者身份，也不能代其发表评论。修改密码或访问模式会使旧分享凭据、密码访问会话和评论访问凭据失效。自动返回的免输密码链接使用固定域名，展示当前版本；固定快照仍通过版本地址访问。
 
 ## 评论、批注与 @
 

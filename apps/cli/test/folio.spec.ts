@@ -38,6 +38,48 @@ describe('静态发布打包', () => {
     writeFileSync(join(d, 'index.html'), '<h1>Demo</h1>');
     expect(collectFolioFiles(d)[0]).toMatchObject({ path: 'index.html', size: 13 });
   });
+  it.each([undefined, 'chosen-password'])('创建密码访问的 Folio 时，密码可省略或显式指定：%s', async (password) => {
+    const request = vi.fn().mockResolvedValue({ slug: 'demo', access: 'password' });
+    vi.spyOn(Api, 'fromSaved').mockReturnValue({ request } as unknown as Api);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const program = new Command().exitOverride();
+    registerFolioCommands(program);
+    await program.parseAsync(['node', 'eat', 'folio', 'create', 'demo', '--access', 'password',
+      ...(password ? ['--password', password] : [])]);
+    expect(request).toHaveBeenCalledWith('POST', '/api/sites', {
+      slug: 'demo', name: 'demo', description: '', access: 'password', spa: false,
+      ...(password ? { password } : {}),
+    }, {});
+  });
+  it.each(['password', 'public', 'resumed'] as const)('发布结果输出链接和有效期，支持恢复：%s', async (mode) => {
+    const d = dir();
+    writeFileSync(join(d, 'index.html'), '<body>share</body>');
+    const files = collectFolioFiles(d).map(({ bytes: _, ...file }) => file);
+    const result = { id: randomUUID(), number: 1, url: 'https://v1--demo.test',
+      ...(mode !== 'public' ? { share: { url: 'https://demo.test/?eat_access=share-proof', expiresInDays: 90 } } : {}) };
+    const sessionId = randomUUID();
+    const request = vi.fn(async (method: string, path: string) => {
+      if (method === 'GET' && path.endsWith('/' + sessionId)) return { id: sessionId, files, result };
+      if (path.endsWith('/uploads')) return { id: sessionId, uploads: [], state: 'uploading', result: null };
+      if (path.endsWith('/complete')) return result;
+      throw new Error(method + ' ' + path);
+    });
+    vi.spyOn(Api, 'fromSaved').mockReturnValue({ serverUrl: 'https://' + randomUUID() + '.test', request } as unknown as Api);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const program = new Command().exitOverride();
+    registerFolioCommands(program);
+    await program.parseAsync(['node', 'eat', 'folio', 'push', 'demo', d, '--fresh',
+      ...(mode === 'resumed' ? ['--resume', sessionId] : [])]);
+    expect(log).toHaveBeenCalledWith('已发布 v1：https://v1--demo.test');
+    if (mode !== 'public') {
+      expect(log).toHaveBeenCalledWith('免输密码链接：https://demo.test/?eat_access=share-proof');
+      expect(log).toHaveBeenCalledWith('链接有效期：90 天；修改密码或访问方式后失效。');
+    } else {
+      expect(log).toHaveBeenCalledTimes(1);
+    }
+    if (mode === 'resumed') expect(request).toHaveBeenCalledTimes(1);
+  });
   it('push 目录/ZIP 使用清单与原始 PUT，二次只上传新增内容，重试不携带平台凭据', async () => {
     const blobs = new Map<string, Buffer>();
     let puts = 0, failures = 1;
@@ -239,8 +281,9 @@ describe('静态发布打包', () => {
     expect(req.path).toBe('/api/sites/demo/threads/' + id + '/replies');
     expect(req.headers).toEqual({ 'x-eat-site-access': 'proof' });
     expect(req.body).toMatchObject({ versionId: id, content: 'reply' });
-    expect(() =>
-      folioToolRequest('create_folio', { slug: 'demo', name: 'Demo', access: 'password' }),
-    ).toThrow();
+    expect(folioToolRequest('create_folio', { slug: 'demo', name: 'Demo', access: 'password' }).body)
+      .toMatchObject({ slug: 'demo', access: 'password' });
+    expect(() => folioToolRequest('create_folio', { slug: 'demo', name: 'Demo', access: 'password', password: 'x' }))
+      .toThrow();
   });
 });
