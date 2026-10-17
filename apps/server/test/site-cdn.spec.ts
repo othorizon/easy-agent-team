@@ -34,8 +34,39 @@ let domain: any,
   calls: { action: string; params: any }[] = [],
   fail = '',
   cert = 'certificate-1',
+  verificationPending = false,
   failDns = false;
 const cname = 'cdn.example.net';
+const asCloudConfig = (v: any, id = 1) => ({
+  ConfigId: String(id),
+  ParentId: 0,
+  FunctionName: v.functionName,
+  FunctionArgs: {
+    FunctionArg: v.functionArgs.map((a: any) => ({ ArgName: a.argName, ArgValue: a.argValue })),
+  },
+  Status: 'success',
+});
+const providerDefaults = () =>
+  Object.entries({
+    https_option: { session_timeout: '86400' },
+    https_tls_version: { tls13: 'on' },
+    domain_status: { domain_status: 'online' },
+    dm_coverage: { coverage: 'overseas' },
+    p2pqos: { enable: 'on', appid: '1' },
+    ipv6: { switch: 'on', region: '*' },
+    cc_defense: { enable: 'on' },
+    alicdn_v2_architecture: { enabled: 'on' },
+    consistent_hash: { enable: 'on' },
+    domain_schdm: { schdm_id: '1', schdm_name: 'scheduler.example.net' },
+  }).map(([functionName, args], i) =>
+    asCloudConfig(
+      {
+        functionName,
+        functionArgs: Object.entries(args).map(([argName, argValue]) => ({ argName, argValue })),
+      },
+      i,
+    ),
+  );
 const api = {
   call: vi.fn(async (_c: unknown, action: string, params: any = {}) => {
     calls.push({ action, params });
@@ -50,7 +81,7 @@ const api = {
       case 'DescribeVerifyContent':
         return { Content: 'verify_testvalue' };
       case 'VerifyDomainOwner':
-        return {};
+        return verificationPending ? { Content: 'verify_testvalue' } : {};
       case 'AddCdnDomain':
         domain = {
           DomainStatus: 'online',
@@ -58,13 +89,14 @@ const api = {
           Cname: cname,
           SourceModels: { SourceModel: [{ Content: base.gatewayTarget, Port: 443 }] },
         };
+        configs.push(...providerDefaults());
         return {};
       case 'ListTagResources':
         return { TagResources: { TagResource: [{ TagKey: 'eat-instance', TagValue: base.resourceKey }] } };
       case 'DescribeCdnDomainConfigs':
         return { DomainConfigs: { DomainConfig: configs } };
       case 'BatchSetCdnDomainConfig':
-        configs.push(...JSON.parse(params.Functions).map((v: any) => ({ ...v, Status: 'success' })));
+        configs.push(...JSON.parse(params.Functions).map((v: any, i: number) => asCloudConfig(v, 100 + i)));
         return {};
       case 'SetCdnDomainSSLCertificate':
         return {};
@@ -209,6 +241,7 @@ beforeEach(async () => {
   calls = [];
   fail = '';
   cert = 'certificate-1';
+  verificationPending = false;
   failDns = false;
   cdnInfra.verify.mockReset();
   cdnInfra.verify.mockResolvedValue();
@@ -300,6 +333,60 @@ describe('Folio CDN control and durable reconciliation (cloud substitutes)', () 
     dnsRecords[0] = { ...dnsRecords[0], content: 'external.example.net' };
     expect((await tick()).status).toBe('conflict');
     expect(dnsRecords[0].content).toBe('external.example.net');
+  });
+  it('retains provider defaults and resumes an older conflict with stale TXT guidance without replacing the domain', async () => {
+    await save();
+    fail = 'BatchSetCdnDomainConfig';
+    expect((await tick()).status).toBe('failed');
+    expect((await store.info()).dnsInstructions).toEqual([]);
+    await store.patch({
+      status: 'conflict',
+      dnsInstructions: [{ name: 'verification.example.com', type: 'TXT', value: 'verify_testvalue' }],
+    });
+    const defaults = structuredClone(configs);
+    fail = '';
+    expect((await request('POST', '/api/admin/site-settings/cdn/retry')).statusCode).toBe(201);
+    expect(await tick()).toMatchObject({ status: 'enabled', connected: true, dnsInstructions: [] });
+    expect(configs.slice(0, defaults.length)).toEqual(defaults);
+    expect(calls.filter((c) => c.action === 'AddCdnDomain')).toHaveLength(1);
+    // Certificate APIs may update provider TLS metadata without changing EAT's content rules.
+    configs.find((c) => c.FunctionName === 'https_option').FunctionArgs.FunctionArg.push({
+      ArgName: 'https',
+      ArgValue: 'on',
+    });
+    expect((await tick()).status).toBe('enabled');
+  });
+  it('keeps waiting for ownership when VerifyDomainOwner returns HTTP 200 with verification Content', async () => {
+    await save();
+    verificationPending = true;
+    expect(await tick()).toMatchObject({ status: 'awaiting_dns', connected: false });
+    expect(calls.some((c) => c.action === 'AddCdnDomain')).toBe(false);
+    expect(dnsRecords.find((r) => r.name.startsWith('*'))?.type).toBe('A');
+    verificationPending = false;
+    expect((await tick()).status).toBe('enabled');
+  });
+  it.each([
+    { FunctionName: 'filetype_based_ttl_set', FunctionArgs: { FunctionArg: [] }, ParentId: 0 },
+    { FunctionName: 'https_option', FunctionArgs: { FunctionArg: [] }, ParentId: 'external-condition' },
+  ])('preserves and rejects an unexpected initial or condition-bound config: $FunctionName', async (config) => {
+    await save();
+    configs.push({ ...config, Status: 'success' });
+    expect((await tick()).status).toBe('conflict');
+    expect(configs).toContainEqual({ ...config, Status: 'success' });
+    expect(calls.some((c) => c.action === 'BatchSetCdnDomainConfig')).toBe(false);
+    expect(dnsRecords.find((r) => r.name.startsWith('*'))?.type).toBe('A');
+  });
+  it('still detects changed arguments and rule bindings on EAT-managed configurations', async () => {
+    await save();
+    await tick();
+    const auth = configs.find((c) => c.FunctionName === 'cdn_remote_auth');
+    auth.ParentId = 'external-condition';
+    expect((await tick()).status).toBe('conflict');
+    auth.ParentId = 0;
+    auth.FunctionArgs.FunctionArg.find((a: any) => a.ArgName === 'remote_auth_timeout_action').ArgValue =
+      'pass';
+    expect((await request('POST', '/api/admin/site-settings/cdn/retry')).statusCode).toBe(201);
+    expect((await tick()).status).toBe('conflict');
   });
   it('does not overwrite a CDN owned by somebody else or external rule edits', async () => {
     await save();

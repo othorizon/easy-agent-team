@@ -152,7 +152,17 @@ try {
       };
       await page.reload();
       await section.getByText('验证 TXT 尚未生效，请核对 DNS 权限').waitFor();
+      await section
+        .getByText('请在 DNS 服务商完成以下记录后点击“重新检查 / 恢复”：', { exact: true })
+        .waitFor();
       await section.screenshot({ path: output + '/recovery-desktop.png' });
+      state = { ...state, autoDns: true };
+      await page.reload();
+      await section.getByText('系统将自动处理以下 DNS 记录，等待解析生效后继续；无需手动重复添加。').waitFor();
+      assert.equal(
+        await section.getByText('请在 DNS 服务商完成以下记录后点击“重新检查 / 恢复”：', { exact: true }).count(),
+        0,
+      );
       await section.getByRole('button', { name: '重新检查 / 恢复' }).click();
       await section.getByText('配置意愿：开启 · 实际接入：已验证接入').waitFor();
       await section.screenshot({ path: output + '/enabled-desktop.png' });

@@ -104,6 +104,27 @@ export function cdnFunctions(row: SiteCdnRow, base: SiteSettingRow) {
     }),
   ];
 }
+const configParent = (c: any) => {
+  const parent = String(c.ParentId ?? c.parentId ?? '');
+  // Aliyun returns numeric 0 for unbound rules; requests omit parentId or use -1.
+  return ['', '0', '-1'].includes(parent) ? '' : parent;
+};
+// Service-generated TLS, transport, scheduling and lifecycle settings are retained in place.
+// Do not ignore arbitrary functions: cache/header/auth functions still require exact ownership checks.
+const providerFunctions = new Set([
+  'https_option',
+  'https_tls_version',
+  'domain_status',
+  'dm_coverage',
+  'p2pqos',
+  'ipv6',
+  'cc_defense',
+  'alicdn_v2_architecture',
+  'consistent_hash',
+  'domain_schdm',
+]);
+export const cdnConfigsToCheck = (configs: any[]) =>
+  configs.filter((c) => configParent(c) || !providerFunctions.has(c.FunctionName ?? c.functionName));
 export function configDigest(configs: any[]) {
   return createHash('sha256')
     .update(
@@ -111,9 +132,7 @@ export function configDigest(configs: any[]) {
         configs
           .map((c) => ({
             name: c.FunctionName ?? c.functionName,
-            parent: ['', '-1'].includes(String(c.ParentId ?? c.parentId ?? ''))
-              ? ''
-              : String(c.ParentId ?? c.parentId),
+            parent: configParent(c),
             args: (c.FunctionArgs?.FunctionArg ?? c.functionArgs ?? [])
               .map((a: any) => [a.ArgName ?? a.argName, String(a.ArgValue ?? a.argValue)])
               .sort(),

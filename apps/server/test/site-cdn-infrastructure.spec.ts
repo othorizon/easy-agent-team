@@ -11,6 +11,7 @@ import {
   cdnFunctions,
   checkCdnOrigin,
   configDigest,
+  cdnConfigsToCheck,
 } from '../src/sites/site-cdn.infrastructure';
 import { SiteDns } from '../src/sites/site-dns.service';
 import { encryptSecret } from '../src/common/crypto';
@@ -190,6 +191,7 @@ describe('CDN certificate, signing and DNS adapter contracts', () => {
     const configs = functions
       .map((f, i) => ({
         ConfigId: i,
+        ParentId: i % 2 ? 0 : '0',
         FunctionName: f.functionName,
         FunctionArgs: {
           FunctionArg: f.functionArgs.map((a) => ({ ArgName: a.argName, ArgValue: a.argValue })).reverse(),
@@ -199,6 +201,16 @@ describe('CDN certificate, signing and DNS adapter contracts', () => {
     expect(configDigest(configs)).toBe(configDigest(functions));
     configs[0].FunctionArgs.FunctionArg[0].ArgValue = 'external change';
     expect(configDigest(configs)).not.toBe(configDigest(functions));
+  });
+  it('only omits recognized unbound service defaults, preserving unknown functions and real rule bindings', () => {
+    const defaults = { FunctionName: 'https_option', ParentId: 0, FunctionArgs: { FunctionArg: [] } };
+    const unknown = { ...defaults, FunctionName: 'custom_cache_rule' };
+    const bound = { ...defaults, ParentId: 'condition-123' };
+    expect(cdnConfigsToCheck([defaults, unknown, bound])).toEqual([unknown, bound]);
+    expect(configDigest([{ ...defaults, ParentId: '0' }])).toBe(
+      configDigest([{ ...defaults, ParentId: -1 }]),
+    );
+    expect(configDigest([bound])).not.toBe(configDigest([defaults]));
   });
   it('updates AliDNS and Cloudflare records in place, retaining record IDs and original TTL', async () => {
     for (const mode of ['alidns', 'cloudflare']) {

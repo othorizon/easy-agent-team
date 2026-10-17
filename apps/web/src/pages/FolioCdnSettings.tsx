@@ -205,7 +205,11 @@ export function FolioCdnSettings({ folio }: { folio?: SiteSettingsInfo }) {
           )}
           {r.dnsInstructions.length > 0 && (
             <div className="space-y-2">
-              <p>请在 DNS 服务商完成以下记录后点击“重新检查 / 恢复”：</p>
+              <p>
+                {r.autoDns
+                  ? '系统将自动处理以下 DNS 记录，等待解析生效后继续；无需手动重复添加。'
+                  : '请在 DNS 服务商完成以下记录后点击“重新检查 / 恢复”：'}
+              </p>
               {r.dnsInstructions.map((d) => (
                 <p key={d.name + d.type} className="break-all rounded bg-muted p-2 font-mono text-xs">
                   {d.name} · {d.type} · {d.value}

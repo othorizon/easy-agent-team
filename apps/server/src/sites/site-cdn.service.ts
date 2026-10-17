@@ -11,6 +11,7 @@ import { SiteCdnClient, CdnApiError, type CdnCredentials } from './site-cdn.clie
 import {
   cdnDomain,
   cdnFunctions,
+  cdnConfigsToCheck,
   checkCdnOrigin,
   configDigest,
   SiteCdnInfrastructure,
@@ -218,12 +219,19 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
         }
       }
       try {
-        await this.api.call(c, 'VerifyDomainOwner', { DomainName: base.domain, VerifyType: 'dnsCheck' });
+        const verification = await this.api.call(c, 'VerifyDomainOwner', {
+          DomainName: base.domain,
+          VerifyType: 'dnsCheck',
+        });
+        // The API can return HTTP 200 with Content when ownership is still unverified.
+        if (verification.Content) throw new WaitDns('等待 TXT 域名验证生效，请按指引配置后重新检查');
       } catch (e) {
         if (e instanceof CdnApiError && e.code === 'DomainOwnerVerifyFail')
           throw new WaitDns('等待 TXT 域名验证生效，请按指引配置后重新检查');
         throw e;
       }
+      row.dnsInstructions = [];
+      await this.store.patch({ dnsInstructions: [] });
       await this.phase(row, '创建本实例的泛域名 CDN');
       row.resources.domain = domain;
       row.resources.creating = true;
@@ -253,6 +261,13 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
     row.resources.owned = true;
     row.resources.creating = false;
     await this.journal(row);
+    // Also remove stale verification guidance saved by older versions before creation succeeded.
+    if (row.dnsInstructions.some((d) => d.type === 'TXT' && d.name === row.resources.verification?.name)) {
+      row.dnsInstructions = row.dnsInstructions.filter(
+        (d) => d.type !== 'TXT' || d.name !== row.resources.verification?.name,
+      );
+      await this.store.patch({ dnsInstructions: row.dnsInstructions });
+    }
     const sources = detail.SourceModels?.SourceModel ?? [];
     if (
       detail.Scope !== row.scope ||
@@ -279,7 +294,7 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
     await this.syncCertificate(row, base, c);
     await this.phase(row, '配置 HTTPS 回源和缓存命中前鉴权');
     const functions = cdnFunctions(row, base);
-    const configs = await this.infra.configurations(c, domain);
+    const configs = cdnConfigsToCheck(await this.infra.configurations(c, domain));
     guard();
     if (row.resources.configDigest && configDigest(configs) !== row.resources.configDigest)
       throw new CdnConflict('CDN 配置发生外部修改，已暂停自动覆盖，请恢复原配置后重试');
@@ -288,13 +303,13 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
         (f) => !configs.some((v: any) => configDigest([v]) === configDigest([f])),
       );
       if (configs.some((v: any) => !functions.some((f) => configDigest([f]) === configDigest([v]))))
-        throw new CdnConflict('CDN 存在未知配置，保留现状，请核对后重试');
+        throw new CdnConflict('CDN 存在未知或不匹配的回源、鉴权或缓存配置，保留现状，请核对后重试');
       if (missing.length)
         await this.api.call(c, 'BatchSetCdnDomainConfig', {
           DomainNames: domain,
           Functions: JSON.stringify(missing),
         });
-      const actual = await this.infra.configurations(c, domain);
+      const actual = cdnConfigsToCheck(await this.infra.configurations(c, domain));
       if (actual.some((v: any) => v.Status !== 'success'))
         throw new SiteSetupError('等待 CDN 规则成功下发，尚未开放缓存或切换 DNS');
       if (configDigest(actual) !== configDigest(functions))
@@ -304,7 +319,9 @@ export class SiteCdnService implements OnModuleInit, OnApplicationShutdown {
       await this.journal(row);
     }
     if (
-      (await this.infra.configurations(c, domain)).some((v: any) => v.Status !== 'success') ||
+      cdnConfigsToCheck(await this.infra.configurations(c, domain)).some(
+        (v: any) => v.Status !== 'success',
+      ) ||
       (await this.detail(c, domain))?.DomainStatus !== 'online'
     )
       throw new SiteSetupError('等待 CDN 全网配置下发完成，尚未开放缓存或切换 DNS');
