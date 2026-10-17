@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { UnauthorizedException } from '@nestjs/common';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,15 +12,15 @@ import type { SitesService } from '../src/sites/sites.service';
 
 const domain = 'sites.example.com';
 const versionId = (number: number) => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
+const fileHash = (number: number, path: string) => createHash('sha256').update(`${number}:${path}`).digest('hex');
 const versions = [1, 2].map((number) => ({
   id: versionId(number),
   number,
-  storage: 'oss',
-  layout: 'legacy-v0',
+  layout: 'blobs-v1',
   manifest: {
-    'index.html': { type: 'text/html; charset=utf-8' },
-    'app.js': { type: 'text/javascript; charset=utf-8' },
-    'about/index.html': { type: 'text/html; charset=utf-8' },
+    'index.html': { hash: fileHash(number, 'index.html'), type: 'text/html; charset=utf-8' },
+    'app.js': { hash: fileHash(number, 'app.js'), type: 'text/javascript; charset=utf-8' },
+    'about/index.html': { hash: fileHash(number, 'about/index.html'), type: 'text/html; charset=utf-8' },
   },
 }));
 const site = { id: 'site-id', slug: 'demo', name: 'Demo', access: 'public', currentVersionId: versionId(1), spa: false };
@@ -37,9 +38,13 @@ const sites = {
   newSession: vi.fn(async () => 'site-session'),
 };
 const storage = {
-  get: vi.fn(async (_storage: string, _site: string, version: string, path: string) =>
-    Buffer.from(path.endsWith('.html') ? `<body>page ${version}</body>` : `resource ${version}`),
-  ),
+  getBlob: vi.fn(async (_site: string, hash: string) => {
+    for (const version of versions) for (const [path, file] of Object.entries(version.manifest)) {
+      if (file.hash === hash)
+        return Buffer.from(path.endsWith('.html') ? `<body>page ${version.id}</body>` : `resource ${version.id}`);
+    }
+    throw new Error('不存在的内容哈希');
+  }),
 };
 const runtime = {
   settings: { row: async () => ({ status: 'enabled', domain }) },
@@ -84,11 +89,19 @@ describe('固定域名直接提供当前版本', () => {
     expect(resource.statusCode).toBe(200);
     expect(resource.headers.location).toBeUndefined();
     expect(resource.body).toBe(`resource ${versionId(1)}`);
+    expect(storage.getBlob).toHaveBeenCalledWith(site.id, fileHash(1, 'app.js'));
     const head = await get('/', undefined, 'HEAD');
     expect(head.statusCode).toBe(200);
     expect(head.headers.location).toBeUndefined();
     expect(head.headers['x-eat-site-version']).toBe(versionId(1));
     expect(head.body).toBe('');
+  });
+
+  it('不支持的版本布局直接拒绝，不回退版本目录', async () => {
+    sites.version.mockResolvedValueOnce({ ...versions[0], layout: 'legacy-v0' });
+    const response = await get('/');
+    expect(response.statusCode).toBe(503);
+    expect(storage.getBlob).not.toHaveBeenCalled();
   });
 
   it('新发布和回滚更新固定入口，历史域名保持原快照', async () => {

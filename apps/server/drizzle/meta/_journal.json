@@ -134,6 +134,13 @@
       "when": 1792215882246,
       "tag": "0018_folio_blob_uploads",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792218071798,
+      "tag": "0019_folio_blobs_only",
+      "breakpoints": true
     }
   ]
 }

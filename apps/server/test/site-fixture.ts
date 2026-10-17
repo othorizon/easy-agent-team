@@ -81,16 +81,4 @@ export class TestSiteStorage extends SiteStorage {
   }
   override async getBlob(site: string, hash: string) { return readFile(this.file(this.blobKey(site, hash))); }
   override async discardSite(site: string) { await rm(this.file(`sites/${site}`), { recursive: true, force: true }); }
-  override kind(): 'local' { return 'local'; }
-  override async put(site: string, version: string, path: string, content: Buffer, _type: string) {
-    const file = join(this.root, site, version, path);
-    await mkdir(dirname(file), { recursive: true });
-    await writeFile(file, content, { flag: 'wx' });
-  }
-  override async get(_storage: 'local' | 'oss', site: string, version: string, path: string) {
-    return readFile(join(this.root, site, version, path));
-  }
-  override async discard(_storage: 'local' | 'oss', site: string, version: string, _paths: string[]) {
-    await rm(join(this.root, site, version), { recursive: true, force: true });
-  }
 }

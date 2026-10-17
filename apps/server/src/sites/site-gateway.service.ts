@@ -114,11 +114,9 @@ export class SiteGateway {
         else return reply.status(404).send('文件不存在');
       }
       const file = version.manifest[path];
-      if (version.layout !== 'blobs-v1' && version.layout !== 'legacy-v0')
+      if (version.layout !== 'blobs-v1')
         throw new ServiceUnavailableException('不支持的 Folio 版本布局');
-      const content = version.layout === 'blobs-v1'
-        ? await this.storage.getBlob(site.id, file.hash!)
-        : await this.storage.get(version.storage, site.id, version.id, path);
+      const content = await this.storage.getBlob(site.id, file.hash);
       reply.header('x-eat-site-version', version.id).type(file.type);
       // 禁止 Folio 注册持久化 Service Worker，避免访问策略变化后离线缓存继续提供受保护 Folio。
       if (req.headers['service-worker'] === 'script') return reply.status(403).send('Folio 不支持 Service Worker');

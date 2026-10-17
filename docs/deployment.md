@@ -61,6 +61,8 @@ docker run -d --name eat -p 3000:3000 --env-file .env easy-agent-team
 推送代码 → Dokploy 重新构建镜像 → 容器重启时 entrypoint 自动执行新迁移（迁移文件随代码提交在 `apps/server/drizzle/`）。
 无需手工操作数据库。回滚代码时**不要**回滚数据库（迁移只前进；向后兼容由 schema 演进纪律保证）。
 
+Folio 的 `0019_folio_blobs_only` 迁移要求全部旧布局历史版本已处理完毕。数据库仍有非 `blobs-v1` 记录时，迁移会明确报错并回滚，容器不会继续启动；不会自动删除或迁移旧 Folio。请在升级前按 [Folio 上传运维说明](folio-uploads.md) 确认，排空旧服务实例后再部署。MCP 内联发布保留，仍使用新的共享内容存储。
+
 ## 7. 备份与恢复
 
 - **数据库**：`pg_dump "$DATABASE_URL" > backup.sql`，按团队习惯定时执行（cron / Dokploy 备份功能）；

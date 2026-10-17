@@ -332,7 +332,7 @@ export class SitesService {
           throw new ConflictException('上传会话已失效，请重新查询');
         const versionId = randomUUID();
         const [version] = await tx.insert(siteVersions).values({ id: versionId, siteId: site.id,
-          number: locked.nextVersion, publisherId: user.id, message: session.message, storage: 'oss', layout: 'blobs-v1',
+          number: locked.nextVersion, publisherId: user.id, message: session.message, layout: 'blobs-v1',
           fileCount: session.files.length, totalBytes: session.files.reduce((sum, f) => sum + f.size, 0),
           manifest: Object.fromEntries(session.files.map(({ path, ...file }) => [path, file])) }).returning();
         const result = await this.versionInfo(locked, version);

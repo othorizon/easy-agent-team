@@ -2,8 +2,6 @@ import { BadRequestException, HttpException, Injectable, ServiceUnavailableExcep
 import OSS from 'ali-oss';
 import { createHash, randomUUID } from 'node:crypto';
 import type { SiteManifestFile } from '@eat/shared';
-import { readFile, rm } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { SiteSettingsStore, type SiteSettingRow } from './site-settings.store';
 
 @Injectable()
@@ -128,40 +126,6 @@ export class SiteStorage {
         const deleted = await client.deleteMulti(keys, { quiet: true });
         if (deleted.res.status >= 300) throw new Error('delete failed');
       }
-      await rm(this.local(`sites/${siteId}`), { recursive: true, force: true });
     });
-  }
-  kind(): 'oss' | 'local' {
-    return 'oss';
-  }
-  private key(siteId: string, versionId: string, path: string) {
-    return `sites/${siteId}/${versionId}/${path}`;
-  }
-  private local(key: string) {
-    const root = resolve('./data/static-sites');
-    const file = resolve(root, key);
-    if (!file.startsWith(`${root}/`)) throw new Error('无效存储路径');
-    return file;
-  }
-  async put(siteId: string, versionId: string, path: string, content: Buffer, type: string) {
-    await this.client(await this.settings.enabled()).put(this.key(siteId, versionId, path), content, {
-      headers: { 'Content-Type': type, 'x-oss-object-acl': 'private' },
-    });
-  }
-  async get(storage: 'local' | 'oss', siteId: string, versionId: string, path: string): Promise<Buffer> {
-    const key = this.key(siteId, versionId, path);
-    if (storage === 'local') return readFile(this.local(key));
-    return (await this.client(await this.settings.enabled()).get(key)).content as Buffer;
-  }
-  async discard(storage: 'local' | 'oss', siteId: string, versionId: string, paths: string[]) {
-    if (storage === 'local') await rm(this.local(this.key(siteId, versionId, '.')), { recursive: true, force: true });
-    else {
-      const client = this.client(await this.settings.required());
-      for (let i = 0; i < paths.length; i += 1000)
-        await client.deleteMulti(
-          paths.slice(i, i + 1000).map((p) => this.key(siteId, versionId, p)),
-          { quiet: true },
-        );
-    }
   }
 }

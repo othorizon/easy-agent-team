@@ -42,11 +42,11 @@ DNS 凭证与 OSS 凭证独立。AliDNS 需要 `DescribeDomains`、`DescribeDoma
 
 控制台逐项展示进度和失败原因。CLI、MCP、REST 与控制台共用能力开关；关闭或检查中不能绕过。启用失败撤下专用 Folio 路由，保留诊断，可修正配置重试；如果入口清理失败，必须先点击停用重试清理，才能修改配置。证书文件、专用 ACME resolver 和续期凭证保留，便于恢复，不删除其他服务资源。
 
-停用立即关闭 EAT 网关访问，再撤下专用路由，保留 Folio、OSS 文件、历史版本、评论和证书。修改配置需先停用。存在 Folio 后不能改变域名后缀，存在 OSS 历史版本后不能切换 Bucket 或地域，防止历史链接和文件失效；访问凭证可以轮换。进程重启时会识别并标记中断任务，管理员清理后重试，多实例用 PostgreSQL 锁避免重复启停。
+停用立即关闭 EAT 网关访问，再撤下专用路由，保留 Folio、OSS 文件、历史版本、评论和证书。修改配置需先停用。存在 Folio 后不能改变域名后缀，存在 Folio 或清理记录时不能切换 Bucket 或地域，防止历史链接和文件失效；访问凭证可以轮换。进程重启时会识别并标记中断任务，管理员清理后重试，多实例用 PostgreSQL 锁避免重复启停。
 
 ### 升级与访问边界
 
-运行数据库迁移、构建并启动 EAT 后，在系统设置重新保存原有域名和 OSS Bucket，再检查启用。旧环境变量不会自动导入数据库。旧 OSS 文件与版本记录不变；过去的本地历史文件仍从持久卷 `./data/static-sites` 读取，若曾使用自定义本地目录，需先搬到此路径。新发布统一写入 OSS。
+当前版本只支持私有 OSS 的 `blobs-v1` 内容布局，所有历史版本也必须使用完整哈希清单。升级前须处理完旧布局版本；迁移 `0019_folio_blobs_only.sql` 会在发现旧布局记录时中止，不自动删除、迁移或重标记数据。已有域名和 OSS 配置沿用，应用不再读取或清理本地历史文件。详见 [升级与旧数据处理](folio-uploads.md)。
 
 前置代理需允许至少 72 MiB 的 JSON 请求体；服务端仅发布路由放宽到 72 MiB，解码后的文件总量仍最多 50 MiB。所有页面响应使用 `private, no-store`，每次文件访问重新校验 Folio 访问策略。前置 CDN 不得绕过鉴权缓存私有文件。访问模式、密码变更对全部历史版本生效；Service Worker 注册被阻止，避免离线缓存越过后续访问策略。
 
@@ -70,11 +70,11 @@ eat folio activate demo <version-id>
 
 ## 删除 Folio
 
-所有者和管理员可在 Folio 详情的「设置 → 删除 Folio」确认删除，也可使用 `eat folio delete <folio>`、MCP `delete_folio`（参数 `folio`）或 `DELETE /api/sites/:slug`。删除会永久清除 Folio、全部发布版本、讨论、回复和访问会话，并清理各版本的 OSS 文件或旧本地文件。固定链接、历史版本链接和分享链接立即失效；删除后无法恢复。删除不会影响其他 Folio 或共享 HTTPS / DNS 配置；同一 slug 可重新创建，新 Folio 不接受旧分享凭据。
+所有者和管理员可在 Folio 详情的「设置 → 删除 Folio」确认删除，也可使用 `eat folio delete <folio>`、MCP `delete_folio`（参数 `folio`）或 `DELETE /api/sites/:slug`。删除会永久清除 Folio、全部发布版本、讨论、回复和访问会话，并清理该 Folio 的全部 OSS 内容和临时上传对象。固定链接、历史版本链接和分享链接立即失效；删除后无法恢复。删除不会影响其他 Folio 或共享 HTTPS / DNS 配置；同一 slug 可重新创建，新 Folio 不接受旧分享凭据。
 
-删除与发布共用短事务站点行锁。先删除访问记录与评论，再清扫整个 `sites/<Folio ID>/` 前缀（旧目录、新 blobs、staging 与 snapshots），并清理旧本地 `data/static-sites/sites/<Folio ID>/`。清理失败返回 `cleanupFailed: true` 并记录 `site.storage_cleanup_failed`（目标为 Folio ID）；数据库中的 `site_cleanup` 保留独立清理记录，后台每分钟检查、失败五分钟后再试，成功后继续每小时清扫，以处理旧签名或延迟完成请求产生的残留。`cleanupPending: true` 表示还有有效签名或验证租约；访问立即失效，资源清理稍后完成。服务停止期间不会清理，重启后继续。
+删除与发布共用短事务站点行锁。先删除访问记录与评论，再清扫整个 `sites/<Folio ID>/` 前缀（blobs、staging 与 snapshots）。清理失败返回 `cleanupFailed: true` 并记录 `site.storage_cleanup_failed`（目标为 Folio ID）；数据库中的 `site_cleanup` 保留独立清理记录，后台每分钟检查、失败五分钟后再试，成功后继续每小时清扫，以处理旧签名或延迟完成请求产生的残留。`cleanupPending: true` 表示还有有效签名或验证租约；访问立即失效，资源清理稍后完成。服务停止期间不会清理，重启后继续。
 
-新版本按路径清单读取共享内容，MIME 属于路径；相同内容可同时按 PNG 和文本类型响应。旧版本目录使用显式 `legacy-v0` 标记读取，不做对象搬迁。新旧版本的固定域名、当前指针、回滚及评论版本归属沿用现有规则。升级前可按用户选择清空旧 Folio，详见 [协议、CORS、恢复与历史资源清理](folio-uploads.md)。
+新版本按路径清单读取共享内容，MIME 属于路径；相同内容可同时按 PNG 和文本类型响应。全部版本均使用显式 `blobs-v1` 清单和必填内容哈希；固定域名、当前指针、历史版本回滚及评论版本归属沿用现有规则。MCP 内联 utf8/base64 输入仍进入相同的新布局发布流程，整版解码后最多 50 MiB，不依赖旧布局读取。详见 [协议、CORS、恢复与升级](folio-uploads.md)。
 
 ## 访问方式
 

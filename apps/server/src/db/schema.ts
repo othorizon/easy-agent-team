@@ -1,5 +1,6 @@
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -9,7 +10,8 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import type { SiteAnchor, SiteCapabilityStatus, SiteSetupCheck } from '@eat/shared';
+import { sql } from 'drizzle-orm';
+import type { SiteAnchor, SiteCapabilityStatus, SiteManifest, SiteSetupCheck } from '@eat/shared';
 
 export const users = pgTable('user', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -81,12 +83,17 @@ export const siteVersions = pgTable('site_version', {
   publisherId: uuid('publisher_id').notNull().references(() => users.id),
   fileCount: integer('file_count').notNull(),
   totalBytes: integer('total_bytes').notNull(),
-  /** 存储位置固化在版本上，切换存储配置不改变旧版本的查找方式。 */
-  storage: text('storage', { enum: ['local', 'oss'] }).notNull(),
-  layout: text('layout', { enum: ['legacy-v0', 'blobs-v1'] }).notNull().default('legacy-v0'),
-  manifest: jsonb('manifest').$type<Record<string, { hash?: string; size: number; type: string }>>().notNull(),
+  /** 固定 OSS 元数据；保留列以便回滚到上一版已支持 blobs 的服务。 */
+  storage: text('storage', { enum: ['oss'] }).notNull().default('oss'),
+  /** 显式标记清单格式；所有版本均从私有 OSS 内容库读取。 */
+  layout: text('layout', { enum: ['blobs-v1'] }).notNull().default('blobs-v1'),
+  manifest: jsonb('manifest').$type<SiteManifest>().notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [uniqueIndex('site_version_number_idx').on(t.siteId, t.number)]);
+}, (t) => [
+  uniqueIndex('site_version_number_idx').on(t.siteId, t.number),
+  check('site_version_layout_check', sql`${t.layout} = 'blobs-v1'`),
+  check('site_version_storage_check', sql`${t.storage} = 'oss'`),
+]);
 
 /** Durable direct-upload sessions. Completed results survive response loss and restart. */
 export const siteUploads = pgTable('site_upload', {

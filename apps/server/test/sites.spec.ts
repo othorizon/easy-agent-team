@@ -741,8 +741,10 @@ describe('Folio 永久删除', () => {
       await db.select().from(schema.siteComments).where(eq(schema.siteComments.threadId, thread.id)),
     ).toHaveLength(0);
     expect(await db.select().from(schema.siteSessions).where(eq(schema.siteSessions.siteId, id))).toHaveLength(0);
+    await expect(access(app.get<TestSiteStorage>(SiteStorage).file(`sites/${id}`))).rejects.toThrow();
+    expect(await db.select().from(schema.siteBlobs).where(eq(schema.siteBlobs.siteId, id))).toHaveLength(0);
+    expect(await db.select().from(schema.siteUploads).where(eq(schema.siteUploads.siteId, id))).toHaveLength(0);
     for (const version of [first, second]) {
-      await expect(access(join(dir, id, version.id))).rejects.toThrow();
       expect(
         (await content('/', { site: 'delete-full', version: version.number, token: owner })).statusCode,
       ).toBe(404);
@@ -835,8 +837,7 @@ describe('Folio 永久删除', () => {
       const result = await publishing;
       expect(result.status).toBe(404);
       expect(result.body.message).toContain('不存在');
-      const versionId = spy.mock.calls[0][1];
-      await expect(access(join(dir, created.id, versionId))).rejects.toThrow();
+      await expect(access(app.get<TestSiteStorage>(SiteStorage).file(`sites/${created.id}`))).rejects.toThrow();
       expect(
         await app.get<Db>(DB).select().from(schema.siteVersions).where(eq(schema.siteVersions.siteId, created.id)),
       ).toHaveLength(0);
@@ -897,6 +898,9 @@ describe('二进制直传、共享内容和持久化会话', () => {
     const first = await complete('direct', plan.body.id);
     expect(first.status).toBe(201);
     expect(first.body.totalBytes).toBe(files.reduce((n, f) => n + f.size, 0));
+    const [storedVersion] = await app.get<Db>(DB).select().from(schema.siteVersions).where(eq(schema.siteVersions.id, first.body.id));
+    expect(storedVersion.layout).toBe('blobs-v1');
+    expect(storedVersion.manifest['index.html'].hash).toBe(files[0].hash);
     const read = (path: string, version?: number) => content(path, { site: 'direct', token: owner, version });
     expect((await read('/logo.png')).headers['content-type']).toBe('image/png');
     expect((await read('/copy.txt')).headers['content-type']).toContain('text/plain');
@@ -1083,22 +1087,6 @@ describe('二进制直传、共享内容和持久化会话', () => {
     await putPlan(repair, files); expect((await complete('expiry-direct', repair.id)).status).toBe(201);
     expect((await content('/', { site: 'expiry-direct', token: owner })).body).toContain('expiry test');
   });
-  it('新旧显式布局在同一 Folio 混合读取与回滚，不复制旧对象', async () => {
-    const site = (await api('POST', '/api/sites', owner, { slug: 'mixed-direct', name: 'Mixed' })).body;
-    const id = randomUUID();
-    const storage = app.get(SiteStorage);
-    await storage.put(site.id, id, 'index.html', Buffer.from('<body>legacy layout</body>'), 'text/html');
-    const db = app.get<Db>(DB);
-    await db.insert(schema.siteVersions).values({ id, siteId: site.id, number: 1, publisherId: ownerId, storage: 'local', layout: 'legacy-v0', fileCount: 1, totalBytes: 26, manifest: { 'index.html': { type: 'text/html', size: 26 } } });
-    await db.update(schema.sites).set({ nextVersion: 2, currentVersionId: id }).where(eq(schema.sites.id, site.id));
-    const files = [binaryFile('index.html', '<body>new layout</body>')];
-    const plan = (await uploadPlan('mixed-direct', files)).body;
-    await putPlan(plan, files); expect((await complete('mixed-direct', plan.id)).body.number).toBe(2);
-    expect((await content('/', { site: 'mixed-direct', version: 1, token: owner })).body).toContain('legacy layout');
-    expect((await content('/', { site: 'mixed-direct', token: owner })).body).toContain('new layout');
-    await api('POST', '/api/sites/mixed-direct/activate', owner, { versionId: id });
-    expect((await content('/', { site: 'mixed-direct', token: owner })).body).toContain('legacy layout');
-  });
   it('MCP 会话与内联输入共用封存及幂等提交；至少 5 MiB Base64 不再栈溢出', async () => {
     await api('POST', '/api/sites', owner, { slug: 'mcp-direct', name: 'MCP' });
     const tools = app.get(McpToolsService);
@@ -1112,6 +1100,9 @@ describe('二进制直传、共享内容和持久化会话', () => {
     const payload = [{ path: 'index.html', content: '<body>large</body>' }, { path: 'big.bin', encoding: 'base64', content: bytes.toString('base64') }];
     const published = await api('POST', '/api/sites/mcp-direct/releases', owner, { files: payload });
     expect(published.status).toBe(201);
+    const [inlineVersion] = await app.get<Db>(DB).select().from(schema.siteVersions).where(eq(schema.siteVersions.id, published.body.id));
+    expect(inlineVersion.layout).toBe('blobs-v1');
+    expect(inlineVersion.manifest['big.bin'].hash).toBe(createHash('sha256').update(bytes).digest('hex'));
     expect((await content('/big.bin', { site: 'mcp-direct', token: owner })).rawPayload).toEqual(bytes);
     for (const content of ['abc', 'ab==', 'AAAA====', bytes.toString('base64') + '!']) {
       expect((await api('POST', '/api/sites/mcp-direct/releases', owner, { files: [{ path: 'index.html', encoding: 'base64', content }] })).status).toBe(400);

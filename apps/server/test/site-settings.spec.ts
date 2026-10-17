@@ -314,8 +314,7 @@ describe('系统设置启用静态发布', () => {
       publisherId: site.ownerId,
       fileCount: 1,
       totalBytes: 1,
-      storage: 'oss',
-      manifest: { 'index.html': { size: 1, type: 'text/html' } },
+      manifest: { 'index.html': { hash: 'a'.repeat(64), size: 1, type: 'text/html' } },
     });
     expect(
       (await api('PUT', '/api/admin/site-settings', admin, { ...values, ossBucket: 'different-bucket' })).status,

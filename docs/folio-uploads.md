@@ -10,7 +10,7 @@
 - `sites/<siteId>/snapshots/<随机 UUID>`：服务端独占快照，从不向客户端签发写权限。
 - `sites/<siteId>/blobs/<sha256>`：服务端验证后写入，禁止覆盖。
 
-`site_upload` 持久化完整目标清单、发布者、唯一 requestId、状态、24 小时有效期、签名截止时间、验证租约和最终返回结果。`site_blob` 记录验证过的 hash/size。版本显式标记 `blobs-v1`，保存完整 path → hash/size/type 清单；`legacy-v0` 只用于原有目录读取，无全量迁移。清单没有的路径不会从上版继承。不同路径可以引用同一内容并返回不同 MIME，逻辑容量和文件数包含所有路径。
+`site_upload` 持久化完整目标清单、发布者、唯一 requestId、状态、24 小时有效期、签名截止时间、验证租约和最终返回结果。`site_blob` 记录验证过的 hash/size。版本只支持显式 `blobs-v1` 标记，保存完整 path → hash/size/type 清单，每条 hash 为必填。清单没有的路径不会从上版继承。不同路径可以引用同一内容并返回不同 MIME，逻辑容量和文件数包含所有路径。
 
 | 操作 | 行为 |
 | --- | --- |
@@ -64,25 +64,39 @@ OSS V4 URL 默认 `UNSIGNED-PAYLOAD`，签名有效并不证明字节的 SHA-256
 
 如要手工清理过期 staging，仅限 `site_upload.expires_at < now()` 且 `lease_until IS NULL OR lease_until < now()`、`signed_until IS NULL OR signed_until < now()` 的会话，逐会话清理 `sites/<siteId>/staging/<uploadId>/`，不要碰 blobs 或活跃会话。不要按路径被新版删除来删除 blob；任意历史清单仍可引用。快照及无引用 blob 的自动 GC 暂缓，需要单独设计并与验证租约协调。
 
-删除整个 Folio：数据库先撤销全部访问并级联删除版本/会话/内容记录，保存无 FK 的 `site_cleanup` 记录；然后清扫整个该 Folio 前缀及旧本地目录。清理失败仅设置 cleanupFailed，不恢复 Folio。有效旧签名或验证租约带来 cleanupPending。服务每分钟检查清理任务，成功后每小时继续清扫，失败五分钟后再试；永久保留清理记录，以覆盖被任意延迟的旧请求。重复清理只处理已删除的 siteId，不影响同 slug 新建 Folio（新 UUID）或其他 Folio。单次清扫最多 100 批，无法前进/达到上限按待重试处理。
+删除整个 Folio：数据库先撤销全部访问并级联删除版本/会话/内容记录，保存无 FK 的 `site_cleanup` 记录；然后清扫整个该 Folio 的 OSS 前缀。清理失败仅设置 cleanupFailed，不恢复 Folio。有效旧签名或验证租约带来 cleanupPending。服务每分钟检查清理任务，成功后每小时继续清扫，失败五分钟后再试；永久保留清理记录，以覆盖被任意延迟的旧请求。重复清理只处理已删除的 siteId，不影响同 slug 新建 Folio（新 UUID）或其他 Folio。单次清扫最多 100 批，无法前进/达到上限按待重试处理。
 
 存在 Folio 或清理记录时禁止切换 Bucket/地域，可轮换凭据。否则旧会话和待清理资源可能失去存储定位。清理当前配置中的 Bucket 不会自动追溯管理员此前手工换掉的 Bucket。
 
 ## 本次升级与旧 Folio 清空方案（由运维执行）
 
-用户已允许丢弃旧 Folio，代码不搬迁历史数据；旧读取分支留存，不要求清空后才能运行。迁移 `0018_folio_blob_uploads.sql` 仅新增表/索引和默认 `legacy-v0` 布局列，不删除已有业务记录。常规升级：备份 → 暂停发布 → 运行 `pnpm db:migrate` → 部署 server/Web/CLI 产物 → 配置 CORS → 客户端 `eat self-update` / 按已有授权同步平台指南。替换并排空全部旧 server 实例后再恢复发布，避免旧网关读取新布局。本文命令均未在生产执行。
+当前代码已移除旧版本目录及本地历史文件的读取、写入和清理分支。用户已确认旧布局清理和新协议验收条件满足；本次只交付代码和增量迁移，不连接生产数据库，也不清理真实 OSS 对象。
+
+迁移 `0019_folio_blobs_only.sql` 先检查全部历史版本的 layout：仍有非 `blobs-v1` 记录就抛出明确错误，整个迁移事务回滚，数据库和当前版本保持不变。检查通过后，将 layout 默认值改为 `blobs-v1`、添加只允许该布局的数据库约束，并将 `storage` 固定为 `oss` 元数据及默认值（保留列以支持回滚到上一版新协议服务）。已有新布局版本的 ID、完整清单、当前指针、评论和回滚能力保留；不重新上传或复制文件。旧迁移及其快照留作数据库迁移历史，不修改已发布的 0018。
+
+已运行 0018 的数据库，可在维护窗口只读确认：
+
+```sql
+SELECT count(*) AS legacy_versions
+FROM site_version
+WHERE layout <> 'blobs-v1';
+```
+
+结果须为 0，包括不再作为当前版本的历史记录。仅给同一 Folio 发布新版不会清除旧布局历史版本。当前控制台删除整个 Folio，不提供单独删除历史版本的入口；仍需保留旧历史的环境应先使用支持旧布局的版本完成迁移，再升级本版本。
+
+部署顺序：备份 → 暂停发布并排空旧实例 → 构建部署完整镜像 → 容器启动脚本自动执行迁移（非容器部署手工 `pnpm db:migrate`）→ 验证新布局访问/发布/回滚 → 恢复发布。保留原来的 EAT_KEK 和 OSS 配置；本次没有新增环境变量。MCP `publish_folio` 和 `/releases` 内联入口保留，utf8/base64 内容仍经新会话、快照验证和 blob 封存流程，整版解码后上限仍为 50 MiB。CLI/Web 协议和平台指南内容未变，无需为此次服务端布局移除单独升级客户端。
 
 若选择彻底清空旧 Folio：
 
 1. 在旧平台仍启用时暂停所有发布；保存 `GET /api/sites` 返回的每个 Folio UUID、当前 Bucket/地域及本地持久卷位置。备份数据库和必要产物。
 2. 在 EAT 控制台逐个删除旧 Folio，记录 cleanupFailed；确认列表为空。只在删除后停用 Folio，因为删除接口本身要求启用。
-3. 停止并排空所有旧版本 EAT 实例和上传客户端，再迁移/部署。不要让旧实例在清理后继续写对象。新协议若已使用，还应等待记录中所有签名/租约截止（签名最长十分钟，会话续签需已被撤销）并排空在途请求。
+3. 停止并排空所有旧版本 EAT 实例和上传客户端，再迁移/部署 0019。不要让旧实例在清理后继续写对象。新协议若已使用，还应等待记录中所有签名/租约截止（签名最长十分钟，会话续签需已被撤销）并排空在途请求。
 4. 对保存的**每个已删除 UUID**，在 OSS 控制台预览/列出 `sites/<UUID>/`，确认准确后删除整个前缀。CLI 等效操作：先 `ossutil ls oss://<bucket>/sites/<UUID>/ -r`，核对后 `ossutil rm oss://<bucket>/sites/<UUID>/ -r -f`。不要删除全 Bucket 或所有 `sites/*`，不要碰 `sites/_checks/` 或其他 Folio 的 UUID。旧平台按版本清理可能遗漏失败发布的无数据库对象；前缀清理覆盖这些残留。
 5. 如 Bucket 启用了版本控制，普通删除只增加删除标记；需额外列出这些已删除 UUID 前缀下的**全部对象历史版本和删除标记**，逐版本永久删除。对象保留策略/WORM 可能阻止清理，需待保留到期；自动 cleanupFailed 不表示历史对象版本已永久删除。
-6. 若曾使用本地持久化，核对挂载卷实际根路径，仅删除 `data/static-sites/sites/<已删除 UUID>/`。旧 Bucket/旧卷若曾切换，分别按保存的 UUID 清理。
+6. 若曾使用本地持久化，应用已不再管理本地历史文件，需运维核对挂载卷实际根路径后，仅删除 `data/static-sites/sites/<已删除 UUID>/`。旧 Bucket/旧卷若曾切换，分别按保存的 UUID 清理。
 7. 再次列出各前缀确认为空；数据库中应无旧 `site`、`site_version`、`site_thread`、`site_upload`、`site_blob` 关联记录。`audit_log` 是审计，保留。新系统的 `site_cleanup` 可保留；仅在全部旧进程排空、签名失效、资源确认清空且确实需要切换 Bucket 时，运维才可按这些已删除 UUID 移除清理记录。
 
-## 真实 OSS 联调验收（尚需凭据）
+## 真实 OSS 联调验收步骤（运维执行）
 
 使用专用私有测试 Bucket、独立测试数据库和测试 Folio。不要把 TEST_DATABASE_URL 指向业务库，服务端测试会重建 schema。
 
@@ -96,7 +110,7 @@ OSS V4 URL 默认 `UNSIGNED-PAYLOAD`，签名有效并不证明字节的 SHA-256
 
 本地验证记录见最终交付说明。可控 OSS 替身和真实浏览器 HTTP/CORS 均不能证明阿里云 RAM、Bucket 策略、地域、TLS、V4 验签、CopyObject 禁止覆盖和实际网络性能已通过；这些项目需完成以上云端验收。
 
-## 2026-10-17 本地交付验证记录
+## 2026-10-17 初次增量上传交付记录（0018）
 
 - 基线先 `git pull --ff-only origin main`，同步到 `58ec84c`。没有生产操作。
 - 使用新建的本机 PostgreSQL 17 集群、独立 `postgres://dev@127.0.0.1:5433/eat_test`，未加载业务 `.env`。全部 Drizzle 迁移（含 0018）在测试库重建过程中执行成功。
@@ -105,3 +119,11 @@ OSS V4 URL 默认 `UNSIGNED-PAYLOAD`，签名有效并不证明字节的 SHA-256
 - 根目录 `pnpm typecheck`、`pnpm build` 通过。Vite 仍有单包超过 500 kB 的体积提示。
 - 顺带更新了已有安装文案测试的过严断言：同步说明可以提及 MCP，CLI 安装文档仍不得包含 MCP 接入命令/配置。
 - 尚未验证：真实阿里云凭据/RAM、线上 Bucket CORS 与 V4 验签、OSS CopyObject 实际禁止覆盖、OSS 版本控制/WORM 及公网吞吐/延迟。测试中的服务实例重建和租约过期验证持久化恢复逻辑，不代表已做生产实例故障演练。按上一节步骤验收后再生产启用。
+
+## 旧布局移除交付记录（0019）
+
+用户确认移除条件满足后，服务端仅保留 OSS `blobs-v1` 读取；已删除本地历史文件分支及旧目录 put/get/discard/kind 方法，清单类型要求每条路径都有 hash。`storage` 列仅保留固定 `oss` 值和默认值，避免上一版已支持新协议的服务在回滚时查询缺列；该字段不再决定文件读取方式。
+
+独立本机 `eat_test` 数据库中，全量服务端 333 个测试、CLI 217 个测试通过，根目录 typecheck/build 通过，Drizzle 生成器确认 schema 与快照一致。升级测试实际从 0018 schema 开始：有旧布局时 0019 明确拒绝并回滚，旧记录及当前指针不变；归零后成功迁移，保留新版本清单和当前指针，并拒绝再次写入旧布局或 local 存储。网关测试只按 hash 读取，保留新布局历史版本回滚；MCP 内联发布及 5 MiB Base64 回归通过。
+
+本轮未操作生产数据库、部署或真实 OSS 资源，也未重新执行真实 OSS 联调；沿用用户确认的前置验收结果。0018 的原始交付记录保留于上节，不代表当前仍支持混合布局。
