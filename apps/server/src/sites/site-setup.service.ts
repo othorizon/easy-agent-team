@@ -11,7 +11,7 @@ import { createHmac, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { SiteSetupCheck } from '@eat/shared';
 import { PG_POOL } from '../db/db.module';
-import { siteSettings } from '../db/schema';
+import { siteSettings, siteCdn } from '../db/schema';
 import { loadConfig } from '../config';
 import { AuditService } from '../audit/audit.service';
 import { DokploySettingsService } from '../deploy/dokploy-settings.service';
@@ -96,6 +96,9 @@ export class SiteSetupService implements OnModuleInit, OnApplicationShutdown {
       row = await this.store.db.transaction(async (tx) => {
         const [r] = await tx.select().from(siteSettings).where(eq(siteSettings.id, 1)).for('update');
         if (!r) throw new ConflictException('请先保存 Folio 配置');
+        const [cdn] = await tx.select().from(siteCdn).where(eq(siteCdn.id, 1));
+        if (cdn && (cdn.enabled || cdn.status !== 'disabled'))
+          throw new ConflictException('请先关闭 CDN 并等待源站恢复和 DNS 传播完成');
         if (setupBusy(r.status)) throw new ConflictException('Folio 正在检查或配置，请等待完成');
         if (!disable && r.status === 'enabled') throw new ConflictException('Folio 已启用；修改配置前请先停用');
         const [next] = await tx

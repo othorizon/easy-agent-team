@@ -11,7 +11,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
-import type { SiteAnchor, SiteCapabilityStatus, SiteManifest, SiteSetupCheck } from '@eat/shared';
+import type { SiteAnchor, SiteCapabilityStatus, SiteManifest, SiteSetupCheck, SiteCdnStatus } from '@eat/shared';
 
 export const users = pgTable('user', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -72,6 +72,58 @@ export const siteSettings = pgTable('site_setting', {
   operationStartedAt: timestamp('operation_started_at', { withTimezone: true }),
   checks: jsonb('checks').$type<SiteSetupCheck[]>().notNull().default([]),
   lastError: text('last_error').notNull().default(''),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** CDN desired state is independent of Folio availability. No secrets in the resource journal. */
+export interface SiteCdnResources {
+  domain?: string;
+  creating?: boolean;
+  owned?: boolean;
+  configured?: boolean;
+  dnsSwitched?: boolean;
+  previousDns?: { id: string; name: string; type: string; content: string; ttl: number }[];
+  managedDns?: { id: string; name: string; type: string; content: string; ttl: number };
+  verification?: { name: string; value: string; id?: string };
+  dnsNames?: string[];
+  dnsScanIndex?: number;
+  extraDns?: {
+    previous: { id: string; name: string; type: string; content: string; ttl: number };
+    managed: { id: string; name: string; type: string; content: string; ttl: number };
+  }[];
+  configDigest?: string;
+  certificateFingerprint?: string;
+}
+export const siteCdn = pgTable('site_cdn', {
+  id: integer('id').primaryKey().default(1),
+  enabled: boolean('enabled').notNull().default(false),
+  scope: text('scope').$type<'domestic' | 'global' | 'overseas'>().notNull().default('overseas'),
+  credentialSource: text('credential_source')
+    .$type<'independent' | 'alidns'>()
+    .notNull()
+    .default('independent'),
+  accessKeyIdEncrypted: text('access_key_id_encrypted'),
+  accessKeySecretEncrypted: text('access_key_secret_encrypted'),
+  originSecretEncrypted: text('origin_secret_encrypted').notNull(),
+  autoDns: boolean('auto_dns').notNull().default(false),
+  status: text('status').$type<SiteCdnStatus>().notNull().default('disabled'),
+  connected: boolean('connected').notNull().default(false),
+  phase: text('phase').notNull().default(''),
+  lastError: text('last_error').notNull().default(''),
+  cname: text('cname').notNull().default(''),
+  resources: jsonb('resources').$type<SiteCdnResources>().notNull().default({}),
+  dnsInstructions: jsonb('dns_instructions')
+    .$type<{ name: string; type: string; value: string }[]>()
+    .notNull()
+    .default([]),
+  certificateExpiresAt: timestamp('certificate_expires_at', { withTimezone: true }),
+  originCertificateCheckedAt: timestamp('origin_certificate_checked_at', { withTimezone: true }),
+  certificateSyncedAt: timestamp('certificate_synced_at', { withTimezone: true }),
+  certificateSyncError: text('certificate_sync_error').notNull().default(''),
+  retryAt: timestamp('retry_at', { withTimezone: true }),
+  attempts: integer('attempts').notNull().default(0),
+  drainUntil: timestamp('drain_until', { withTimezone: true }),
+  actorId: uuid('actor_id'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

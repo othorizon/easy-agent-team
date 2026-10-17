@@ -9,6 +9,7 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UnauthorizedException,
   NotFoundException,
 } from '@nestjs/common';
@@ -27,13 +28,14 @@ import {
   type UpdateSite,
 } from '@eat/shared';
 import { z } from 'zod';
-import type { FastifyRequest } from 'fastify';
+import type { FastifyRequest, FastifyReply } from 'fastify';
 import { RouteConfig } from '@nestjs/platform-fastify';
 import { AuthService } from '../auth/auth.service';
 import { CurrentUser, Public, type AuthUser } from '../auth/auth.decorators';
 import { ZodValidationPipe } from '../common/zod.pipe';
 import { SiteCommentsService } from './site-comments.service';
 import { SitesService } from './sites.service';
+import { SiteCdnCache } from './site-cdn-cache.service';
 import { SiteRuntime } from './site-config';
 
 import { siteProbeMarker } from './site-setup.service';
@@ -52,6 +54,7 @@ export class SitesController {
     private readonly comments: SiteCommentsService,
     private readonly auth: AuthService,
     private readonly runtime: SiteRuntime,
+    private readonly cdn: SiteCdnCache,
   ) {}
 
   @Public()
@@ -60,6 +63,12 @@ export class SitesController {
     const row = await this.runtime.settings.row();
     if (!row || row.status !== 'verifying' || row.operationId !== operationId) throw new NotFoundException();
     return siteProbeMarker(row);
+  }
+  @Public()
+  @Get('cdn-auth')
+  async cdnAuth(@Req() req: FastifyRequest, @Res() reply: FastifyReply) {
+    const allowed = await this.cdn.authorize(req);
+    return reply.header('cache-control', 'private, no-store').status(allowed ? 200 : 403).send();
   }
   @Get('capability') capability() {
     return this.runtime.settings.capability();

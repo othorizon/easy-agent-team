@@ -1,3 +1,8 @@
+import { SiteCdnStore } from './site-cdn.store';
+import { SiteCdnClient } from './site-cdn.client';
+import { SiteCdnInfrastructure } from './site-cdn.infrastructure';
+import { SiteCdnService } from './site-cdn.service';
+import { SiteCdnCache } from './site-cdn-cache.service';
 import { Module, OnModuleInit, type NestModule } from '@nestjs/common';
 import { HttpAdapterHost } from '@nestjs/core';
 import { DeployModule } from '../deploy/deploy.module';
@@ -20,6 +25,11 @@ import { FolioToolsService } from './folio-tools.service';
   controllers: [SitesController, SiteSettingsController],
   providers: [
     SiteSettingsStore,
+    SiteCdnStore,
+    SiteCdnClient,
+    SiteCdnInfrastructure,
+    SiteCdnService,
+    SiteCdnCache,
     SiteRuntime,
     SiteSetupService,
     SiteInfrastructure,
