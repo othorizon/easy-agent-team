@@ -145,6 +145,35 @@ export function configDigest(configs: any[]) {
     )
     .digest('hex');
 }
+class CdnProbeError extends SiteSetupError {}
+function probeConnectionError(code?: string) {
+  switch (code) {
+    case 'ERR_TLS_CERT_ALTNAME_INVALID':
+      return 'HTTPS 证书域名与 SNI 不匹配，请检查目标实际返回的证书及 SNI';
+    case 'CERT_HAS_EXPIRED':
+    case 'CERT_NOT_YET_VALID':
+      return 'HTTPS 证书不在有效期内，请检查证书续期、CDN 同步及服务器时间';
+    case 'UNABLE_TO_VERIFY_LEAF_SIGNATURE':
+    case 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY':
+    case 'SELF_SIGNED_CERT_IN_CHAIN':
+    case 'DEPTH_ZERO_SELF_SIGNED_CERT':
+      return 'HTTPS 证书链不受信任，请检查目标是否提供完整的公共 CA 证书链';
+    case 'ECONNREFUSED':
+      return 'HTTPS 443 连接被拒绝，请检查监听端口、安全组及防火墙';
+    case 'ETIMEDOUT':
+      return 'HTTPS 连接或响应超时，请检查目标可达性、安全组及防火墙';
+    default:
+      return 'HTTPS 连接未完成，请检查证书、Host/SNI、443 端口及目标可达性';
+  }
+}
+function cdnOriginError(headers: Record<string, unknown>) {
+  // Classify known provider error headers; never echo their arbitrary contents or response body.
+  const error = `${headers['x-swift-error'] ?? ''} ${headers['x-tengine-error'] ?? ''}`.slice(0, 1024);
+  if (/ssl|tls|certificate|handshake|\bsni\b/i.test(error)) return 'CDN 错误类型：TLS / 证书握手';
+  if (/timeout|timed out/i.test(error)) return 'CDN 错误类型：回源超时，请检查 CDN 回源 IP 是否被拦截';
+  if (/orig response 5xx error/i.test(error)) return 'CDN 错误类型：源站或上游返回 5xx，请检查源站代理日志';
+  return '';
+}
 @Injectable()
 export class SiteCdnInfrastructure {
   constructor(
@@ -207,7 +236,13 @@ export class SiteCdnInfrastructure {
     const json = await this.api.call(credentials, 'DescribeCdnDomainConfigs', { DomainName: domain });
     return json.DomainConfigs?.DomainConfig ?? [];
   }
-  async probe(host: string, address: string, path: string, headers: Record<string, string> = {}) {
+  async probe(
+    host: string,
+    address: string,
+    path: string,
+    headers: Record<string, string> = {},
+    servername = host,
+  ) {
     const ips = await this.infra.addresses(address);
     if (!ips.length) throw new SiteSetupError('链路检查目标无法解析');
     return new Promise<{ status: number; body: string; headers: Record<string, any>; fingerprint: string }>(
@@ -215,10 +250,10 @@ export class SiteCdnInfrastructure {
         const req = request(
           {
             hostname: host,
-            servername: host,
+            servername,
             port: 443,
-            // Source and edge share Host/SNI but have different pinned addresses.
-            // Node's default keep-alive agent pools by hostname, ignoring lookup changes.
+            // Each check must reach its pinned address, including successive edge checks.
+            // Node's default keep-alive pool ignores changes to lookup for the same Host/SNI.
             agent: false,
             path,
             method: 'GET',
@@ -244,13 +279,15 @@ export class SiteCdnInfrastructure {
                 fingerprint,
               }),
             );
-            res.on('error', reject);
+            res.on('error', (e: NodeJS.ErrnoException) =>
+              reject(new CdnProbeError(probeConnectionError(e.code))),
+            );
           },
         );
-        req.on('error', () =>
-          reject(new SiteSetupError('HTTPS 链路检查失败，请检查证书、SNI、Host、443 端口及回源地址')),
+        req.on('error', (e: NodeJS.ErrnoException) =>
+          reject(new CdnProbeError(probeConnectionError(e.code))),
         );
-        req.on('timeout', () => req.destroy());
+        req.on('timeout', () => req.destroy(Object.assign(new Error('probe timeout'), { code: 'ETIMEDOUT' })));
         req.end();
       },
     );
@@ -268,9 +305,10 @@ export class SiteCdnInfrastructure {
         targetAddress,
         path,
         edge ? {} : { 'x-eat-cdn-origin': decryptSecret(row.originSecretEncrypted) },
+        edge ? cdnProbeHost(base) : cdnSni(base),
       );
-    } catch {
-      throw new SiteSetupError(`${stage}失败：HTTPS 连接未完成，请检查证书、Host/SNI、443 端口及目标可达性`);
+    } catch (e) {
+      throw new SiteSetupError(`${stage}失败：${e instanceof CdnProbeError ? e.message : probeConnectionError()}`);
     }
     if (res.status !== 200) {
       const hint = edge && res.status === 403
@@ -278,7 +316,8 @@ export class SiteCdnInfrastructure {
         : edge && [502, 504].includes(res.status)
           ? '请检查 HTTPS 回源地址、Host/SNI 与源站证书'
           : '请检查 Dokploy 泛域名路由及代理是否转发到当前 EAT';
-      throw new SiteSetupError(`${stage}失败：HTTP ${res.status}，${hint}`);
+      const detail = edge ? cdnOriginError(res.headers) : '';
+      throw new SiteSetupError(`${stage}失败：HTTP ${res.status}，${hint}${detail ? `；${detail}` : ''}`);
     }
     if (res.body !== cdnMarker(row, path))
       throw new SiteSetupError(`${stage}失败：HTTP 200，但 EAT 实例标记不匹配，请检查路由、实例与回源密钥转发`);

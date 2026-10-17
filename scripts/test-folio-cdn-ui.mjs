@@ -170,7 +170,7 @@ try {
         ...state,
         status: 'failed',
         phase: '验证 CDN HTTPS、回源、实时鉴权和缓存命中',
-        lastError: 'CDN 接入检查失败：HTTP 502，请检查 HTTPS 回源地址、Host/SNI 与源站证书',
+        lastError: 'CDN 接入检查失败：HTTP 502，请检查 HTTPS 回源地址、Host/SNI 与源站证书；CDN 错误类型：TLS / 证书握手',
         certificateUploaded: true,
         dnsInstructions: [],
       };

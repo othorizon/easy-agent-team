@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { X509Certificate } from 'node:crypto';
 import https from 'node:https';
 import { syncBuiltinESMExports } from 'node:module';
+import type { TLSSocket } from 'node:tls';
 import { SiteCdnClient } from '../src/sites/site-cdn.client';
 import {
   SiteCdnInfrastructure,
@@ -15,6 +16,7 @@ import {
   configDigest,
   cdnConfigsToCheck,
   cdnProbeHost,
+  cdnSni,
 } from '../src/sites/site-cdn.infrastructure';
 import { SiteDns } from '../src/sites/site-dns.service';
 import { encryptSecret } from '../src/common/crypto';
@@ -198,6 +200,57 @@ describe('CDN certificate, signing and DNS adapter contracts', () => {
         [source, edge].map((s) => new Promise<void>((resolve) => s.close(() => resolve()))),
       );
     }
+  });
+  it('verifies the actual origin SNI independently of the Folio Host and keeps certificate validation enabled', async () => {
+    const requests: { host: string | undefined; sni: string | false | null }[] = [];
+    const server = https.createServer({ cert: pem, key }, (req, res) => {
+      const sni = (req.socket as TLSSocket).servername;
+      requests.push({ host: req.headers.host, sni });
+      res.statusCode = sni === cdnSni(base) ? 200 : 421;
+      res.setHeader('cache-control', 'private, no-store');
+      res.end(cdnMarker(row, req.url!));
+    });
+    const realRequest = https.request;
+    try {
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const port = (server.address() as { port: number }).port;
+      vi.spyOn(https, 'request').mockImplementation(
+        ((options: https.RequestOptions, callback: Parameters<typeof realRequest>[2]) =>
+          realRequest({ ...options, port, ca: pem }, callback)) as typeof https.request,
+      );
+      syncBuiltinESMExports();
+      const f = fixture();
+      f.infra.addresses = async () => ['127.0.0.1'];
+      await expect(f.service.verify(base, row, '127.0.0.1', false)).resolves.toBeUndefined();
+      expect(requests).toEqual([{ host: cdnProbeHost(base), sni: cdnSni(base) }]);
+      await expect(
+        f.service.probe(cdnProbeHost(base), '127.0.0.1', '/probe', {}, 'wrong.example.test'),
+      ).rejects.toThrow('HTTPS 证书域名与 SNI 不匹配');
+      expect(requests).toHaveLength(1);
+    } finally {
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+  it.each([
+    { detail: 'SSL handshake failed', category: 'TLS / 证书握手' },
+    { detail: 'forward retry timeout', category: '回源超时' },
+    { detail: 'orig response 5xx error', category: '源站或上游返回 5xx' },
+    { detail: 'unknown', category: '' },
+  ])('classifies provider 502 hints without exposing arbitrary error headers: $detail', async ({ detail, category }) => {
+    const f = fixture();
+    vi.spyOn(f.service, 'probe').mockResolvedValue({
+      status: 502,
+      body: 'private upstream response',
+      headers: { 'x-swift-error': `${detail} private-origin-secret`, 'x-tengine-error': 'private-details' },
+      fingerprint: '',
+    });
+    const error = await f.service.verify(base, row, 'cdn.example.net', true).catch((e) => e);
+    expect(error.message).toContain('CDN 接入检查失败：HTTP 502');
+    if (category) expect(error.message).toContain(`CDN 错误类型：${category}`);
+    else expect(error.message).not.toContain('CDN 错误类型');
+    expect(error.message).not.toContain('private');
   });
   it.each([
     { edge: false, status: 404, body: 'private upstream response', noStore: true, error: '源站直连检查失败：HTTP 404' },
