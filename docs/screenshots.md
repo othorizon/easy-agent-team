@@ -128,7 +128,7 @@ README 里挑了一部分，这里是全部。所有画面来自同一份可复�
 
 <img src="assets/screenshots/settings-mobile.png" alt="移动端系统设置" width="390" />
 
-移动端使用原生分类选择器，表单单列排布，说明、保存反馈和接入状态随当前分类展示。
+移动端使用与表单统一的分组分类选择器，表单单列排布，说明、保存反馈和接入状态随当前分类展示。
 
 ![安装与接入](assets/screenshots/install.png)
 

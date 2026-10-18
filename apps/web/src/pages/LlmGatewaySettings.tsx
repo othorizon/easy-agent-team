@@ -1,5 +1,5 @@
 import type { ConnectionTestResult, LlmAccountInfo, LlmSettingsInfo, LlmSettingsRequest } from '@eat/shared';
-import { formatDateTime, llmAmountToQuota, llmDisplayQuota } from '@eat/shared';
+import { formatDateTime, llmAmountToQuota } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -16,6 +16,7 @@ import {
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
+import { llmAmountInput, llmDisplayQuota } from '../lib/llm-quota';
 
 const SETTINGS = '/api/admin/llm-gateway-settings';
 export function LlmGatewaySettingsCard({ active = true }: { active?: boolean }) {
@@ -96,9 +97,7 @@ export function LlmGatewaySettingsCard({ active = true }: { active?: boolean }) 
 }
 
 const amount = (settings: LlmSettingsInfo) =>
-  settings.currency
-    ? String((settings.defaultQuota / settings.currency.quotaPerUnit) * settings.currency.exchangeRate)
-    : '0';
+  llmAmountInput(settings.defaultQuota, settings.currency);
 function GatewayForm({ settings }: { settings: LlmSettingsInfo }) {
   const cache = useQueryClient();
   const form = useRef<HTMLFormElement>(null);
@@ -110,7 +109,10 @@ function GatewayForm({ settings }: { settings: LlmSettingsInfo }) {
   const values = (): LlmSettingsRequest => ({
     apiUrl: url.trim(),
     accessToken: token,
-    defaultQuota: settings.currency ? llmAmountToQuota(gift, settings.currency) : 0,
+    defaultQuota:
+      settings.currency && gift !== amount(settings)
+        ? llmAmountToQuota(gift, settings.currency)
+        : settings.defaultQuota,
   });
   let dirty = true;
   try {

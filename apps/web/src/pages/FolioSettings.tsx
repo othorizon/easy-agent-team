@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
@@ -22,6 +22,8 @@ import {
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
+import { Checkbox } from '../components/ui/checkbox';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 
 const statuses: Record<string, string> = {
   disabled: '未启用',
@@ -60,8 +62,6 @@ const formValues = (r: SiteSettingsInfo): UpdateSiteSettings => ({
   dnsAccessKeyId: '',
   dnsAccessKeySecret: '',
 });
-const selectClass = 'settings-native-select';
-
 export function FolioSettingsCard({ active = true }: { active?: boolean }) {
   const cache = useQueryClient();
   const settings = useQuery({
@@ -277,12 +277,30 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
             description="选择自动签发或复用已有证书，保留当前服务的证书管理方式。"
           >
             <Field label="HTTPS 证书方式" htmlFor="site-tlsMode">
-              <select id="site-tlsMode" className={selectClass} {...register('tlsMode')}>
-                <option value="alidns">阿里云 DNS：自动签发与续期</option>
-                <option value="cloudflare">Cloudflare：自动签发与续期</option>
-                <option value="certificate">复用 Dokploy 中已有的泛域名证书</option>
-                <option value="resolver">复用已有 DNS 证书解析器</option>
-              </select>
+              <Controller
+                control={form.control}
+                name="tlsMode"
+                render={({ field }) => (
+                  <Select
+                    name={field.name}
+                    value={field.value}
+                    onValueChange={(value) => {
+                      if (value) field.onChange(value);
+                    }}
+                    disabled={!!frozen || save.isPending || action.isPending}
+                  >
+                    <SelectTrigger id="site-tlsMode" ref={field.ref} onBlur={field.onBlur}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="settings-select-menu">
+                      <SelectItem value="alidns">阿里云 DNS：自动签发与续期</SelectItem>
+                      <SelectItem value="cloudflare">Cloudflare：自动签发与续期</SelectItem>
+                      <SelectItem value="certificate">复用 Dokploy 中已有的泛域名证书</SelectItem>
+                      <SelectItem value="resolver">复用已有 DNS 证书解析器</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              />
             </Field>
             {['alidns', 'cloudflare'].includes(mode) && (
               <>
@@ -322,8 +340,21 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
                     : 'Token 需要目标区域的 Zone Read 与 DNS Edit 权限。'}{' '}
                   DNS 凭证与 OSS 凭证独立，加密保存后由 EAT 配置到 Traefik，自动完成证书申请和续期。
                 </p>
-                <label className="settings-toggle settings-span">
-                  <input type="checkbox" {...register('autoDns')} />
+                <label className="settings-toggle settings-span" htmlFor="site-autoDns">
+                  <Controller
+                    control={form.control}
+                    name="autoDns"
+                    render={({ field }) => (
+                      <Checkbox
+                        id="site-autoDns"
+                        name={field.name}
+                        checked={field.value}
+                        onCheckedChange={(value) => field.onChange(value === true)}
+                        onBlur={field.onBlur}
+                        disabled={!!frozen || save.isPending || action.isPending}
+                      />
+                    )}
+                  />
                   自动添加 *.{domain || 'Folio 域名'} → {target || '部署入口'}{' '}
                   的解析（仅在不存在时添加，不覆盖已有记录）
                 </label>
@@ -331,22 +362,53 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
             )}
             {mode === 'certificate' && (
               <>
-                <Field required label="已有泛域名证书" htmlFor="site-certificateId">
-                  <select
-                    id="site-certificateId"
-                    className={selectClass}
-                    {...register('certificateId')}
-                    required
-                  >
-                    <option value="">
-                      {options.isLoading ? '正在读取…' : '请选择 EAT 所在服务器上的证书'}
-                    </option>
-                    {options.data?.certificates.map((c) => (
-                      <option value={c.id} key={c.id}>
-                        {c.name} · {c.domains} · 到期 {c.expiresAt.slice(0, 10)}
-                      </option>
-                    ))}
-                  </select>
+                <Field
+                  required
+                  label="已有泛域名证书"
+                  htmlFor="site-certificateId"
+                  error={form.formState.errors.certificateId?.message}
+                >
+                  <Controller
+                    control={form.control}
+                    name="certificateId"
+                    rules={{
+                      validate: (value) =>
+                        form.getValues('tlsMode') !== 'certificate' || !!value || '请选择已有泛域名证书',
+                    }}
+                    render={({ field, fieldState }) => (
+                      <Select
+                        name={field.name}
+                        value={field.value}
+                        onValueChange={(value) => {
+                          if (value) field.onChange(value);
+                        }}
+                        disabled={!!frozen || save.isPending || action.isPending || options.isLoading}
+                      >
+                        <SelectTrigger
+                          id="site-certificateId"
+                          ref={field.ref}
+                          onBlur={field.onBlur}
+                          aria-required="true"
+                          aria-invalid={!!fieldState.error}
+                          aria-describedby={fieldState.error ? 'site-certificateId-description' : undefined}
+                        >
+                          <SelectValue
+                            placeholder={options.isLoading ? '正在读取…' : '请选择 EAT 所在服务器上的证书'}
+                          />
+                        </SelectTrigger>
+                        <SelectContent className="settings-select-menu">
+                          {options.data?.certificates.map((c) => (
+                            <SelectItem value={c.id} key={c.id}>
+                              {c.name} · {c.domains} · 到期 {c.expiresAt.slice(0, 10)}
+                            </SelectItem>
+                          ))}
+                          {!options.data?.certificates.length && (
+                            <p className="px-2.5 py-2 text-sm text-muted-foreground">暂无可用证书</p>
+                          )}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
                 </Field>
                 <p className="text-xs text-muted-foreground settings-span">
                   证书需覆盖 *.{domain || 'Folio 域名'}，并已在 Dokploy 中安装。续期和证书更新由原有流程负责。
@@ -354,15 +416,51 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
               </>
             )}
             {mode === 'resolver' && (
-              <Field required label="已有 DNS 证书解析器" htmlFor="site-resolverName">
-                <select id="site-resolverName" className={selectClass} {...register('resolverName')} required>
-                  <option value="">{options.isLoading ? '正在读取…' : '请选择 DNS 解析器'}</option>
-                  {options.data?.resolvers.map((name) => (
-                    <option value={name} key={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
+              <Field
+                required
+                label="已有 DNS 证书解析器"
+                htmlFor="site-resolverName"
+                error={form.formState.errors.resolverName?.message}
+              >
+                <Controller
+                  control={form.control}
+                  name="resolverName"
+                  rules={{
+                    validate: (value) =>
+                      form.getValues('tlsMode') !== 'resolver' || !!value || '请选择 DNS 证书解析器',
+                  }}
+                  render={({ field, fieldState }) => (
+                    <Select
+                      name={field.name}
+                      value={field.value}
+                      onValueChange={(value) => {
+                        if (value) field.onChange(value);
+                      }}
+                      disabled={!!frozen || save.isPending || action.isPending || options.isLoading}
+                    >
+                      <SelectTrigger
+                        id="site-resolverName"
+                        ref={field.ref}
+                        onBlur={field.onBlur}
+                        aria-required="true"
+                        aria-invalid={!!fieldState.error}
+                        aria-describedby={fieldState.error ? 'site-resolverName-description' : undefined}
+                      >
+                        <SelectValue placeholder={options.isLoading ? '正在读取…' : '请选择 DNS 解析器'} />
+                      </SelectTrigger>
+                      <SelectContent className="settings-select-menu">
+                        {options.data?.resolvers.map((name) => (
+                          <SelectItem value={name} key={name}>
+                            {name}
+                          </SelectItem>
+                        ))}
+                        {!options.data?.resolvers.length && (
+                          <p className="px-2.5 py-2 text-sm text-muted-foreground">暂无可用 DNS 解析器</p>
+                        )}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
               </Field>
             )}
             {options.error && ['certificate', 'resolver'].includes(mode) && (

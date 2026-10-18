@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import {
   llmSettingsSchema,
+  llmUserPolicySchema,
   updateAiSettingsSchema,
   updateDokploySettingsSchema,
   updateSiteSettingsSchema,
@@ -52,7 +53,7 @@ const browser = await chromium.launch({
 const errors = [],
   writes = [],
   requests = [];
-const currency = { quotaPerUnit: 1000, currency: 'CNY', exchangeRate: 2.5 };
+const currency = { quotaPerUnit: 500000, currency: 'CNY', exchangeRate: 7.3 };
 let failSave = false,
   failTest = false,
   failLists = false,
@@ -71,9 +72,40 @@ let gateway = {
   accessTokenMasked: 'abc****xyz',
   accountId: 7,
   accountName: 'eat-models',
-  defaultQuota: 0,
+  defaultQuota: 34246574,
   currency,
   updatedAt: '2026-10-18T03:00:00Z',
+};
+const personal = {
+  configured: true,
+  userId: '11111111-1111-4111-8111-111111111111',
+  userName: '管理员',
+  userStatus: 'active',
+  disabled: false,
+  initialQuota: null,
+  initialQuotaEffective: 34246575,
+  giftClaimed: true,
+  key: { id: 'key-fixture', maskedKey: 'sk-****demo', status: 'active', createdAt: '2026-10-18T03:00:00Z' },
+  totalQuota: 34246575,
+  usedQuota: 3700,
+  remainingQuota: 34242875,
+  currency,
+  apiBaseUrl: 'https://newapi.example.com/v1',
+  updatedAt: '2026-10-18T03:00:00Z',
+  pending: false,
+  error: null,
+};
+let recipient = {
+  ...personal,
+  userId: '22222222-2222-4222-8222-222222222222',
+  userName: '精度验证成员',
+  initialQuota: 34246574,
+  initialQuotaEffective: 34246574,
+  giftClaimed: false,
+  key: null,
+  totalQuota: 0,
+  usedQuota: 0,
+  remainingQuota: 0,
 };
 let deployment = {
   configured: true,
@@ -183,6 +215,15 @@ async function context(role = 'admin') {
         latencyMs: 82,
       });
     }
+    if (path === `/api/admin/llm-gateway/users/${recipient.userId}/policy`) {
+      const policy = llmUserPolicySchema.parse(body);
+      recipient = {
+        ...recipient,
+        ...policy,
+        initialQuotaEffective: policy.initialQuota ?? gateway.defaultQuota,
+      };
+      return reply(recipient);
+    }
     if (method === 'PUT') {
       if (failSave) {
         failSave = false;
@@ -246,11 +287,31 @@ async function context(role = 'admin') {
     if (path === '/api/admin/llm-gateway-settings') return reply(gateway);
     if (path.endsWith('/llm-gateway-settings/account'))
       return reply({
-        remainingQuota: 104000,
+        remainingQuota: 342465753,
         usedQuota: 1000,
         currency,
         checkedAt: '2026-10-18T03:00:00Z',
       });
+    if (path === '/api/llm-gateway') return reply(personal);
+    if (path === '/api/llm-gateway/models') return reply([{ id: 'gpt-4o-mini' }]);
+    if (path === '/api/llm-gateway/usage')
+      return reply({
+        items: [
+          {
+            id: 'usage-fixture',
+            createdAt: 1792292400,
+            model: 'gpt-4o-mini',
+            quota: 3700,
+            promptTokens: 100,
+            completionTokens: 30,
+            type: 2,
+          },
+        ],
+        page: 1,
+        pageSize: 20,
+        total: 1,
+      });
+    if (path === '/api/admin/llm-gateway/users') return reply([recipient]);
     if (path === '/api/admin/dokploy-settings') return reply(deployment);
     if (path === '/api/admin/dokploy/projects')
       return failLists
@@ -361,7 +422,7 @@ const titles = {
   'folio-cdn': 'CDN 加速',
 };
 async function category(page, id) {
-  if (page.viewportSize().width < 900) await page.locator('#settings-category').selectOption(id);
+  if (page.viewportSize().width < 900) await choose(page, '#settings-category', titles[id]);
   else
     await page
       .getByRole('navigation', { name: '设置分类', exact: true })
@@ -370,6 +431,21 @@ async function category(page, id) {
   await page.locator(`[data-settings-panel="${id}"] h2`).waitFor();
   assert(new URL(page.url()).searchParams.get('section') === id || id === 'platform-ai');
   return page.locator(`[data-settings-panel="${id}"]`);
+}
+async function menuFits(page) {
+  await page.getByRole('listbox').evaluate(async (menu) => {
+    await Promise.all(menu.getAnimations().map((animation) => animation.finished.catch(() => {})));
+  });
+  const menu = await page.getByRole('listbox').boundingBox();
+  assert(
+    menu && menu.x >= -1 && menu.x + menu.width <= page.viewportSize().width + 1,
+    'Dropdown exceeds viewport',
+  );
+}
+async function choose(page, selector, name) {
+  await page.locator(selector).click();
+  await menuFits(page);
+  await page.getByRole('option', { name, exact: true }).click();
 }
 async function saved(panel) {
   await panel.getByText('更改已保存', { exact: true }).waitFor();
@@ -381,7 +457,7 @@ async function fits(page) {
   );
   const invalid = await page
     .locator(
-      '.settings-workspace input:visible:not([aria-hidden="true"]), .settings-workspace select:visible:not([aria-hidden="true"])',
+      '.settings-workspace input:visible:not([aria-hidden="true"]), .settings-workspace button[role="combobox"]:visible',
     )
     .evaluateAll((els) =>
       els
@@ -404,10 +480,19 @@ try {
   );
   await page.locator('#ai-model').fill('gpt-4o-mini');
   let panel = await category(page, 'llm-gateway');
-  await page.locator('#llm-gift').fill('2.5');
+  assert.equal(await page.locator('#llm-gift').inputValue(), '500.0');
+  assert(await panel.getByRole('button', { name: '保存更改', exact: true }).isDisabled());
+  await panel.getByText('5,000.0 CNY', { exact: true }).waitFor();
+  await page.locator('#llm-token').fill('fixture-replacement-token');
   await panel.getByRole('button', { name: '保存更改', exact: true }).click();
   await saved(panel);
-  assert.equal(writes.at(-1).body.defaultQuota, 1000);
+  assert.equal(writes.at(-1).body.defaultQuota, 34246574, 'Rounded display changed an untouched quota');
+  await page.locator('#llm-gift').fill('500');
+  await panel.getByRole('button', { name: '保存更改', exact: true }).click();
+  await saved(panel);
+  assert.equal(writes.at(-1).body.defaultQuota, 34246575);
+  assert.equal(await page.locator('#llm-gift').inputValue(), '500.0');
+  assert(await panel.getByRole('button', { name: '保存更改', exact: true }).isDisabled());
   assert.equal(writes.at(-1).body.accessToken, '');
   await category(page, 'platform-ai');
   assert.equal(await page.locator('#ai-model').inputValue(), 'gpt-4o-mini');
@@ -439,36 +524,53 @@ try {
   assert.equal(writes.at(-1).body.apiToken, '');
 
   panel = await category(page, 'folio');
-  await page.locator('#site-tlsMode').selectOption('cloudflare');
+  await choose(page, '#site-tlsMode', 'Cloudflare：自动签发与续期');
   await page.getByText('Cloudflare API Token', { exact: true }).waitFor();
-  await page.locator('#site-tlsMode').selectOption('certificate');
-  await page.locator('#site-certificateId').selectOption('existing-cert');
-  await page.locator('#site-tlsMode').selectOption('resolver');
-  await page.locator('#site-resolverName').selectOption('dns-main');
-  await page.locator('#site-tlsMode').selectOption('alidns');
+  await choose(page, '#site-tlsMode', '复用 Dokploy 中已有的泛域名证书');
+  const beforeValidation = writes.length;
+  await panel.getByRole('button', { name: '保存更改', exact: true }).click();
+  await panel.getByText('请选择已有泛域名证书', { exact: true }).waitFor();
+  assert.equal(writes.length, beforeValidation, 'Missing certificate was submitted');
+  assert.equal(await page.locator('#site-certificateId').getAttribute('aria-invalid'), 'true');
+  await page.waitForFunction(() => document.activeElement?.id === 'site-certificateId');
+  await choose(page, '#site-certificateId', /Folio 泛域名证书/);
+  await choose(page, '#site-tlsMode', '复用已有 DNS 证书解析器');
+  await choose(page, '#site-resolverName', 'dns-main');
+  await choose(page, '#site-tlsMode', '阿里云 DNS：自动签发与续期');
+  await panel.getByRole('checkbox', { name: /自动添加/ }).check();
   await page.locator('#site-upstreamPort').fill('3001');
   await panel.getByRole('button', { name: '保存更改', exact: true }).click();
   await saved(panel);
   assert.equal(writes.at(-1).body.upstreamPort, 3001);
   assert.equal(writes.at(-1).body.ossAccessKeySecret, '');
+  assert.equal(writes.at(-1).body.autoDns, true);
   await panel.getByRole('button', { name: '检查并启用', exact: true }).click();
   await panel.getByText('正在检查', { exact: true }).waitFor();
   assert(await page.locator('#site-domain').isDisabled());
+  assert(await page.locator('#site-tlsMode').isDisabled());
+  assert(await page.locator('#site-autoDns').isDisabled());
   await panel.getByText('已启用', { exact: true }).waitFor();
   await panel.getByRole('button', { name: '停用并清理入口', exact: true }).click();
   await panel.getByText('未启用', { exact: true }).waitFor();
 
   panel = await category(page, 'folio-cdn');
-  await page.locator('#site-credentialSource').selectOption('alidns');
+  await choose(page, '#site-credentialSource', '显式复用 AliDNS 凭证（仍需 CDN 权限）');
   assert.equal(await panel.locator('#site-accessKeySecret').count(), 0);
-  await page.locator('#site-credentialSource').selectOption('independent');
-  await page.locator('#site-scope').selectOption('overseas');
+  await choose(page, '#site-credentialSource', '独立 RAM AccessKey');
+  await page.locator('#site-scope').click();
+  await page.waitForFunction(() => document.activeElement?.getAttribute('role') === 'option');
+  await page.keyboard.press('End');
+  await page.waitForFunction(() => document.activeElement?.textContent?.trim() === '全球但不含中国内地');
+  await page.keyboard.press('Enter');
   await panel.getByLabel(/校验回源证书/).check();
-  await panel.getByLabel(/启用 CDN/).check();
+  await panel.getByRole('checkbox', { name: /自动管理 Folio DNS/ }).check();
+  await panel.getByRole('switch', { name: /启用 CDN/ }).click();
   await panel.getByRole('button', { name: '保存更改', exact: true }).click();
   await saved(panel);
   assert.equal(writes.at(-1).body.verifyOriginCertificate, true);
   assert.equal(writes.at(-1).body.scope, 'overseas');
+  assert.equal(writes.at(-1).body.enabled, true);
+  assert.equal(writes.at(-1).body.autoDns, true);
   await panel.getByText(/sites.example.com.cdn.example.net/).waitFor();
   await panel.getByRole('button', { name: '重新检查 / 恢复', exact: true }).click();
   await panel.getByText('已接入', { exact: true }).waitFor();
@@ -478,6 +580,10 @@ try {
     path: join(screenshots, 'settings-desktop-cdn.png'),
     fullPage: true,
   });
+  await page.locator('#site-scope').click();
+  await menuFits(page);
+  await page.screenshot({ path: join(screenshots, 'settings-desktop-cdn-menu.png') });
+  await page.keyboard.press('Escape');
   await category(page, 'platform-ai');
   const reads = requests.filter((r) => r.path.endsWith('/cdn')).length;
   await page.waitForTimeout(5200);
@@ -513,6 +619,17 @@ try {
       await fits(page);
     }
     if (width === 390) {
+      await page.locator('#site-credentialSource').click();
+      await menuFits(page);
+      await page.screenshot({ path: join(screenshots, 'settings-mobile-cdn-menu.png') });
+      await page.keyboard.press('Escape');
+      await category(page, 'folio');
+      await choose(page, '#site-tlsMode', '复用 Dokploy 中已有的泛域名证书');
+      await page.locator('#site-certificateId').click();
+      await menuFits(page);
+      await page.screenshot({ path: join(screenshots, 'settings-mobile-certificate-menu.png') });
+      await page.keyboard.press('Escape');
+      await choose(page, '#site-tlsMode', '阿里云 DNS：自动签发与续期');
       await category(page, 'llm-gateway');
       await page.screenshot({
         path: join(screenshots, 'settings-mobile.png'),
@@ -526,11 +643,46 @@ try {
   await page.goto(base + '/settings#static-sites');
   await page.locator('[data-settings-panel="folio"] h2').waitFor();
   assert.equal(
-    await page.locator('#settings-category').inputValue(),
-    'folio',
+    (await page.locator('#settings-category').innerText()).trim(),
+    '基础发布',
     'Legacy Folio link did not select its category',
   );
+  await page.goto(base + '/llm-gateway');
+  const personalView = page.getByRole('tabpanel', { name: '我的 API Key', exact: true });
+  await personalView.getByText('500.0 CNY', { exact: true }).waitFor();
+  await personalView.getByRole('cell', { name: '0.1 CNY', exact: true }).waitFor();
+  assert.equal(
+    await personalView.getByText('0.1 CNY', { exact: true }).count(),
+    2,
+    'Usage and consumed quota should round to one decimal',
+  );
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('tab', { name: '成员与额度', exact: true }).click();
+  await page.getByRole('cell', { name: '首次赠送 500.0 CNY', exact: true }).waitFor();
+  await page.getByRole('button', { name: '首次赠送', exact: true }).click();
+  assert.equal(await page.locator('#llm-adjust-amount').inputValue(), '500.0');
+  await page.getByRole('dialog').getByRole('button', { name: '保存', exact: true }).click();
+  await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  assert.equal(
+    writes.at(-1).body.initialQuota,
+    34246574,
+    'Saving an unchanged personal gift lost quota precision',
+  );
   await ctx.close();
+
+  const originalFolio = folio;
+  folio = { ...folio, tlsMode: 'certificate' };
+  const restricted = await context();
+  await restricted.page.goto(base + '/settings?section=folio-cdn');
+  await restricted.page.locator('#site-credentialSource').click();
+  assert.equal(
+    await restricted.page
+      .getByRole('option', { name: '显式复用 AliDNS 凭证（仍需 CDN 权限）', exact: true })
+      .getAttribute('aria-disabled'),
+    'true',
+  );
+  await restricted.ctx.close();
+  folio = originalFolio;
 
   failLists = true;
   const fallback = await context();
@@ -574,6 +726,8 @@ try {
         'lazy_queries',
         'save_success_and_failure',
         'masked_credentials',
+        'rounded_money_and_preserved_quota',
+        'shadcn_controls_keyboard_validation_disabled_options',
         'connection_tests',
         'deployment_selection_and_fallback',
         'folio_tls_enable_disable',

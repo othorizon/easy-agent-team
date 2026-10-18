@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
@@ -12,6 +12,9 @@ import { api } from '../api';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
+import { Checkbox } from '../components/ui/checkbox';
+import { Switch } from '../components/ui/switch';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Field } from '../components/form';
 import {
   SettingsActions,
@@ -136,34 +139,83 @@ export function FolioCdnSettings({ active = true }: { active?: boolean }) {
             title="接入配置"
             description="可使用独立 RAM 凭证，或明确选择复用具备 CDN 权限的 AliDNS 凭证。"
           >
-            <label className="settings-toggle settings-span">
-              <input type="checkbox" {...register('enabled')} />
+            <label className="settings-toggle settings-span" htmlFor="site-cdn-enabled">
+              <Controller
+                control={form.control}
+                name="enabled"
+                render={({ field }) => (
+                  <Switch
+                    id="site-cdn-enabled"
+                    name={field.name}
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                    onBlur={field.onBlur}
+                    disabled={save.isPending || retry.isPending}
+                  />
+                )}
+              />
               启用 CDN（保存后检查接入）
             </label>
             <Field label="加速区域" htmlFor="site-scope">
-              <select
-                id="site-scope"
-                aria-label="CDN 加速区域"
-                {...register('scope')}
-                className="settings-native-select"
-              >
-                <option value="domestic">中国内地</option>
-                <option value="global">全球</option>
-                <option value="overseas">全球但不含中国内地</option>
-              </select>
+              <Controller
+                control={form.control}
+                name="scope"
+                render={({ field }) => (
+                  <Select
+                    name={field.name}
+                    value={field.value}
+                    onValueChange={(value) => {
+                      if (value) field.onChange(value);
+                    }}
+                    disabled={save.isPending || retry.isPending}
+                  >
+                    <SelectTrigger
+                      id="site-scope"
+                      ref={field.ref}
+                      onBlur={field.onBlur}
+                      aria-label="CDN 加速区域"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="settings-select-menu">
+                      <SelectItem value="domestic">中国内地</SelectItem>
+                      <SelectItem value="global">全球</SelectItem>
+                      <SelectItem value="overseas">全球但不含中国内地</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              />
             </Field>
             <Field label="凭证来源" htmlFor="site-credentialSource">
-              <select
-                id="site-credentialSource"
-                aria-label="CDN 凭证来源"
-                {...register('credentialSource')}
-                className="settings-native-select"
-              >
-                <option value="independent">独立 RAM AccessKey</option>
-                <option value="alidns" disabled={folio?.tlsMode !== 'alidns'}>
-                  显式复用 AliDNS 凭证（仍需 CDN 权限）
-                </option>
-              </select>
+              <Controller
+                control={form.control}
+                name="credentialSource"
+                render={({ field }) => (
+                  <Select
+                    name={field.name}
+                    value={field.value}
+                    onValueChange={(value) => {
+                      if (value) field.onChange(value);
+                    }}
+                    disabled={save.isPending || retry.isPending}
+                  >
+                    <SelectTrigger
+                      id="site-credentialSource"
+                      ref={field.ref}
+                      onBlur={field.onBlur}
+                      aria-label="CDN 凭证来源"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="settings-select-menu">
+                      <SelectItem value="independent">独立 RAM AccessKey</SelectItem>
+                      <SelectItem value="alidns" disabled={folio?.tlsMode !== 'alidns'}>
+                        显式复用 AliDNS 凭证（仍需 CDN 权限）
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              />
             </Field>
             {source === 'independent' && (
               <>
@@ -191,17 +243,47 @@ export function FolioCdnSettings({ active = true }: { active?: boolean }) {
             title="回源与 DNS"
             description="源站仍使用 HTTPS。DNS 管理会迁移当前直连记录，发现外部修改时暂停。"
           >
-            <label className="settings-toggle settings-span">
-              <input type="checkbox" className="mt-1" {...register('verifyOriginCertificate')} />
+            <label className="settings-toggle settings-span" htmlFor="site-cdn-verifyOriginCertificate">
+              <Controller
+                control={form.control}
+                name="verifyOriginCertificate"
+                render={({ field }) => (
+                  <Checkbox
+                    id="site-cdn-verifyOriginCertificate"
+                    name={field.name}
+                    checked={field.value}
+                    onCheckedChange={(value) => field.onChange(value === true)}
+                    onBlur={field.onBlur}
+                    aria-describedby="site-cdn-verifyOriginCertificate-description"
+                    disabled={save.isPending || retry.isPending}
+                  />
+                )}
+              />
               <span>
                 校验回源证书
-                <span className="mt-1 block text-xs text-muted-foreground">
+                <span
+                  id="site-cdn-verifyOriginCertificate-description"
+                  className="mt-1 block text-xs text-muted-foreground"
+                >
                   关闭后仍使用 HTTPS 回源，但会放宽源站证书身份校验。
                 </span>
               </span>
             </label>
-            <label className="settings-toggle settings-span">
-              <input type="checkbox" className="mt-1" {...register('autoDns')} />
+            <label className="settings-toggle settings-span" htmlFor="site-cdn-autoDns">
+              <Controller
+                control={form.control}
+                name="autoDns"
+                render={({ field }) => (
+                  <Checkbox
+                    id="site-cdn-autoDns"
+                    name={field.name}
+                    checked={field.value}
+                    onCheckedChange={(value) => field.onChange(value === true)}
+                    onBlur={field.onBlur}
+                    disabled={save.isPending || retry.isPending}
+                  />
+                )}
+              />
               自动管理 Folio DNS（迁移当前直连记录；发现外部修改时暂停）
             </label>
             <p className="text-xs text-muted-foreground settings-span">

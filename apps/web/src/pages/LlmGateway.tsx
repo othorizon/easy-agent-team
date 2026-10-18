@@ -1,5 +1,5 @@
 import type { LlmGatewayInfo, LlmModelInfo, LlmUsagePage } from '@eat/shared';
-import { formatDateTime, llmAmountToQuota, llmDisplayQuota } from '@eat/shared';
+import { formatDateTime, llmAmountToQuota } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Copy, KeyRound, RefreshCw } from 'lucide-react';
 import { useRef, useState } from 'react';
@@ -17,6 +17,7 @@ import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { llmAmountInput, llmDisplayQuota } from '../lib/llm-quota';
 
 const ROOT = '/api/llm-gateway';
 const labels: Record<string, string> = {
@@ -63,11 +64,11 @@ export function LlmGatewayPage() {
             <TabsTrigger value="mine">我的 API Key</TabsTrigger>
             {admin && <TabsTrigger value="admin">成员与额度</TabsTrigger>}
           </TabsList>
-          <TabsContent value="mine">
+          <TabsContent value="mine" className="mt-4">
             <PersonalGateway info={info.data} />
           </TabsContent>
           {admin && (
-            <TabsContent value="admin">
+            <TabsContent value="admin" className="mt-4">
               <AdminGateway />
             </TabsContent>
           )}
@@ -438,7 +439,7 @@ function AdminGateway() {
       u.giftClaimed
         ? ''
         : u.initialQuota !== null && u.currency
-          ? String((u.initialQuota / u.currency.quotaPerUnit) * u.currency.exchangeRate)
+          ? llmAmountInput(u.initialQuota, u.currency)
           : '',
     );
     setInherit(u.initialQuota === null);
@@ -603,8 +604,15 @@ function AdminGateway() {
                 onClick={() => {
                   if (!editing?.currency) return;
                   try {
+                    const initialQuota = editing.giftClaimed ? null : editing.initialQuota;
+                    const unchanged =
+                      initialQuota !== null && amount === llmAmountInput(initialQuota, editing.currency);
                     const quota =
-                      !editing.giftClaimed && inherit ? null : llmAmountToQuota(amount, editing.currency);
+                      !editing.giftClaimed && inherit
+                        ? null
+                        : unchanged
+                          ? initialQuota
+                          : llmAmountToQuota(amount, editing.currency);
                     action.mutate({
                       user: editing,
                       kind: editing.giftClaimed ? 'quota' : 'policy',

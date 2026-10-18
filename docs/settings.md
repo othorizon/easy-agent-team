@@ -15,8 +15,10 @@
 
 ## 布局与操作
 
-桌面采用左侧分组导航与右侧当前表单；窄屏使用顶部固定的原生分类选择器，表单改为单列，操作按钮可换行。
+桌面采用左侧分组导航与右侧当前表单；窄屏使用顶部固定的分类选择器，表单改为单列，操作按钮可换行。
 字段根据内容区域的实际宽度决定是否并排，避免平台侧栏和设置导航挤压表单。
+
+设置中的下拉框、复选框与开关统一使用项目现有的 shadcn/ui 风格组件（Radix UI + Tailwind）。移动端分类保留分组，下拉菜单限制在视口内，长选项可换行；支持键盘选择、必填错误定位和不可用选项。勾选或切换后仍需保存才生效。
 
 每个分类独立保存，统一显示未保存、保存中、保存成功或失败状态。保存失败保留输入，成功后清空凭证输入；凭证留空保留原值，已有值只显示掩码。
 连接测试单独反馈，修改连接信息后清除旧测试结果。Folio 启用和 CDN 接入仍按后台实际状态显示，保存配置不等于已经启用。
@@ -33,6 +35,8 @@
 ![桌面设置](assets/screenshots/settings.png)
 
 [查看 CDN 设置与接入状态截图](assets/screenshots/settings-cdn.png)
+
+[桌面下拉菜单](assets/screenshots/settings-cdn-menu.png) · [移动端下拉菜单](assets/screenshots/settings-mobile-cdn-menu.png)
 
 <img src="assets/screenshots/settings-mobile.png" alt="移动端分类切换与网关设置" width="390" />
 

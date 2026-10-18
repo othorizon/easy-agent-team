@@ -29,7 +29,15 @@ import {
 } from '../components/settings';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from '../components/ui/select';
 import { Switch } from '../components/ui/switch';
 import { FolioSettingsCard } from './FolioSettings';
 import { FolioCdnSettings } from './FolioCdnSettings';
@@ -123,17 +131,28 @@ export function SettingsPage() {
         </aside>
         <div className="settings-mobile-nav">
           <label htmlFor="settings-category">设置分类</label>
-          <select id="settings-category" value={active} onChange={(e) => select(e.target.value)}>
-            {categories.map((group) => (
-              <optgroup key={group.group} label={group.group}>
-                {group.items.map(({ id, label }) => (
-                  <option key={id} value={id}>
-                    {label}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
+          <Select
+            value={active}
+            onValueChange={(value) => {
+              if (value) select(value);
+            }}
+          >
+            <SelectTrigger id="settings-category">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="settings-select-menu">
+              {categories.map((group) => (
+                <SelectGroup key={group.group}>
+                  <SelectLabel>{group.group}</SelectLabel>
+                  {group.items.map(({ id, label }) => (
+                    <SelectItem key={id} value={id}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <div className="settings-workspace">
           {mounted.map((id) => (
@@ -530,7 +549,7 @@ function DokployForm({ settings, active }: { settings: DokploySettingsInfo; acti
                 <SelectTrigger id="dokploy-project">
                   <SelectValue placeholder="选择项目…" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="settings-select-menu">
                   {projects.data.map((p) => (
                     <SelectItem key={p.projectId} value={p.projectId}>
                       {p.name}
@@ -571,7 +590,7 @@ function DokployForm({ settings, active }: { settings: DokploySettingsInfo; acti
                     <SelectTrigger id="dokploy-env">
                       <SelectValue placeholder="选择环境…" />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent className="settings-select-menu">
                       {environments.map((e) => (
                         <SelectItem key={e.environmentId} value={e.environmentId}>
                           {e.name}
@@ -606,7 +625,7 @@ function DokployForm({ settings, active }: { settings: DokploySettingsInfo; acti
                     <SelectTrigger id="dokploy-ssh">
                       <SelectValue placeholder="不绑定" />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent className="settings-select-menu">
                       <SelectItem value={NONE}>不绑定（仅公开仓库）</SelectItem>
                       {sshKeys.data.map((k) => (
                         <SelectItem key={k.sshKeyId} value={k.sshKeyId}>
