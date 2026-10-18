@@ -32,6 +32,8 @@ let accountId = 7,
   failAfterQuota = false,
   offline = false;
 const tokens = new Map<number, any>();
+let usageFixtures: any[] | undefined;
+let lastLogQuery: URLSearchParams | undefined;
 let holdTokenRead: { started: () => void; release: Promise<void> } | undefined;
 const access = 'dedicated-ordinary-user-access-token';
 const saved: Record<string, any> = {};
@@ -161,14 +163,16 @@ beforeAll(async () => {
         await hold.release;
       }
     } else if (url.pathname === '/api/log/self') {
+      lastLogQuery = url.searchParams;
       const name = url.searchParams.get('token_name');
       const own = [...tokens.values()].find((t) => t.name === name);
-      data = {
-        items: own?.used_quota
+      const records =
+        usageFixtures ??
+        (own?.used_quota
           ? [
               {
                 id: own.id,
-                created_at: 1792300000,
+                created_at: Math.floor(Date.now() / 1000),
                 model_name: 'model-a',
                 quota: own.used_quota,
                 prompt_tokens: 2,
@@ -180,8 +184,19 @@ beforeAll(async () => {
                 channel: 5,
               },
             ]
-          : [],
-        total: own?.used_quota ? 1 : 0,
+          : []);
+      const start = Number(url.searchParams.get('start_timestamp') ?? 0);
+      const end = Number(url.searchParams.get('end_timestamp') ?? Number.MAX_SAFE_INTEGER);
+      const page = Number(url.searchParams.get('p') ?? 1);
+      const pageSize = Number(url.searchParams.get('page_size') ?? 20);
+      const matching = records
+        .filter(
+          (record) => record.token_name === name && record.created_at >= start && record.created_at <= end,
+        )
+        .sort((a, b) => b.created_at - a.created_at);
+      data = {
+        items: matching.slice((page - 1) * pageSize, page * pageSize),
+        total: matching.length,
       };
     } else {
       res.statusCode = 404;
@@ -316,6 +331,46 @@ describe('LLM API 网关公共账户与个人 Key', () => {
     const [otherKey] = await keyOf(otherId);
     expect((await api('GET', `/api/llm-gateway/usage?keyId=${otherKey.id}`, member)).status).toBe(404);
     expect((await api('GET', '/api/llm-gateway/usage?page=-1', member)).status).toBe(400);
+  });
+  it('消耗查询在上游按最近 30 天过滤并分页，不能通过额外参数扩大范围', async () => {
+    const [key] = await keyOf(memberId);
+    const end = Math.floor(Date.now() / 1000);
+    const start = end - 30 * 24 * 60 * 60;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(end * 1000);
+    const entry = {
+      token_name: key.upstreamName,
+      model_name: 'model-a',
+      quota: 1,
+      prompt_tokens: 2,
+      completion_tokens: 3,
+      type: 2,
+    };
+    usageFixtures = [
+      { ...entry, id: 101, created_at: start - 1 },
+      { ...entry, id: 102, created_at: start },
+      { ...entry, id: 103, created_at: end },
+      { ...entry, id: 104, created_at: end + 1 },
+      { ...entry, id: 105, created_at: end, token_name: 'another-users-key' },
+    ];
+    try {
+      const first = await api('GET', '/api/llm-gateway/usage?page=1&pageSize=1&start_timestamp=0', member);
+      expect(first.status).toBe(200);
+      expect(first.body.total).toBe(2);
+      expect(first.body.items.map((item: any) => item.id)).toEqual(['103']);
+      expect(lastLogQuery?.get('start_timestamp')).toBe(String(start));
+      expect(lastLogQuery?.get('end_timestamp')).toBe(String(end));
+      expect(lastLogQuery?.get('token_name')).toBe(key.upstreamName);
+      const second = await api('GET', '/api/llm-gateway/usage?page=2&pageSize=1', member);
+      expect(second.body.page).toBe(2);
+      expect(second.body.pageSize).toBe(1);
+      expect(second.body.total).toBe(2);
+      expect(second.body.items.map((item: any) => item.id)).toEqual(['102']);
+      expect(lastLogQuery?.get('p')).toBe('2');
+      expect(lastLogQuery?.get('page_size')).toBe('1');
+    } finally {
+      usageFixtures = undefined;
+      clock.mockRestore();
+    }
   });
   it('原生额度配置支持加、减、设置；幂等重试与期间消费不重复加款', async () => {
     const request = { ...id(), mode: 'add', quota: 50 };

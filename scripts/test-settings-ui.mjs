@@ -54,6 +54,7 @@ const errors = [],
   writes = [],
   requests = [];
 const currency = { quotaPerUnit: 500000, currency: 'CNY', exchangeRate: 7.3 };
+const modelNames = ['gpt-4o-mini', 'gemini-2.5-pro', 'provider/' + 'long-model-name-'.repeat(10)];
 let failSave = false,
   failTest = false,
   failLists = false,
@@ -196,7 +197,7 @@ async function context(role = 'admin') {
     const req = route.request(),
       path = new URL(req.url()).pathname,
       method = req.method();
-    requests.push({ role, method, path });
+    requests.push({ role, method, path, search: new URL(req.url()).search });
     const body = req.postDataJSON();
     const reply = (data, status = 200) =>
       route.fulfill({
@@ -293,24 +294,25 @@ async function context(role = 'admin') {
         checkedAt: '2026-10-18T03:00:00Z',
       });
     if (path === '/api/llm-gateway') return reply(personal);
-    if (path === '/api/llm-gateway/models') return reply([{ id: 'gpt-4o-mini' }]);
-    if (path === '/api/llm-gateway/usage')
+    if (path === '/api/llm-gateway/models') return reply(modelNames.map((id) => ({ id })));
+    if (path === '/api/llm-gateway/usage') {
+      const page = Number(new URL(req.url()).searchParams.get('page') ?? 1);
+      const records = Array.from({ length: 21 }, (_, i) => ({
+        id: `usage-fixture-${i}`,
+        createdAt: Math.floor(Date.now() / 1000) - i,
+        model: i === 20 ? 'usage-page-2' : 'gpt-4o-mini',
+        quota: i === 0 ? 3700 : 1,
+        promptTokens: 100,
+        completionTokens: 30,
+        type: 2,
+      }));
       return reply({
-        items: [
-          {
-            id: 'usage-fixture',
-            createdAt: 1792292400,
-            model: 'gpt-4o-mini',
-            quota: 3700,
-            promptTokens: 100,
-            completionTokens: 30,
-            type: 2,
-          },
-        ],
-        page: 1,
+        items: records.slice((page - 1) * 20, page * 20),
+        page,
         pageSize: 20,
-        total: 1,
+        total: records.length,
       });
+    }
     if (path === '/api/admin/llm-gateway/users') return reply([recipient]);
     if (path === '/api/admin/dokploy-settings') return reply(deployment);
     if (path === '/api/admin/dokploy/projects')
@@ -656,6 +658,43 @@ try {
     2,
     'Usage and consumed quota should round to one decimal',
   );
+  await personalView.getByText('只显示最近 30 天记录。', { exact: true }).waitFor();
+  assert.equal(await personalView.getByRole('combobox', { name: '选择 Key 历史' }).count(), 0);
+  assert(
+    !requests.some((r) => r.path === '/api/llm-gateway/keys/history'),
+    'Unused Key history was requested',
+  );
+  await personalView.getByRole('button', { name: '下一页', exact: true }).click();
+  await personalView.getByRole('cell', { name: 'usage-page-2', exact: true }).waitFor();
+  const usageRequest = requests.filter((r) => r.path === '/api/llm-gateway/usage').at(-1);
+  assert.equal(new URLSearchParams(usageRequest.search).get('page'), '2');
+  assert(!new URLSearchParams(usageRequest.search).has('keyId'));
+  await personalView.getByRole('button', { name: '上一页', exact: true }).click();
+  await personalView.getByText('第 1 页', { exact: true }).waitFor();
+  await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+  for (const name of modelNames) {
+    await personalView.getByRole('button', { name: `复制模型名称：${name}`, exact: true }).click();
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), name);
+  }
+  await personalView.getByRole('textbox', { name: '搜索模型' }).fill('gemini');
+  assert.equal(await personalView.getByRole('button', { name: /复制模型名称：/ }).count(), 1);
+  await personalView.getByRole('button', { name: '复制模型名称：gemini-2.5-pro', exact: true }).click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'gemini-2.5-pro');
+  await personalView.getByRole('textbox', { name: '搜索模型' }).fill('');
+  await page.waitForFunction(() => !document.querySelector('[data-sonner-toast]'));
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await fits(page);
+    if (width === 1440) {
+      await page.evaluate(() => scrollTo(0, 0));
+      await page.screenshot({ path: join(screenshots, 'llm-gateway-desktop.png') });
+    } else {
+      const modelsCard = personalView
+        .getByRole('heading', { name: /^可用模型/ })
+        .locator('xpath=ancestor::*[@data-slot="card"]');
+      await modelsCard.screenshot({ path: join(screenshots, `llm-models-${width}.png`) });
+    }
+  }
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole('tab', { name: '成员与额度', exact: true }).click();
   await page.getByRole('cell', { name: '首次赠送 500.0 CNY', exact: true }).waitFor();
@@ -727,6 +766,7 @@ try {
         'save_success_and_failure',
         'masked_credentials',
         'rounded_money_and_preserved_quota',
+        'recent_usage_without_key_filter_and_model_clipboard',
         'shadcn_controls_keyboard_validation_disabled_options',
         'connection_tests',
         'deployment_selection_and_fallback',

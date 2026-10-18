@@ -153,10 +153,15 @@ export class NewApiClient {
     return this.request<Array<{ id: string }>>('GET', '/v1/models', undefined, key);
   }
   async logs(name: string, page: number, pageSize: number): Promise<LlmUsagePage> {
-    const data = await this.request<{ items: any[]; total: number }>(
-      'GET',
-      `/api/log/self?token_name=${encodeURIComponent(name)}&p=${page}&page_size=${pageSize}`,
-    );
+    const end = Math.floor(Date.now() / 1000);
+    const query = new URLSearchParams({
+      token_name: name,
+      p: String(page),
+      page_size: String(pageSize),
+      start_timestamp: String(end - 30 * 24 * 60 * 60),
+      end_timestamp: String(end),
+    });
+    const data = await this.request<{ items: any[]; total: number }>('GET', `/api/log/self?${query}`);
     return {
       items: data.items.map((r) => ({
         id: String(r.id),

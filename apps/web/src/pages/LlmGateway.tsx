@@ -85,28 +85,15 @@ function PersonalGateway({ info }: { info: LlmGatewayInfo }) {
   const [secret, setSecret] = useState('');
   const [modelSearch, setModelSearch] = useState('');
   const [page, setPage] = useState(1);
-  const [historyId, setHistoryId] = useState('current');
   const models = useQuery({
     queryKey: ['llm-models', info.key?.id, info.key?.status],
     queryFn: () => api<LlmModelInfo[]>('GET', `${ROOT}/models`),
     retry: false,
   });
-  const history = useQuery({
-    queryKey: ['llm-history'],
-    queryFn: () =>
-      api<Array<{ id: string; state: string; createdAt: string; usedQuota: number }>>(
-        'GET',
-        `${ROOT}/keys/history`,
-      ),
-  });
   const usage = useQuery({
-    queryKey: ['llm-usage', page, historyId],
-    queryFn: () =>
-      api<LlmUsagePage>(
-        'GET',
-        `${ROOT}/usage?page=${page}&pageSize=20${historyId !== 'current' ? `&keyId=${historyId}` : ''}`,
-      ),
-    refetchInterval: 30000,
+    queryKey: ['llm-usage', page, info.key?.id],
+    queryFn: () => api<LlmUsagePage>('GET', `${ROOT}/usage?page=${page}&pageSize=20`),
+    refetchInterval: page === 1 ? 30000 : false,
   });
   const operation = useMutation({
     mutationFn: async (action: string) => {
@@ -125,8 +112,8 @@ function PersonalGateway({ info }: { info: LlmGatewayInfo }) {
       toast[result.pending ? 'info' : 'success'](
         result.pending ? '操作结果正在同步，可稍后重试' : '操作完成',
       );
+      if (action === 'create' || action === 'delete') setPage(1);
       void qc.invalidateQueries({ queryKey: ['llm-mine'] });
-      void qc.invalidateQueries({ queryKey: ['llm-history'] });
       void qc.invalidateQueries({ queryKey: ['llm-usage'] });
       void qc.invalidateQueries({ queryKey: ['llm-users'] });
     },
@@ -280,8 +267,19 @@ function PersonalGateway({ info }: { info: LlmGatewayInfo }) {
             {models.data
               ?.filter((m) => m.id.toLowerCase().includes(modelSearch.toLowerCase()))
               .map((m) => (
-                <div key={m.id} className="break-all rounded-md border px-3 py-2 font-mono text-xs">
-                  {m.id}
+                <div key={m.id} className="flex min-w-0 items-center gap-2 rounded-md border px-3 py-2">
+                  <code className="min-w-0 flex-1 break-all font-mono text-xs">{m.id}</code>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-11 shrink-0 px-2 sm:h-8"
+                    aria-label={`复制模型名称：${m.id}`}
+                    onClick={() => void copy(m.id)}
+                  >
+                    <Copy />
+                    复制
+                  </Button>
                 </div>
               ))}
           </div>
@@ -290,29 +288,9 @@ function PersonalGateway({ info }: { info: LlmGatewayInfo }) {
       </Card>
       <Card>
         <CardContent>
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="mb-4">
             <h2 className="font-semibold">消耗记录</h2>
-            <Select
-              value={historyId}
-              onValueChange={(v) => {
-                setHistoryId(v);
-                setPage(1);
-              }}
-            >
-              <SelectTrigger className="w-56" aria-label="选择 Key 历史">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="current">当前 / 最近一把 Key</SelectItem>
-                {history.data
-                  ?.filter((r) => r.state === 'retired')
-                  .map((r) => (
-                    <SelectItem key={r.id} value={r.id}>
-                      历史 Key · {formatDateTime(r.createdAt)}
-                    </SelectItem>
-                  ))}
-              </SelectContent>
-            </Select>
+            <p className="mt-1 text-xs text-muted-foreground">只显示最近 30 天记录。</p>
           </div>
           {usage.isError && <p className="text-sm text-destructive">{usage.error.message}</p>}
           <Table>
@@ -342,7 +320,7 @@ function PersonalGateway({ info }: { info: LlmGatewayInfo }) {
               {usage.data?.items.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={4} className="text-center text-muted-foreground">
-                    暂无调用记录
+                    最近 30 天暂无调用记录
                   </TableCell>
                 </TableRow>
               )}
