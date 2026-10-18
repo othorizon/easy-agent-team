@@ -1,0 +1,308 @@
+.settings-surface {
+  min-width: 0;
+}
+.settings-layout {
+  display: grid;
+  gap: 28px;
+  margin-top: 28px;
+  align-items: start;
+}
+.settings-desktop-nav {
+  display: none;
+}
+.settings-mobile-nav {
+  position: sticky;
+  top: 52px;
+  z-index: 20;
+  background: var(--background);
+  padding-block: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-mobile-nav label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.settings-mobile-nav select {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  background: var(--background);
+  font-size: 16px;
+}
+.settings-workspace {
+  min-width: 0;
+  container-type: inline-size;
+}
+.settings-workspace > [hidden] {
+  display: none;
+}
+.settings-section-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: start;
+  gap: 12px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-section-header h2 {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.02em;
+}
+.settings-section-header p {
+  max-width: 68ch;
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--muted-foreground);
+}
+.settings-form {
+  min-width: 0;
+}
+.settings-form > fieldset {
+  min-width: 0;
+}
+.settings-group {
+  min-width: 0;
+  padding-block: 28px;
+  border-bottom: 1px solid var(--border);
+}
+.settings-group-heading {
+  margin-bottom: 20px;
+}
+.settings-group-heading h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+.settings-group-heading p {
+  max-width: 68ch;
+  margin-top: 6px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.75;
+}
+.settings-fields {
+  display: grid;
+  min-width: 0;
+  gap: 20px 24px;
+}
+.settings-fields > * {
+  min-width: 0;
+}
+.settings-span {
+  grid-column: 1 / -1;
+}
+.settings-surface input:not([type='checkbox']):not([type='hidden']),
+.settings-surface select,
+.settings-surface button[role='combobox'] {
+  min-height: 40px;
+}
+.settings-surface input,
+.settings-surface select {
+  caret-color: var(--foreground);
+}
+.settings-surface select:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.settings-native-select {
+  width: 100%;
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  background: var(--background);
+  padding: 8px 12px;
+  font-size: 14px;
+}
+.settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.settings-toggle input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  accent-color: var(--primary);
+}
+.settings-toggle small {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 14px 20px;
+  align-items: center;
+  padding-block: 24px;
+}
+.settings-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.settings-action-buttons > button {
+  min-height: 40px;
+}
+.settings-save-state {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+.settings-notice {
+  display: flex;
+  gap: 10px;
+  align-items: start;
+  font-size: 13px;
+  line-height: 1.7;
+  padding: 14px 0;
+  overflow-wrap: anywhere;
+}
+.settings-notice > svg {
+  margin-top: 3px;
+}
+.settings-info {
+  padding: 16px 0;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+.settings-info p + p {
+  margin-top: 6px;
+}
+.settings-status {
+  margin-top: 24px;
+  padding: 20px;
+  background: var(--muted);
+  border-radius: var(--radius);
+  font-size: 13px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.settings-status p + p {
+  margin-top: 6px;
+}
+.settings-load-error {
+  padding-block: 28px;
+}
+@container (min-width: 560px) {
+  .settings-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (min-width: 900px) {
+  .settings-layout {
+    grid-template-columns: 192px minmax(0, 1fr);
+    gap: 40px;
+  }
+  .settings-desktop-nav {
+    display: block;
+    position: sticky;
+    top: 28px;
+  }
+  .settings-mobile-nav {
+    display: none;
+  }
+  .settings-nav-group + .settings-nav-group {
+    margin-top: 24px;
+  }
+  .settings-nav-group > p {
+    padding: 0 12px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: var(--muted-foreground);
+  }
+  .settings-nav-group a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    font-size: 14px;
+    transition:
+      background-color 150ms,
+      color 150ms;
+  }
+  .settings-nav-group a:hover {
+    background: var(--accent);
+  }
+  .settings-nav-group a[aria-current='page'] {
+    background: var(--muted);
+    font-weight: 600;
+  }
+  .settings-nav-group a:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  .settings-nav-group svg {
+    width: 16px;
+    height: 16px;
+    color: var(--muted-foreground);
+  }
+  .settings-nav-note {
+    margin-top: 32px;
+    border-top: 1px solid var(--border);
+    padding: 16px 12px 0;
+    color: var(--muted-foreground);
+    font-size: 12px;
+    line-height: 1.8;
+  }
+}
+@media (min-width: 900px) and (max-width: 1023px) {
+  .settings-desktop-nav {
+    top: 76px;
+  }
+}
+@media (min-width: 1024px) and (max-width: 1199px) {
+  .settings-layout {
+    gap: 24px;
+    grid-template-columns: 168px minmax(0, 1fr);
+  }
+}
+@media (max-width: 639px) {
+  .settings-layout {
+    gap: 24px;
+    margin-top: 12px;
+  }
+  .settings-section-header {
+    padding-bottom: 20px;
+  }
+  .settings-group {
+    padding-block: 24px;
+  }
+  .settings-surface input:not([type='checkbox']):not([type='hidden']),
+  .settings-surface select,
+  .settings-surface button[role='combobox'] {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .settings-surface button:not([role='switch']) {
+    min-height: 44px;
+  }
+  .settings-action-buttons {
+    width: 100%;
+  }
+  .settings-action-buttons > button {
+    min-height: 44px;
+    flex: 1 1 auto;
+  }
+  .settings-save-state {
+    width: 100%;
+  }
+  .settings-status {
+    padding: 16px;
+  }
+}

@@ -23,6 +23,24 @@ export function Field({
   className?: string;
   children: React.ReactNode;
 }) {
+  const descriptionId = htmlFor && (error || hint !== undefined) ? `${htmlFor}-description` : undefined;
+  const controls = React.Children.map(children, (child) => {
+    if (
+      !React.isValidElement<{
+        id?: string;
+        'aria-describedby'?: string;
+        'aria-invalid'?: boolean;
+      }>(child) ||
+      child.props.id !== htmlFor ||
+      !htmlFor
+    )
+      return child;
+    return React.cloneElement(child, {
+      'aria-describedby':
+        [child.props['aria-describedby'], descriptionId].filter(Boolean).join(' ') || undefined,
+      'aria-invalid': error ? true : child.props['aria-invalid'],
+    });
+  });
   return (
     <div className={cn('flex flex-col gap-1.5', className)}>
       {label !== undefined && (
@@ -31,11 +49,17 @@ export function Field({
           {required && <span className="ml-0.5 text-destructive">*</span>}
         </Label>
       )}
-      {children}
+      {controls}
       {error ? (
-        <p className="text-xs leading-snug text-destructive">{error}</p>
+        <p id={descriptionId} role="alert" className="text-xs leading-snug text-destructive">
+          {error}
+        </p>
       ) : (
-        hint !== undefined && <p className="text-xs leading-relaxed text-muted-foreground">{hint}</p>
+        hint !== undefined && (
+          <p id={descriptionId} className="text-xs leading-relaxed text-muted-foreground">
+            {hint}
+          </p>
+        )
       )}
     </div>
   );

@@ -6,11 +6,11 @@ Folio 使用共享访问网关与文件存储，不创建 Dokploy 应用、容�
 
 ## 在系统设置中启用
 
-Folio 发布默认关闭。平台管理员进入「系统设置 → Folio 发布」，完成配置并点击「检查并启用」。Folio 不再读取 `EAT_SITES_*` 环境变量，OSS 与 DNS 凭证加密存入 PostgreSQL。无需改部署环境或重启 EAT。
+Folio 发布默认关闭。平台管理员进入「系统设置 → Folio 发布 → 基础发布」，完成配置并点击「检查并启用」。Folio 不再读取 `EAT_SITES_*` 环境变量，OSS 与 DNS 凭证加密存入 PostgreSQL。无需改部署环境或重启 EAT。
 
 | 管理员准备 | EAT 自动处理 |
 | --- | --- |
-| 已在「部署后台接入」配置 Dokploy 地址和 API Token | 验证连接和 Traefik 配置读写权限 |
+| 已在「应用托管 → 部署接入」配置 Dokploy 地址和 API Token | 验证连接和 Traefik 配置读写权限 |
 | 选择 Dokploy 中运行 EAT 的应用，填写容器端口（默认 3000） | 识别应用所在服务器，生成内部转发地址；可手动覆盖为 Traefik 可达的 EAT 根地址 |
 | EAT 控制台的 HTTPS 地址（默认当前控制台地址） | 验证请求到达当前 EAT，并用于 Folio 登录、评论和通知链接 |
 | 独立 Folio 域名后缀、Dokploy 入口 IP 或主机名 | 验证域名隔离和随机子域名的通配解析 |

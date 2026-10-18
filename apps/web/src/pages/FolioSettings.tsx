@@ -1,4 +1,3 @@
-import { FolioCdnSettings } from './FolioCdnSettings';
 import { useEffect, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -12,11 +11,17 @@ import {
 } from '@eat/shared';
 import { api } from '../api';
 import { DokployAppPicker } from '../components/dokploy-app-picker';
-import { Card, CardContent } from '../components/ui/card';
+import { Field } from '../components/form';
+import {
+  SettingsActions,
+  SettingsGroup,
+  SettingsLoadError,
+  SettingsLoading,
+  SettingsSection,
+} from '../components/settings';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
-import './folios/folio.css';
 
 const statuses: Record<string, string> = {
   disabled: '未启用',
@@ -55,12 +60,13 @@ const formValues = (r: SiteSettingsInfo): UpdateSiteSettings => ({
   dnsAccessKeyId: '',
   dnsAccessKeySecret: '',
 });
-const selectClass = 'h-9 w-full rounded-md border bg-background px-2 text-sm';
+const selectClass = 'settings-native-select';
 
-export function FolioSettingsCard() {
+export function FolioSettingsCard({ active = true }: { active?: boolean }) {
   const cache = useQueryClient();
   const settings = useQuery({
     queryKey: ['site-settings'],
+    enabled: active,
     queryFn: () => api<SiteSettingsInfo>('GET', '/api/admin/site-settings'),
     refetchInterval: (q) => (busyStatuses.includes(q.state.data?.status ?? '') ? 1500 : false),
   });
@@ -87,7 +93,7 @@ export function FolioSettingsCard() {
     queryKey: ['site-tls-options', applicationId],
     queryFn: () =>
       api<SiteTlsOptions>('GET', `/api/admin/site-settings/tls-options/${encodeURIComponent(applicationId)}`),
-    enabled: !!applicationId && ['certificate', 'resolver'].includes(mode),
+    enabled: active && !!applicationId && ['certificate', 'resolver'].includes(mode),
     retry: false,
   });
   const r = settings.data;
@@ -121,65 +127,83 @@ export function FolioSettingsCard() {
     if (r?.status === 'enabled' || r?.status === 'disabled' || r?.status === 'failed')
       void cache.invalidateQueries({ queryKey: ['sites-capability'] });
   }, [r?.status, cache]);
-  return (
-    <Card id="static-sites" className="folio-admin-settings">
-      <CardContent className="space-y-5 pt-5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-semibold">Folio 发布</h2>
-          <Badge variant={r?.enabled ? 'default' : 'secondary'}>{statuses[r?.status ?? 'disabled']}</Badge>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          管理员配置一次，成员即可发布。文件存入私有 OSS；共享 HTTPS 入口和证书由部署后台的 Traefik 承载。
-        </p>
-        {settings.isLoading && <p className="text-sm">正在读取配置…</p>}
-        {settings.error && (
-          <p role="alert" className="text-sm text-destructive">
-            {settings.error.message}
-          </p>
+  if (!r)
+    return (
+      <SettingsSection title="基础发布" description="配置 Folio 的访问入口、私有 OSS 与 HTTPS 证书。">
+        {settings.isError ? (
+          <SettingsLoadError error={settings.error} retry={() => void settings.refetch()} />
+        ) : (
+          <SettingsLoading />
         )}
-        <form
-          onSubmit={form.handleSubmit((values) => {
-            const parsed = updateSiteSettingsSchema.safeParse(values);
-            if (!parsed.success) {
-              toast.error(parsed.error.issues[0].message);
-              return;
-            }
-            save.mutate(parsed.data);
-          })}
+      </SettingsSection>
+    );
+  return (
+    <SettingsSection
+      title="基础发布"
+      description="配置一次，成员即可发布静态网页。文件存入私有 OSS，共享 HTTPS 入口与证书由 Dokploy 的 Traefik 承载。"
+      status={<Badge variant={r.enabled ? 'default' : 'secondary'}>{statuses[r.status]}</Badge>}
+    >
+      <form
+        className="settings-form"
+        onSubmit={form.handleSubmit((values) => {
+          const parsed = updateSiteSettingsSchema.safeParse(values);
+          if (!parsed.success) {
+            form.setError('root', { message: parsed.error.issues[0].message });
+            return;
+          }
+          save.mutate(parsed.data);
+        })}
+      >
+        <fieldset
+          disabled={frozen || save.isPending || action.isPending}
+          className="min-w-0 [&_input:disabled]:opacity-100 [&_select:disabled]:opacity-100"
         >
-          <fieldset
-            disabled={frozen || save.isPending || action.isPending}
-            className="grid min-w-0 gap-4 sm:grid-cols-2 [&_input:disabled]:opacity-100 [&_select:disabled]:opacity-100"
-          >
-            <div className="folio-config-heading sm:col-span-2">
-              <span>1</span>访问入口
-            </div>
-            <label className="space-y-1 text-sm sm:col-span-2">
-              EAT 控制台 HTTPS 地址
-              <Input {...register('platformUrl')} placeholder="https://eat.example.com" required />
-              <span className="text-xs text-muted-foreground">
-                用于 Folio 登录和评论，默认填写当前控制台地址，无需修改环境变量。
-              </span>
-            </label>
-            <label className="space-y-1 text-sm">
-              发布域名后缀
-              <Input {...register('domain')} placeholder="sites.example.com" required />
-              <span className="text-xs text-muted-foreground">
-                应与控制台域名分开，例如 demo.sites.example.com
-              </span>
-            </label>
-            <label className="space-y-1 text-sm">
-              部署入口 IP / 主机名
-              <Input {...register('gatewayTarget')} placeholder="203.0.113.10" required />
-              <span className="text-xs text-muted-foreground">
-                填写 Dokploy 所在服务器入口，域名应关闭 CDN / Cloudflare 代理。
-              </span>
-            </label>
-            <div className="space-y-1 text-sm sm:col-span-2">
-              <label htmlFor="site-eat-app">EAT 应用（在 Dokploy 中运行的控制台服务）</label>
+          <SettingsGroup title="访问入口" description="配置独立的发布域名，以及承载 EAT 服务的部署应用。">
+            <Field
+              required
+              label="EAT 控制台 HTTPS 地址"
+              htmlFor="site-platformUrl"
+              hint="用于 Folio 登录和评论，默认填写当前控制台地址，无需修改环境变量。"
+            >
+              <Input
+                id="site-platformUrl"
+                {...register('platformUrl')}
+                placeholder="https://eat.example.com"
+                required
+              />
+            </Field>
+            <Field
+              required
+              label="发布域名后缀"
+              htmlFor="site-domain"
+              hint="应与控制台域名分开，例如 demo.sites.example.com"
+            >
+              <Input id="site-domain" {...register('domain')} placeholder="sites.example.com" required />
+            </Field>
+            <Field
+              required
+              label="部署入口 IP / 主机名"
+              htmlFor="site-gatewayTarget"
+              hint="填写 Dokploy 所在服务器入口，域名应关闭 CDN / Cloudflare 代理。"
+            >
+              <Input
+                id="site-gatewayTarget"
+                {...register('gatewayTarget')}
+                placeholder="203.0.113.10"
+                required
+              />
+            </Field>
+            <Field
+              className="settings-span"
+              label="EAT 应用"
+              htmlFor="site-eat-app"
+              required
+              hint="选择在 Dokploy 中运行 EAT 控制台的应用，也可手动填写 Application ID。"
+            >
               <div className="flex flex-wrap gap-2">
                 <Input
                   id="site-eat-app"
+                  aria-describedby="site-eat-app-description"
                   className="min-w-0 flex-1"
                   {...register('platformApplicationId')}
                   placeholder="选择 EAT 应用，或填写 Application ID"
@@ -188,42 +212,48 @@ export function FolioSettingsCard() {
                 <DokployAppPicker
                   value={applicationId}
                   onPick={(app) =>
-                    setValue('platformApplicationId', app.applicationId, { shouldDirty: true })
+                    setValue('platformApplicationId', app.applicationId, {
+                      shouldDirty: true,
+                    })
                   }
                 />
               </div>
-            </div>
-            <label className="space-y-1 text-sm">
-              EAT 容器端口
+            </Field>
+            <Field required label="EAT 容器端口" htmlFor="site-upstreamPort">
               <Input
+                id="site-upstreamPort"
                 type="number"
                 {...register('upstreamPort', { valueAsNumber: true })}
                 min={1}
                 max={65535}
                 required
               />
-            </label>
-            <label className="space-y-1 text-sm">
-              EAT 内部地址（可选）
-              <Input {...register('upstreamUrl')} placeholder="留空自动使用所选应用的容器地址" />
-              <span className="text-xs text-muted-foreground">
-                需要自定义时填写 Traefik 能访问的服务根地址。
-              </span>
-            </label>
-            <div className="folio-config-heading sm:col-span-2">
-              <span>2</span>文件存储
-            </div>
-            <label className="space-y-1 text-sm">
-              OSS 地域
-              <Input {...register('ossRegion')} placeholder="oss-cn-hangzhou" required />
-            </label>
-            <label className="space-y-1 text-sm">
-              私有 OSS Bucket
-              <Input {...register('ossBucket')} required />
-            </label>
-            <label className="space-y-1 text-sm">
-              OSS AccessKey ID
+            </Field>
+            <Field
+              label="EAT 内部地址（可选）"
+              htmlFor="site-upstreamUrl"
+              hint="需要自定义时填写 Traefik 能访问的服务根地址。"
+            >
               <Input
+                id="site-upstreamUrl"
+                {...register('upstreamUrl')}
+                placeholder="留空自动使用所选应用的容器地址"
+              />
+            </Field>
+          </SettingsGroup>
+          <SettingsGroup
+            title="文件存储"
+            description="发布文件存入私有 OSS Bucket，凭证留空会保留已保存的值。"
+          >
+            <Field required label="OSS 地域" htmlFor="site-ossRegion">
+              <Input id="site-ossRegion" {...register('ossRegion')} placeholder="oss-cn-hangzhou" required />
+            </Field>
+            <Field required label="私有 OSS Bucket" htmlFor="site-ossBucket">
+              <Input id="site-ossBucket" {...register('ossBucket')} required />
+            </Field>
+            <Field label="OSS AccessKey ID" htmlFor="site-ossAccessKeyId">
+              <Input
+                id="site-ossAccessKeyId"
                 type="password"
                 autoComplete="new-password"
                 {...register('ossAccessKeyId')}
@@ -231,38 +261,38 @@ export function FolioSettingsCard() {
                   r?.ossAccessKeyIdMasked ? `已保存 ${r.ossAccessKeyIdMasked}，留空保留` : 'AccessKey ID'
                 }
               />
-            </label>
-            <label className="space-y-1 text-sm">
-              OSS AccessKey Secret
+            </Field>
+            <Field label="OSS AccessKey Secret" htmlFor="site-ossAccessKeySecret">
               <Input
+                id="site-ossAccessKeySecret"
                 type="password"
                 autoComplete="new-password"
                 {...register('ossAccessKeySecret')}
                 placeholder={r?.hasOssSecret ? '已保存，留空保留' : 'AccessKey Secret'}
               />
-            </label>
-            <div className="folio-config-heading sm:col-span-2">
-              <span>3</span>HTTPS 与证书
-            </div>
-            <label className="space-y-1 text-sm sm:col-span-2">
-              HTTPS 证书方式
-              <select className={selectClass} {...register('tlsMode')}>
+            </Field>
+          </SettingsGroup>
+          <SettingsGroup
+            title="HTTPS 与证书"
+            description="选择自动签发或复用已有证书，保留当前服务的证书管理方式。"
+          >
+            <Field label="HTTPS 证书方式" htmlFor="site-tlsMode">
+              <select id="site-tlsMode" className={selectClass} {...register('tlsMode')}>
                 <option value="alidns">阿里云 DNS：自动签发与续期</option>
                 <option value="cloudflare">Cloudflare：自动签发与续期</option>
                 <option value="certificate">复用 Dokploy 中已有的泛域名证书</option>
                 <option value="resolver">复用已有 DNS 证书解析器</option>
               </select>
-            </label>
+            </Field>
             {['alidns', 'cloudflare'].includes(mode) && (
               <>
-                <label className="space-y-1 text-sm">
-                  证书联系邮箱
-                  <Input type="email" {...register('acmeEmail')} required />
-                </label>
+                <Field required label="证书联系邮箱" htmlFor="site-acmeEmail">
+                  <Input id="site-acmeEmail" type="email" {...register('acmeEmail')} required />
+                </Field>
                 {mode === 'alidns' && (
-                  <label className="space-y-1 text-sm">
-                    DNS AccessKey ID
+                  <Field label="DNS AccessKey ID" htmlFor="site-dnsAccessKeyId">
                     <Input
+                      id="site-dnsAccessKeyId"
                       type="password"
                       autoComplete="new-password"
                       {...register('dnsAccessKeyId')}
@@ -272,24 +302,27 @@ export function FolioSettingsCard() {
                           : '具有目标域名 DNS 权限的 AccessKey ID'
                       }
                     />
-                  </label>
+                  </Field>
                 )}
-                <label className="space-y-1 text-sm">
-                  {mode === 'alidns' ? 'DNS AccessKey Secret' : 'Cloudflare API Token'}
+                <Field
+                  label={mode === 'alidns' ? 'DNS AccessKey Secret' : 'Cloudflare API Token'}
+                  htmlFor="site-dnsAccessKeySecret"
+                >
                   <Input
+                    id="site-dnsAccessKeySecret"
                     type="password"
                     autoComplete="new-password"
                     {...register('dnsAccessKeySecret')}
                     placeholder={r?.tlsMode === mode && r.hasDnsSecret ? '已保存，留空保留' : 'DNS 凭证'}
                   />
-                </label>
-                <p className="text-xs text-muted-foreground sm:col-span-2">
+                </Field>
+                <p className="text-xs text-muted-foreground settings-span">
                   {mode === 'alidns'
                     ? '需要读取域名区域和 DNS 记录，以及新增、删除 TXT 记录的权限。'
                     : 'Token 需要目标区域的 Zone Read 与 DNS Edit 权限。'}{' '}
                   DNS 凭证与 OSS 凭证独立，加密保存后由 EAT 配置到 Traefik，自动完成证书申请和续期。
                 </p>
-                <label className="flex items-center gap-2 text-sm sm:col-span-2">
+                <label className="settings-toggle settings-span">
                   <input type="checkbox" {...register('autoDns')} />
                   自动添加 *.{domain || 'Folio 域名'} → {target || '部署入口'}{' '}
                   的解析（仅在不存在时添加，不覆盖已有记录）
@@ -298,9 +331,13 @@ export function FolioSettingsCard() {
             )}
             {mode === 'certificate' && (
               <>
-                <label className="space-y-1 text-sm sm:col-span-2">
-                  已有泛域名证书
-                  <select className={selectClass} {...register('certificateId')} required>
+                <Field required label="已有泛域名证书" htmlFor="site-certificateId">
+                  <select
+                    id="site-certificateId"
+                    className={selectClass}
+                    {...register('certificateId')}
+                    required
+                  >
                     <option value="">
                       {options.isLoading ? '正在读取…' : '请选择 EAT 所在服务器上的证书'}
                     </option>
@@ -310,16 +347,15 @@ export function FolioSettingsCard() {
                       </option>
                     ))}
                   </select>
-                </label>
-                <p className="text-xs text-muted-foreground sm:col-span-2">
+                </Field>
+                <p className="text-xs text-muted-foreground settings-span">
                   证书需覆盖 *.{domain || 'Folio 域名'}，并已在 Dokploy 中安装。续期和证书更新由原有流程负责。
                 </p>
               </>
             )}
             {mode === 'resolver' && (
-              <label className="space-y-1 text-sm sm:col-span-2">
-                已有 DNS 证书解析器
-                <select className={selectClass} {...register('resolverName')} required>
+              <Field required label="已有 DNS 证书解析器" htmlFor="site-resolverName">
+                <select id="site-resolverName" className={selectClass} {...register('resolverName')} required>
                   <option value="">{options.isLoading ? '正在读取…' : '请选择 DNS 解析器'}</option>
                   {options.data?.resolvers.map((name) => (
                     <option value={name} key={name}>
@@ -327,84 +363,92 @@ export function FolioSettingsCard() {
                     </option>
                   ))}
                 </select>
-              </label>
+              </Field>
             )}
             {options.error && ['certificate', 'resolver'].includes(mode) && (
-              <p role="alert" className="text-sm text-destructive sm:col-span-2">
+              <p role="alert" className="text-sm text-destructive settings-span">
                 {options.error.message}
               </p>
             )}
-            <div className="sm:col-span-2">
-              <Button type="submit" variant="outline" loading={save.isPending} disabled={!isDirty}>
-                保存配置
-              </Button>
-            </div>
-          </fieldset>
-        </form>
-        <div className="rounded-md border p-3 text-sm space-y-2">
-          <p>
-            DNS 记录：
-            <code className="break-all">
-              *.{domain || 'sites.example.com'} → {target || 'Dokploy 入口'}
-            </code>
-          </p>
-          <p className="text-xs text-muted-foreground">
-            未勾选自动添加时，请在 DNS 控制台手动添加 A / AAAA / CNAME。启用时会验证多个随机子域名及实际 HTTPS
-            访问。首次配置自动证书会重载共享 Traefik。
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            disabled={!r?.configured || r.enabled || working || isDirty || save.isPending}
-            loading={action.isPending && action.variables === 'enable'}
-            onClick={() => action.mutate('enable')}
-          >
-            检查并启用
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={!r?.configured || working || r.status === 'disabled'}
-            loading={action.isPending && action.variables === 'disable'}
-            onClick={() => action.mutate('disable')}
-          >
-            停用并清理入口
-          </Button>
-          {isDirty && <span className="text-xs text-muted-foreground">请先保存配置</span>}
-          {r?.enabled && (
-            <span className="text-xs text-muted-foreground">修改配置前先停用；历史版本和评论会保留。</span>
-          )}
-        </div>
-        {!!r?.checks.length && (
-          <ol aria-label="Folio 启用检查" className="space-y-3">
-            {r.checks.map((check) => (
-              <li key={check.id} className="flex items-start gap-2 text-sm">
-                {check.status === 'running' ? (
-                  <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin" />
-                ) : check.status === 'passed' ? (
-                  <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" />
-                ) : (
-                  <XCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
-                )}
-                <div className="min-w-0">
-                  <p>{check.name}</p>
-                  <p className="break-words text-xs text-muted-foreground">{check.message}</p>
-                </div>
-              </li>
-            ))}
-          </ol>
+          </SettingsGroup>
+        </fieldset>
+        <SettingsActions
+          pending={save.isPending}
+          dirty={isDirty}
+          saved={save.isSuccess}
+          disabled={!!frozen || action.isPending}
+          error={save.error?.message ?? form.formState.errors.root?.message}
+        />
+      </form>
+      <div className="settings-info">
+        <p>
+          DNS 记录：
+          <code className="break-all">
+            *.{domain || 'sites.example.com'} → {target || 'Dokploy 入口'}
+          </code>
+        </p>
+        <p className="text-xs text-muted-foreground">
+          未勾选自动添加时，请在 DNS 控制台手动添加 A / AAAA / CNAME。启用时会验证多个随机子域名及实际 HTTPS
+          访问。首次配置自动证书会重载共享 Traefik。
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          disabled={!r?.configured || r.enabled || working || isDirty || save.isPending || action.isPending}
+          loading={action.isPending && action.variables === 'enable'}
+          onClick={() => action.mutate('enable')}
+        >
+          检查并启用
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={
+            !r?.configured || working || r.status === 'disabled' || action.isPending || save.isPending
+          }
+          loading={action.isPending && action.variables === 'disable'}
+          onClick={() => action.mutate('disable')}
+        >
+          停用并清理入口
+        </Button>
+        {isDirty && <span className="text-xs text-muted-foreground">请先保存配置</span>}
+        {r?.enabled && (
+          <span className="text-xs text-muted-foreground">修改配置前先停用；历史版本和评论会保留。</span>
         )}
-        {r?.lastError && (
-          <p
-            role="alert"
-            className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
-          >
-            {r.lastError}
-          </p>
-        )}
-        <FolioCdnSettings folio={r} />
-      </CardContent>
-    </Card>
+      </div>
+      {!!r?.checks.length && (
+        <ol aria-label="Folio 启用检查" className="space-y-3">
+          {r.checks.map((check) => (
+            <li key={check.id} className="flex items-start gap-2 text-sm">
+              {check.status === 'running' ? (
+                <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin" />
+              ) : check.status === 'passed' ? (
+                <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" />
+              ) : (
+                <XCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
+              )}
+              <div className="min-w-0">
+                <p>{check.name}</p>
+                <p className="break-words text-xs text-muted-foreground">{check.message}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+      {r?.lastError && (
+        <p
+          role="alert"
+          className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+        >
+          {r.lastError}
+        </p>
+      )}
+      {action.error && (
+        <p role="alert" className="settings-notice text-destructive">
+          {action.error.message}
+        </p>
+      )}
+    </SettingsSection>
   );
 }

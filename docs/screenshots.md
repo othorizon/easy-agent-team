@@ -3,6 +3,7 @@
 README 里挑了一部分，这里是全部。所有画面来自同一份可复现的演示数据，生成方式见
 [`scripts/demo/README.md`](../scripts/demo/README.md)：数据经平台自己的 API 写入，
 部署、构建日志、数据库账号都是真跑出来的，命令行录屏是把命令真执行一遍录的。
+系统设置截图单独使用本地 API 模拟数据生成，复现与验证方式见[系统设置](settings.md)，不会修改真实配置。
 
 演示里的这支团队：管理员，李维（后端 / 能力建设者），周琪（运营），孙浩（前端），
 吴敏（新同事），郑楠（数据）。
@@ -122,6 +123,12 @@ README 里挑了一部分，这里是全部。所有画面来自同一份可复�
 ![用户管理](assets/screenshots/users.png)
 
 ![系统设置](assets/screenshots/settings.png)
+
+系统设置按 AI 与模型、应用托管、Folio 发布分组，右侧只显示当前分类；每项独立保存并保留切换前的草稿。
+
+<img src="assets/screenshots/settings-mobile.png" alt="移动端系统设置" width="390" />
+
+移动端使用原生分类选择器，表单单列排布，说明、保存反馈和接入状态随当前分类展示。
 
 ![安装与接入](assets/screenshots/install.png)
 

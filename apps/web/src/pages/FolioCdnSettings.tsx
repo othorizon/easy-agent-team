@@ -12,6 +12,15 @@ import { api } from '../api';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
+import { Field } from '../components/form';
+import {
+  SettingsActions,
+  SettingsGroup,
+  SettingsLoadError,
+  SettingsLoading,
+  SettingsSection,
+} from '../components/settings';
+import { Link } from 'react-router-dom';
 
 const statusNames: Record<string, string> = {
   disabled: '未接入',
@@ -24,10 +33,17 @@ const statusNames: Record<string, string> = {
   failed: '需要恢复',
   conflict: '外部修改冲突',
 };
-export function FolioCdnSettings({ folio }: { folio?: SiteSettingsInfo }) {
+export function FolioCdnSettings({ active = true }: { active?: boolean }) {
+  const folioQuery = useQuery({
+    queryKey: ['site-settings'],
+    queryFn: () => api<SiteSettingsInfo>('GET', '/api/admin/site-settings'),
+    enabled: active,
+  });
+  const folio = folioQuery.data;
   const cache = useQueryClient();
   const query = useQuery({
     queryKey: ['site-cdn'],
+    enabled: active,
     queryFn: () => api<SiteCdnInfo>('GET', '/api/admin/site-settings/cdn'),
     refetchInterval: 5000,
   });
@@ -70,18 +86,37 @@ export function FolioCdnSettings({ folio }: { folio?: SiteSettingsInfo }) {
     onError: (e: Error) => toast.error(e.message),
   });
   const source = watch('credentialSource');
+  if (!r)
+    return (
+      <SettingsSection title="CDN 加速" description="为 Folio 接入阿里云 CDN，加速静态资源访问。">
+        {query.isError ? (
+          <SettingsLoadError error={query.error} retry={() => void query.refetch()} />
+        ) : (
+          <SettingsLoading />
+        )}
+      </SettingsSection>
+    );
   return (
-    <section aria-label="阿里云 CDN" className="min-w-0 space-y-4 border-t pt-5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="font-semibold">阿里云 CDN</h3>
-        <Badge variant={r?.connected ? 'default' : 'secondary'}>{statusNames[r?.status ?? 'disabled']}</Badge>
-      </div>
-      <p className="text-sm text-muted-foreground">
-        复用 Folio
-        域名、部署入口与源站证书。网关响应头控制缓存，公开及密码 Folio 的静态资源缓存 30 天；HTML 保留入口验证。
-      </p>
-      <p className="rounded-md border p-3 text-sm text-muted-foreground">
-        改密码、改权限和删除会异步清理 CDN 缓存。静态文件命中缓存时不检查密码，持有文件链接的人可能直接访问；浏览器已经缓存的文件无法撤回。
+    <SettingsSection
+      title="CDN 加速"
+      description="为 Folio 接入阿里云 CDN，复用发布域名、部署入口与源站证书。保存配置后，系统会检查实际接入状态。"
+      status={<Badge variant={r.connected ? 'default' : 'secondary'}>{statusNames[r.status]}</Badge>}
+    >
+      {!folio?.configured && (
+        <p className="settings-info">
+          请先在
+          <Link to="?section=folio" className="underline underline-offset-4">
+            基础发布
+          </Link>
+          中保存 Folio 配置，再接入 CDN。
+        </p>
+      )}
+      {folioQuery.isError && (
+        <SettingsLoadError error={folioQuery.error} retry={() => void folioQuery.refetch()} />
+      )}
+      <p className="settings-info">
+        公开和密码访问的 Folio 静态资源缓存 30 天，HTML 保留入口验证。 改密码、改权限和删除会异步清理 CDN
+        缓存。静态文件命中缓存时不检查密码，持有文件链接的人可能直接访问；浏览器已经缓存的文件无法撤回。
       </p>
       {query.error && (
         <p role="alert" className="text-sm text-destructive">
@@ -92,105 +127,122 @@ export function FolioCdnSettings({ folio }: { folio?: SiteSettingsInfo }) {
         onSubmit={form.handleSubmit((v) => {
           const p = updateSiteCdnSchema.safeParse(v);
           if (p.success) save.mutate(p.data);
-          else toast.error(p.error.issues[0].message);
+          else form.setError('root', { message: p.error.issues[0].message });
         })}
-        className="space-y-4"
+        className="settings-form"
       >
-        <fieldset disabled={save.isPending || retry.isPending} className="grid min-w-0 gap-4 sm:grid-cols-2">
-          <label className="flex items-center gap-2 text-sm sm:col-span-2">
-            <input type="checkbox" {...register('enabled')} />
-            启用 CDN（保存后检查接入）
-          </label>
-          <label className="space-y-1 text-sm">
-            加速区域
-            <select
-              aria-label="CDN 加速区域"
-              {...register('scope')}
-              className="h-9 w-full rounded-md border bg-background px-2"
-            >
-              <option value="domestic">中国内地</option>
-              <option value="global">全球</option>
-              <option value="overseas">全球但不含中国内地</option>
-            </select>
-          </label>
-          <label className="space-y-1 text-sm">
-            凭证来源
-            <select
-              aria-label="CDN 凭证来源"
-              {...register('credentialSource')}
-              className="h-9 w-full rounded-md border bg-background px-2"
-            >
-              <option value="independent">独立 RAM AccessKey</option>
-              <option value="alidns" disabled={folio?.tlsMode !== 'alidns'}>
-                显式复用 AliDNS 凭证（仍需 CDN 权限）
-              </option>
-            </select>
-          </label>
-          {source === 'independent' && (
-            <>
-              <label className="space-y-1 text-sm">
-                CDN AccessKey ID
-                <Input
-                  {...register('accessKeyId')}
-                  autoComplete="off"
-                  placeholder={r?.accessKeyIdMasked || 'RAM AccessKey ID'}
-                />
-              </label>
-              <label className="space-y-1 text-sm">
-                CDN AccessKey Secret
-                <Input
-                  {...register('accessKeySecret')}
-                  type="password"
-                  autoComplete="new-password"
-                  placeholder={r?.hasSecret ? '已保存，留空保留' : 'RAM AccessKey Secret'}
-                />
-              </label>
-            </>
-          )}
-          <label className="flex items-start gap-2 text-sm sm:col-span-2">
-            <input type="checkbox" className="mt-1" {...register('verifyOriginCertificate')} />
-            <span>
-              校验回源证书
-              <span className="mt-1 block text-xs text-muted-foreground">
-                关闭后仍使用 HTTPS 回源，但会放宽源站证书身份校验。
+        <fieldset disabled={save.isPending || retry.isPending} className="min-w-0">
+          <SettingsGroup
+            title="接入配置"
+            description="可使用独立 RAM 凭证，或明确选择复用具备 CDN 权限的 AliDNS 凭证。"
+          >
+            <label className="settings-toggle settings-span">
+              <input type="checkbox" {...register('enabled')} />
+              启用 CDN（保存后检查接入）
+            </label>
+            <Field label="加速区域" htmlFor="site-scope">
+              <select
+                id="site-scope"
+                aria-label="CDN 加速区域"
+                {...register('scope')}
+                className="settings-native-select"
+              >
+                <option value="domestic">中国内地</option>
+                <option value="global">全球</option>
+                <option value="overseas">全球但不含中国内地</option>
+              </select>
+            </Field>
+            <Field label="凭证来源" htmlFor="site-credentialSource">
+              <select
+                id="site-credentialSource"
+                aria-label="CDN 凭证来源"
+                {...register('credentialSource')}
+                className="settings-native-select"
+              >
+                <option value="independent">独立 RAM AccessKey</option>
+                <option value="alidns" disabled={folio?.tlsMode !== 'alidns'}>
+                  显式复用 AliDNS 凭证（仍需 CDN 权限）
+                </option>
+              </select>
+            </Field>
+            {source === 'independent' && (
+              <>
+                <Field label="CDN AccessKey ID" htmlFor="site-accessKeyId">
+                  <Input
+                    id="site-accessKeyId"
+                    {...register('accessKeyId')}
+                    autoComplete="off"
+                    placeholder={r?.accessKeyIdMasked || 'RAM AccessKey ID'}
+                  />
+                </Field>
+                <Field label="CDN AccessKey Secret" htmlFor="site-accessKeySecret">
+                  <Input
+                    id="site-accessKeySecret"
+                    {...register('accessKeySecret')}
+                    type="password"
+                    autoComplete="new-password"
+                    placeholder={r?.hasSecret ? '已保存，留空保留' : 'RAM AccessKey Secret'}
+                  />
+                </Field>
+              </>
+            )}
+          </SettingsGroup>
+          <SettingsGroup
+            title="回源与 DNS"
+            description="源站仍使用 HTTPS。DNS 管理会迁移当前直连记录，发现外部修改时暂停。"
+          >
+            <label className="settings-toggle settings-span">
+              <input type="checkbox" className="mt-1" {...register('verifyOriginCertificate')} />
+              <span>
+                校验回源证书
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  关闭后仍使用 HTTPS 回源，但会放宽源站证书身份校验。
+                </span>
               </span>
-            </span>
-          </label>
-          <label className="flex items-start gap-2 text-sm sm:col-span-2">
-            <input type="checkbox" className="mt-1" {...register('autoDns')} />
-            自动管理 Folio DNS（迁移当前直连记录；发现外部修改时暂停）
-          </label>
-          <p className="text-xs text-muted-foreground sm:col-span-2">
-            首次需要实名认证、开通 CDN 和 RAM 授权；区域包含中国内地时需要 ICP 备案。证书签发免费，CDN 流量与
-            HTTPS 请求按云服务规则计费。
-          </p>
-          <div className="flex flex-wrap gap-2 sm:col-span-2">
-            <Button
-              type="submit"
-              variant="outline"
-              disabled={!isDirty || !folio?.configured}
-              loading={save.isPending}
-            >
-              保存 CDN 配置
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={!r?.updatedAt || isDirty}
-              loading={retry.isPending}
-              onClick={() => retry.mutate()}
-            >
-              重新检查 / 恢复
-            </Button>
-          </div>
+            </label>
+            <label className="settings-toggle settings-span">
+              <input type="checkbox" className="mt-1" {...register('autoDns')} />
+              自动管理 Folio DNS（迁移当前直连记录；发现外部修改时暂停）
+            </label>
+            <p className="text-xs text-muted-foreground settings-span">
+              首次需要实名认证、开通 CDN 和 RAM 授权；区域包含中国内地时需要 ICP 备案。证书签发免费，CDN
+              流量与 HTTPS 请求按云服务规则计费。
+            </p>
+          </SettingsGroup>
         </fieldset>
+        <SettingsActions
+          pending={save.isPending}
+          dirty={isDirty}
+          saved={save.isSuccess}
+          disabled={!folio?.configured || retry.isPending}
+          error={save.error?.message ?? form.formState.errors.root?.message}
+        >
+          <Button
+            type="button"
+            variant="outline"
+            disabled={!r.updatedAt || isDirty || save.isPending}
+            loading={retry.isPending}
+            onClick={() => retry.mutate()}
+          >
+            重新检查 / 恢复
+          </Button>
+        </SettingsActions>
+        {retry.error && (
+          <p role="alert" className="settings-notice text-destructive">
+            {retry.error.message}
+          </p>
+        )}
       </form>
       {r && (
-        <div aria-live="polite" className="min-w-0 space-y-2 rounded-md border p-3 text-sm">
+        <div aria-live="polite" className="settings-status">
           <p>
-            配置意愿：{r.enabled ? '开启' : '关闭'} · 实际接入：{r.connected ? '已验证接入' : '未确认接入'}
+            配置意愿：{r.enabled ? '开启' : '关闭'} · 实际接入：
+            {r.connected ? '已验证接入' : '未确认接入'}
           </p>
-          <p>HTTPS 回源 · 回源证书校验：{r.verifyOriginCertificate ? '开启' : '关闭'}</p>
+          <p>
+            HTTPS 回源 · 回源证书校验：
+            {r.verifyOriginCertificate ? '开启' : '关闭'}
+          </p>
           {r.phase && <p className="break-words">{r.phase}</p>}
           {r.cname && <p className="break-all">CDN CNAME：{r.cname}</p>}
           <p>
@@ -206,17 +258,24 @@ export function FolioCdnSettings({ folio }: { folio?: SiteSettingsInfo }) {
                 : '尚未上传'}
           </p>
           <p>
-            缓存维护：{r.cacheRefresh.pending ? `刷新未完成（${r.cacheRefresh.pending} 个目录）` : '无待处理任务'}
+            缓存维护：
+            {r.cacheRefresh.pending ? `刷新未完成（${r.cacheRefresh.pending} 个目录）` : '无待处理任务'}
           </p>
           {r.cacheRefresh.lastCompletedAt && (
-            <p>最近刷新完成：{new Date(r.cacheRefresh.lastCompletedAt).toLocaleString()}</p>
+            <p>
+              最近刷新完成：
+              {new Date(r.cacheRefresh.lastCompletedAt).toLocaleString()}
+            </p>
           )}
           {r.cacheRefresh.lastError && (
-            <p role="alert" className="break-words text-destructive">{r.cacheRefresh.lastError}</p>
+            <p role="alert" className="break-words text-destructive">
+              {r.cacheRefresh.lastError}
+            </p>
           )}
           {r.cacheRefresh.retryAt && (
             <p className="text-xs text-muted-foreground">
-              下次刷新检查：{new Date(r.cacheRefresh.retryAt).toLocaleString()}；可点击“重新检查 / 恢复”重试。
+              下次刷新检查：{new Date(r.cacheRefresh.retryAt).toLocaleString()}
+              ；可点击“重新检查 / 恢复”重试。
             </p>
           )}
           {r.certificateSyncError && (
@@ -233,7 +292,10 @@ export function FolioCdnSettings({ folio }: { folio?: SiteSettingsInfo }) {
             <p className="text-xs text-muted-foreground">下次检查：{new Date(r.retryAt).toLocaleString()}</p>
           )}
           {r.drainUntil && (
-            <p>DNS 传播等待至：{new Date(r.drainUntil).toLocaleString()}；期间保留 CDN 与证书。</p>
+            <p>
+              DNS 传播等待至：{new Date(r.drainUntil).toLocaleString()}
+              ；期间保留 CDN 与证书。
+            </p>
           )}
           {r.dnsInstructions.length > 0 && (
             <div className="space-y-2">
@@ -254,6 +316,6 @@ export function FolioCdnSettings({ folio }: { folio?: SiteSettingsInfo }) {
           )}
         </div>
       )}
-    </section>
+    </SettingsSection>
   );
 }
