@@ -21,6 +21,7 @@ import { SkillsModule } from './skills/skills.module';
 import { TemplatesModule } from './templates/templates.module';
 import { UsersModule } from './users/users.module';
 import { SitesModule } from './sites/sites.module';
+import { LlmGatewayModule } from './llm-gateway/llm-gateway.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { SitesModule } from './sites/sites.module';
     DbsModule,
     DeployModule,
     SitesModule,
+    LlmGatewayModule,
   ],
   controllers: [HealthController],
   providers: [

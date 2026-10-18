@@ -52,9 +52,10 @@ export function UsersPage() {
 
   const update = useMutation({
     mutationFn: (v: { id: string; role?: 'admin' | 'member'; status?: 'active' | 'disabled' }) =>
-      api('PATCH', `/api/users/${v.id}`, { role: v.role, status: v.status }),
+      api<{ llmGatewaySyncPending?: boolean }>('PATCH', `/api/users/${v.id}`, { role: v.role, status: v.status }),
     onSuccess: (_d, v) => {
-      toast.success(v.status === 'disabled' ? '已禁用（其全部 Token 已吊销）' : '已更新');
+      toast.success(v.status === 'disabled' ? '已禁用（其 EAT 登录凭证已吊销）' : '已更新');
+      if (_d.llmGatewaySyncPending) toast.info('模型 API Key 的状态仍在同步，请在“LLM API 网关 → 成员与额度”查看进度');
       invalidate();
     },
     onError,
@@ -87,7 +88,7 @@ export function UsersPage() {
     <div className="space-y-5">
       <PageHeader
         title="用户"
-        description="账号由管理员创建后线下告知初始密码，或开放注册让成员自助注册。禁用与重置密码都会立即吊销全部 Token。"
+        description="账号由管理员创建后线下告知初始密码，或开放注册让成员自助注册。禁用与重置密码会吊销 EAT 登录凭证，禁用还会同步停用模型 API Key。"
         actions={
           <>
             <Button variant="outline" onClick={() => setEditingRegistration(true)}>

@@ -26,6 +26,7 @@ import { configGet, configList, configSet, configUnset } from './commands/config
 import { startMcpServer } from './mcp.js';
 import { flushUpdateNotice } from './update.js';
 import { registerFolioCommands } from './commands/folio.js';
+import { registerLlmCommands } from './commands/llm.js';
 
 const program = new Command();
 
@@ -48,6 +49,7 @@ program.command('logout').description('退出登录（删除本地凭证）').ac
 program.command('whoami').description('查看当前登录身份').action(whoami);
 
 registerFolioCommands(program);
+registerLlmCommands(program);
 
 const env = program.command('env').description('环境变量：查清单、拉取值、申请权限');
 env.command('list [environment]').description('列出可见的环境与变量（key + 备注 + 权限状态）').action(envList);

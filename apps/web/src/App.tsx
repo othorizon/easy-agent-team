@@ -8,6 +8,7 @@ import {
   LogOut,
   Menu,
   MonitorSmartphone,
+  Network,
   Plug,
   Rocket,
   Settings,
@@ -45,6 +46,7 @@ import { McpConfigsPage } from './pages/McpConfigs';
 import { AppsPage } from './pages/Apps';
 import { RequestsPage } from './pages/Requests';
 import { SettingsPage } from './pages/Settings';
+import { LlmGatewayPage } from './pages/LlmGateway';
 import { SkillDetailPage } from './pages/SkillDetail';
 import { SkillsPage } from './pages/Skills';
 import { TemplatesPage } from './pages/Templates';
@@ -86,6 +88,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: '资源',
     items: [
       { to: '/db', label: '数据库', icon: Database },
+      { to: '/llm-gateway', label: 'LLM API 网关', icon: Network },
       { to: '/apps', label: '应用', icon: Rocket },
       { to: '/folios', label: 'Folio', icon: Files },
     ],
@@ -292,6 +295,7 @@ export function App() {
       <Route path="/help" element={<RequireAuth><HelpPage /></RequireAuth>} />
       <Route path="/help/:id" element={<RequireAuth><HelpDetailPage /></RequireAuth>} />
       <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
+      <Route path="/llm-gateway" element={<RequireAuth><LlmGatewayPage /></RequireAuth>} />
       <Route path="/users" element={<RequireAuth><UsersPage /></RequireAuth>} />
       <Route path="/install" element={<RequireAuth><InstallPage /></RequireAuth>} />
       <Route path="/device" element={<RequireAuth><DevicePage /></RequireAuth>} />

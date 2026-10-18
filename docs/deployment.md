@@ -106,6 +106,12 @@ eat deploy easy-agent-team
 
 Dokploy 会按它为该应用配置的 Git 源重新构建部署——升级前先把要上线的提交推送上去。
 
+## LLM API 网关接入
+
+执行 `pnpm db:migrate` 应用 `0026_llm_gateway.sql`，同步升级服务端、Web 和 CLI（0.10.0）。管理员在“系统设置 → LLM API 网关设置”填写 New API 站点根 URL 与专用普通公共账户的系统访问令牌，测试并保存后即可使用；无须额外功能开关，也不需要用户在 New API 开户。
+
+公共账户需有可用模型和足够钱包余额。管理令牌依赖 `EAT_KEK` 加密，令牌更换必须仍属于同一个实例及账户。个人 Key 的额度是消费限制，不会给公共钱包充值。生命周期、原版 New API 并发额度配置边界及故障处理见 [LLM API 网关说明](llm-gateway.md)。
+
 ## 10. 故障排查
 
 | 现象 | 排查 |

@@ -1,5 +1,6 @@
 import {
   boolean,
+  bigint,
   check,
   index,
   integer,
@@ -26,6 +27,61 @@ export const users = pgTable('user', {
     .default('active'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const llmGatewaySettings = pgTable('llm_gateway_setting', {
+  id: integer('id').primaryKey().default(1),
+  apiUrl: text('api_url').notNull(),
+  accessTokenEncrypted: text('access_token_encrypted').notNull(),
+  accountId: integer('account_id').notNull(),
+  accountName: text('account_name').notNull(),
+  defaultQuota: bigint('default_quota', { mode: 'number' }).notNull().default(0),
+  currency: jsonb('currency').$type<import('@eat/shared').LlmCurrency>().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const llmGatewayUsers = pgTable('llm_gateway_user', {
+  userId: uuid('user_id').primaryKey().references(() => users.id),
+  initialQuota: bigint('initial_quota', { mode: 'number' }),
+  giftClaimed: boolean('gift_claimed').notNull().default(false),
+  disabled: boolean('disabled').notNull().default(false),
+  /** Desired lifetime allocation; consumption remains authoritative in New API. */
+  allocatedQuota: bigint('allocated_quota', { mode: 'number' }).notNull().default(0),
+  userEnabled: boolean('user_enabled').notNull().default(true),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const llmGatewayKeys = pgTable('llm_gateway_key', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  upstreamId: integer('upstream_id').unique(),
+  upstreamName: text('upstream_name').notNull().unique(),
+  state: text('state').$type<'creating' | 'current' | 'retired'>().notNull().default('creating'),
+  creationAttempted: boolean('creation_attempted').notNull().default(false),
+  maskedKey: text('masked_key').notNull().default(''),
+  upstreamStatus: integer('upstream_status').notNull().default(1),
+  remainingQuota: bigint('remaining_quota', { mode: 'number' }).notNull().default(0),
+  usedQuota: bigint('used_quota', { mode: 'number' }).notNull().default(0),
+  lastError: text('last_error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  syncedAt: timestamp('synced_at', { withTimezone: true }),
+}, (t) => [
+  uniqueIndex('llm_gateway_one_current_key').on(t.userId).where(sql`${t.state} <> 'retired'`),
+  index('llm_gateway_key_owner').on(t.userId),
+]);
+
+export const llmGatewayOperations = pgTable('llm_gateway_operation', {
+  id: uuid('id').primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  actorId: uuid('actor_id').notNull().references(() => users.id),
+  kind: text('kind').notNull(),
+  payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+  applied: boolean('applied').notNull().default(false),
+  state: text('state').$type<'pending' | 'failed' | 'done'>().notNull().default('pending'),
+  attempts: integer('attempts').notNull().default(0),
+  lastError: text('last_error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('llm_gateway_operations_owner').on(t.userId)]);
 
 /** 页面：访问策略属于页面，所有历史发布共用；文件快照保持不可变。 */
 export const sites = pgTable('site', {

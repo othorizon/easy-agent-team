@@ -26,6 +26,7 @@ import { TableSkeleton } from '../components/ui/skeleton';
 import { Switch } from '../components/ui/switch';
 import { cn } from '../lib/utils';
 import { FolioSettingsCard } from './FolioSettings';
+import { LlmGatewaySettingsCard } from './LlmGatewaySettings';
 
 /** Radix Select 不接受空字符串作为选项值，「不绑定」用哨兵值代替 */
 const NONE = '__none__';
@@ -36,6 +37,7 @@ export function SettingsPage() {
     <div className="space-y-5">
       <PageHeader title="系统设置" description="平台级接入配置，仅管理员可见。密钥均加密存储。" />
       <AiSettingsCard />
+      <LlmGatewaySettingsCard />
       <DokploySettingsCard />
       <FolioSettingsCard />
     </div>

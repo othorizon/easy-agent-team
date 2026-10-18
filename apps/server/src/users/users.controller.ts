@@ -25,12 +25,14 @@ import { CurrentUser, Roles, type AuthUser } from '../auth/auth.decorators';
 import { ZodValidationPipe } from '../common/zod.pipe';
 import { DB, type Db } from '../db/db.module';
 import { apiTokens, users } from '../db/schema';
+import { LlmGatewayService } from '../llm-gateway/llm-gateway.service';
 
 @Controller('api/users')
 export class UsersController {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly audit: AuditService,
+    private readonly llmGateway: LlmGatewayService,
   ) {}
 
   /** 用户列表（登录即可见——授权、求助都需要选人） */
@@ -88,6 +90,7 @@ export class UsersController {
     if (body.status === 'disabled') {
       await this.revokeTokens(id);
     }
+    const llmGatewaySyncPending = body.status ? await this.llmGateway.onUserStatusChanged(id, actor.id) : false;
     await this.audit.record({
       actorId: actor.id,
       action: 'user.updated',
@@ -95,7 +98,7 @@ export class UsersController {
       targetId: id,
       meta: { role: body.role, status: body.status },
     });
-    return row;
+    return { ...row, llmGatewaySyncPending };
   }
 
   /** 重置密码（仅管理员）。吊销该用户全部 Token，强制重新登录 */
