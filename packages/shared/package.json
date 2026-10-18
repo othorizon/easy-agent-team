@@ -15,7 +15,7 @@
   },
   "files": ["dist"],
   "scripts": {
-    "build": "tsup src/index.ts --format esm,cjs --dts --clean",
+    "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "echo \"(shared 暂无测试)\""
   },

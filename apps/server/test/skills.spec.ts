@@ -205,9 +205,14 @@ describe('内置平台使用指南（决策 11）', () => {
       expect(r.body[0].slug).toBe('eat-platform-guide');
       expect(r.body[0].relation).toBe('builtin');
       expect(r.body[0].source).toBe('builtin');
-      expect(r.body[0].version).toBeGreaterThanOrEqual(1);
+      expect(r.body[0].version).toBeGreaterThan(36);
       expect(r.body[0].content).toContain('search_experiences');
       expect(r.body[0].content).toContain('PERMISSION_REQUIRED');
+      const guide = r.body[0];
+      expect(guide.content).toContain('references/llm-api.md');
+      expect(guide.content).not.toContain('https://docs.newapi.pro/zh/docs/api');
+      expect(guide.files.find((f: { path: string }) => f.path === 'references/llm-api.md').content)
+        .toContain('https://docs.newapi.pro/zh/docs/api');
     }
   });
 

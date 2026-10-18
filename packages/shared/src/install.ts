@@ -122,7 +122,7 @@ claude mcp add --transport http eat ${publicUrl}/mcp --header "Authorization: Be
 \`\`\`
 
 接入后客户端会拿到平台全套工具（环境变量清单与取值、权限申请、经验搜索、求助、应用创建与 env、部署与日志）。
-让 AI 先调一次 \`get_platform_guide\` 读平台使用指南——云端客户端没有 \`eat sync\` 那条路，行为规范只能靠这个工具取回去。
+让 AI 先调一次 \`get_platform_guide\` 读取精简指南入口，再按任务传 \`path\`（例如 \`references/applications.md\`）读取具体主题——云端客户端没有 \`eat sync\` 那条路，通过此工具按需取回参考文件。
 
 ## 二、本机客户端（stdio）
 

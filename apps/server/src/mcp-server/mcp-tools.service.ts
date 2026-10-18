@@ -95,8 +95,20 @@ export class McpToolsService {
     switch (name) {
       // ---------- 平台指南（只有远程接入有：云端客户端没有 eat sync 那条路） ----------
       case 'get_platform_guide': {
+        const { path } = parse(z.object({ path: z.string().min(1).max(200).optional() }), args);
         const skill = platformGuideSyncSkill();
-        return { slug: skill.slug, version: skill.version, content: skill.content };
+        if (!path || path === 'SKILL.md') {
+          return {
+            slug: skill.slug,
+            version: skill.version,
+            content: skill.content,
+            files: skill.files.map(({ path }) => ({ path })),
+          };
+        }
+        // Exact manifest lookup, never a filesystem read or an expansion of every reference.
+        const file = skill.files.find((file) => file.path === path);
+        if (!file) throw new BadRequestException({ error: 'GUIDE_FILE_NOT_FOUND', message: '指南文件不存在' });
+        return { slug: skill.slug, version: skill.version, path: file.path, content: file.content };
       }
 
       // ---------- 环境变量 ----------

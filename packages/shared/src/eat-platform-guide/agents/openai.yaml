@@ -1,0 +1,4 @@
+interface:
+  display_name: "eat 平台使用指南"
+  short_description: "按需查阅 EAT 配置、数据库、模型 API、部署与团队协作流程"
+  default_prompt: "使用 $eat-platform-guide 按当前任务选择参考文件并操作 EAT 平台资源。"

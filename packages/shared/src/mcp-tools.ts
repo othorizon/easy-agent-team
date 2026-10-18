@@ -36,7 +36,7 @@ export const EAT_MCP_SERVER_NAME = 'easy-agent-team';
  */
 export const EAT_MCP_INSTRUCTIONS = `easy-agent-team（eat）是这个团队的 AI 能力平台：环境变量与密钥、团队经验、人机求助、应用创建与部署都在这里统一授权与审计。
 
-先调用 get_platform_guide 读一次平台使用指南（里面是完整能力清单与行为规范），再开始干活。几条最要紧的：
+先调用 get_platform_guide 读取指南入口，再按任务用 path 参数读取对应 references 文件；只加载需要的主题，不必重复读取入口。几条最要紧的：
 - 需要内部服务的配置 / 密钥 / 连接串：先 list_env_variables 认路，再 get_env_values 取值；返回 PERMISSION_REQUIRED 就用 request_access 申请，不要重试、不要猜值、不要向用户索要。
 - 遇到搞不定的内部问题：先 search_experiences 搜团队经验，搜不到再 list_helpers + create_help_request 找真人。
 - 看到 eat CLI 或团队 Skill 更新提示：在任务收尾或任务间隙主动建议并询问用户，用户同意后才按授权范围更新；已有明确授权无需重复确认，同一更新在本次对话中已询问或被选择稍后 / 拒绝时不要重复询问。
@@ -369,8 +369,13 @@ function deployTools(): EatToolDef[] {
 const platformGuideTool: EatToolDef = {
   name: 'get_platform_guide',
   description:
-    '读取 eat 平台使用指南（完整能力清单与行为规范：怎么取配置、无权限怎么申请、什么时候搜经验、什么时候求助、应用与部署怎么做）。**第一次使用本 MCP 的工具前先调用一次**，之后同一会话内不必重复调用。',
-  inputSchema: { type: 'object', properties: {} },
+    '按需读取 eat 平台指南。首次使用平台工具前不传 path，读取精简入口与参考文件清单；之后按任务传 path 读取一个主题，例如 references/applications.md。无需反复读取入口，也不要一次加载所有主题。',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: '可选，入口返回的文件路径；省略或 SKILL.md 读取指南入口' },
+    },
+  },
 };
 
 export function buildEatTools(mode: EatToolMode): EatToolDef[] {

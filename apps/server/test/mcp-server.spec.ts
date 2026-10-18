@@ -262,11 +262,41 @@ describe('工具', () => {
     expect(again.status).toBe('open');
   });
 
-  it('get_platform_guide 返回内置指南正文', async () => {
+  it('get_platform_guide 默认只返回入口和文件清单，不预加载所有主题', async () => {
     const r = await rpc('tools/call', { name: 'get_platform_guide', arguments: {} });
     const data = toolJson(r.body);
     expect(data.slug).toBe('eat-platform-guide');
     expect(data.content).toContain('easy-agent-team');
+    expect(data.content).toContain('references/llm-api.md');
+    expect(data.content).not.toContain('https://docs.newapi.pro/zh/docs/api');
+    expect(data.files).toContainEqual({ path: 'references/llm-api.md' });
+    expect(data.files.every((f: object) => Object.keys(f).length === 1)).toBe(true);
+  });
+
+  it('get_platform_guide 可按 path 读取一个主题，各客户端共用同一份文件', async () => {
+    const index = toolJson((await rpc('tools/call', { name: 'get_platform_guide', arguments: {} })).body);
+    for (const { path } of index.files) {
+      const r = await rpc('tools/call', { name: 'get_platform_guide', arguments: { path } });
+      expect(r.body.result.isError).not.toBe(true);
+      const data = toolJson(r.body);
+      expect(data.path).toBe(path);
+      expect(data.content.length).toBeGreaterThan(0);
+      expect(data).not.toHaveProperty('files');
+      if (path === 'references/llm-api.md') expect(data.content).toContain('https://docs.newapi.pro/zh/docs/api');
+    }
+    const root = toolJson((await rpc('tools/call', { name: 'get_platform_guide', arguments: { path: 'SKILL.md' } })).body);
+    expect(root.content).toBe(index.content);
+  });
+
+  it('get_platform_guide 拒绝清单外路径和非法参数', async () => {
+    for (const path of ['../config.ts', '/etc/passwd', 'references/missing.md']) {
+      const r = await rpc('tools/call', { name: 'get_platform_guide', arguments: { path } });
+      expect(r.body.result.isError).toBe(true);
+      expect(toolJson(r.body).error).toBe('GUIDE_FILE_NOT_FOUND');
+    }
+    const r = await rpc('tools/call', { name: 'get_platform_guide', arguments: { path: 123 } });
+    expect(r.body.result.isError).toBe(true);
+    expect(toolJson(r.body).error).toBe('VALIDATION_FAILED');
   });
 
   it('list_env_variables 走的是调用者自己的权限', async () => {
