@@ -1,6 +1,6 @@
 import type { DistillRequest, HelpRequestDetail } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Send, Trash2 } from 'lucide-react';
+import { ArrowLeft, Check, Send, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -18,6 +18,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input, Textarea } from '../components/ui/input';
 import { Switch } from '../components/ui/switch';
 import { formatDateTime } from '../lib/format';
+import { sendHelpReply, type HelpReplyInput } from '../lib/help-reply';
 import { HELP_STATUS_BADGE } from './Help';
 
 export function HelpDetailPage() {
@@ -26,6 +27,8 @@ export function HelpDetailPage() {
   const navigate = useNavigate();
   const me = getStoredUser();
   const [distilling, setDistilling] = useState(false);
+  // 已解决的求助默认重新打开；取消勾选可只留言（决策 66）。
+  const replyForm = useForm<{ content: string; reopen: boolean }>({ defaultValues: { content: '', reopen: true } });
 
   const detail = useQuery({
     queryKey: ['help', id],
@@ -34,14 +37,23 @@ export function HelpDetailPage() {
   });
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['help', id] });
+  const refreshHelp = () => Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['help', id] }),
+    queryClient.invalidateQueries({ queryKey: ['help-mine'] }),
+    queryClient.invalidateQueries({ queryKey: ['help-inbox'] }),
+  ]);
 
   const reply = useMutation({
-    mutationFn: (v: { content: string; reopen: boolean }) => api('POST', `/api/help-requests/${id}/reply`, v),
+    mutationFn: (v: HelpReplyInput) => sendHelpReply(id, v),
     // 回复会改状态（已解决的也会被重新打开），清单里的状态与待回复角标一起刷新
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['help-mine'] });
-      void queryClient.invalidateQueries({ queryKey: ['help-inbox'] });
-      invalidate();
+    onSuccess: ({ resolveError }, v) => {
+      replyForm.reset();
+      if (resolveError) {
+        toast.error(`回复已发送，但标记已解决失败：${resolveError.message}。请使用页头的“标记已解决”重试，无需再次发送回复。`);
+      } else {
+        toast.success(v.resolve ? '回复已发送并标记为已解决' : '回复已发送');
+      }
+      return refreshHelp();
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '回复失败'),
   });
@@ -49,7 +61,7 @@ export function HelpDetailPage() {
     mutationFn: () => api('POST', `/api/help-requests/${id}/resolve`, {}),
     onSuccess: () => {
       toast.success('已标记解决');
-      invalidate();
+      return refreshHelp();
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '操作失败'),
   });
@@ -85,15 +97,14 @@ export function HelpDetailPage() {
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '沉淀失败'),
   });
 
-  // reopen 只在已解决时有意义（决策 66），默认勾选：忘了取消只是多一次打扰，默认不勾则追问会悄悄消失
-  const replyForm = useForm<{ content: string; reopen: boolean }>({ defaultValues: { content: '', reopen: true } });
-
   if (!detail.data) return <PageLoading />;
   const r = detail.data;
   /** 正在删除的那条回复：只让它自己转圈，别让整列回复都变 loading */
   const deletingId = removeMessage.isPending ? removeMessage.variables : null;
   const isHelper = me?.id === r.helperId;
   const isRequester = me?.id === r.requesterId;
+  const canResolve = (isRequester || isHelper) && r.status !== 'resolved' && r.status !== 'closed';
+  const replyBusy = reply.isPending || resolve.isPending;
 
   return (
     <div className="space-y-5">
@@ -111,8 +122,8 @@ export function HelpDetailPage() {
             <div className="mt-2 flex flex-wrap items-center gap-1.5">{HELP_STATUS_BADGE[r.status]}</div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {(isRequester || isHelper) && r.status !== 'resolved' && r.status !== 'closed' && (
-              <Button variant="outline" onClick={() => resolve.mutate()} loading={resolve.isPending}>
+            {canResolve && (
+              <Button variant="outline" onClick={() => resolve.mutate()} loading={resolve.isPending} disabled={reply.isPending}>
                 标记已解决
               </Button>
             )}
@@ -215,15 +226,16 @@ export function HelpDetailPage() {
               <form
                 className="mt-1 flex flex-col gap-2 border-t pt-4"
                 onSubmit={replyForm.handleSubmit((v) => {
-                  reply.mutate(v);
-                  replyForm.reset();
+                  if (!replyBusy) reply.mutate(v);
                 })}
               >
                 <Textarea
                   rows={3}
                   placeholder="回复 / 追问…"
+                  disabled={replyBusy}
+                  maxLength={10000}
                   aria-invalid={!!replyForm.formState.errors.content}
-                  {...replyForm.register('content', { required: true })}
+                  {...replyForm.register('content', { required: true, validate: (value) => !!value.trim() })}
                 />
                 {r.status === 'resolved' && (
                   <label className="flex cursor-pointer items-start gap-2 text-sm">
@@ -233,6 +245,7 @@ export function HelpDetailPage() {
                       render={({ field }) => (
                         <Checkbox
                           checked={field.value}
+                          disabled={replyBusy}
                           onCheckedChange={(v) => field.onChange(v === true)}
                           className="mt-0.5"
                         />
@@ -246,10 +259,30 @@ export function HelpDetailPage() {
                     </span>
                   </label>
                 )}
-                <Button type="submit" loading={reply.isPending} className="w-fit">
-                  <Send />
-                  发送
-                </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="submit"
+                    loading={reply.isPending && !reply.variables?.resolve}
+                    disabled={replyBusy}
+                  >
+                    <Send />
+                    发送
+                  </Button>
+                  {canResolve && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      loading={reply.isPending && !!reply.variables?.resolve}
+                      disabled={replyBusy}
+                      onClick={replyForm.handleSubmit((v) => {
+                        if (!replyBusy) reply.mutate({ ...v, resolve: true });
+                      })}
+                    >
+                      <Check />
+                      回复并标记为已解决
+                    </Button>
+                  )}
+                </div>
               </form>
             )}
           </div>
