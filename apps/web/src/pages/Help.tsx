@@ -1,7 +1,7 @@
-import type { HelperInfo, HelpRequestInfo, HelpTargets, UpsertHelperProfileRequest } from '@eat/shared';
+import type { HelperInfo, HelpListResult, HelpTargets, UpsertHelperProfileRequest } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, Plus, UserCog } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -11,6 +11,7 @@ import { Combobox } from '../components/combobox';
 import { Empty } from '../components/empty';
 import { Field } from '../components/form';
 import { PageHeader } from '../components/page-header';
+import { PAGE_SIZE_OPTIONS, Pagination } from '../components/pagination';
 import { Segmented } from '../components/segmented';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -39,7 +40,6 @@ export const HELP_STATUS_BADGE: Record<string, JSX.Element> = {
  * 免得已经了结的历史把当下要处理的淹掉；两个页签共用同一个筛选值，切页签不重置。
  */
 const PENDING_HINT = '还等着某一方回应的求助：等待回复 + 已回复但未确认解决';
-const isPending = (r: HelpRequestInfo) => r.status === 'open' || r.status === 'answered';
 
 type MyProfile =
   | { registered: false }
@@ -57,13 +57,31 @@ export function HelpPage() {
   const queryClient = useQueryClient();
   const [asking, setAsking] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
-  // 方向（页签）与进展（筛选）两个维度都同步到 URL；等于默认值的不写进去
-  const [{ tab, status }, setParams] = useQueryParams({ tab: 'inbox', status: 'pending' });
+  // 方向、进展与分页同步到 URL；等于默认值的不写进去。
+  const [params, setParams] = useQueryParams({ tab: 'inbox', status: 'pending', page: '1', pageSize: '20' });
+  const tab = params.tab === 'mine' ? 'mine' : 'inbox';
+  const status = params.status === 'all' ? 'all' : 'pending';
+  const requestedPage = Number(params.page);
+  const page = Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+  const pageSize = PAGE_SIZE_OPTIONS.includes(Number(params.pageSize)) ? Number(params.pageSize) : 20;
+  const query = new URLSearchParams({ status, page: String(page), pageSize: String(pageSize) });
 
   const profile = useQuery({ queryKey: ['helper-me'], queryFn: () => api<MyProfile>('GET', '/api/helpers/me') });
   const targets = useQuery({ queryKey: ['help-targets'], queryFn: () => api<HelpTargets>('GET', '/api/helpers') });
-  const inbox = useQuery({ queryKey: ['help-inbox'], queryFn: () => api<HelpRequestInfo[]>('GET', '/api/help-requests/inbox') });
-  const mine = useQuery({ queryKey: ['help-mine'], queryFn: () => api<HelpRequestInfo[]>('GET', '/api/help-requests/mine') });
+  const inbox = useQuery({
+    queryKey: ['help-inbox', status, page, pageSize],
+    queryFn: () => api<HelpListResult>('GET', `/api/help-requests/inbox/page?${query}`),
+  });
+  const mine = useQuery({
+    queryKey: ['help-mine', status, page, pageSize],
+    queryFn: () => api<HelpListResult>('GET', `/api/help-requests/mine/page?${query}`),
+  });
+  const activeQuery = tab === 'mine' ? mine : inbox;
+  useEffect(() => {
+    if (activeQuery.data && !activeQuery.isFetching && params.page !== String(activeQuery.data.page)) {
+      setParams({ page: String(activeQuery.data.page) });
+    }
+  }, [activeQuery.data, activeQuery.isFetching, params.page, setParams]);
 
   const saveProfile = useMutation({
     mutationFn: (v: UpsertHelperProfileRequest) => api<MyProfile>('PUT', '/api/helpers/me', v),
@@ -96,24 +114,26 @@ export function HelpPage() {
 
   // tab 角标 = 需要我出手的数量（找我的：等我回复；我发起的：有新回复待我确认），
   // 与分段上的数量不是一回事——那个回答的是「切过去会有几条」，所以两者都留着。
-  const inboxOpen = (inbox.data ?? []).filter((r) => r.status === 'open').length;
-  const mineAnswered = (mine.data ?? []).filter((r) => r.status === 'answered').length;
+  const inboxOpen = inbox.data?.counts.attention ?? 0;
+  const mineAnswered = mine.data?.counts.attention ?? 0;
 
   // 分段上的数量按**当前页签**算：切页签数字跟着变，切筛选数字不变
-  const activeRows = (tab === 'mine' ? mine : inbox).data;
-  const pendingCount = (activeRows ?? []).filter(isPending).length;
+  const counts = activeQuery.data?.counts;
 
-  function RequestTable({ all, dir, loading, emptyText }: { all: HelpRequestInfo[]; dir: 'in' | 'out'; loading: boolean; emptyText: React.ReactNode }) {
-    const rows = status === 'pending' ? all.filter(isPending) : all;
+  function RequestTable({ data, dir, loading, emptyText }: { data?: HelpListResult; dir: 'in' | 'out'; loading: boolean; emptyText: React.ReactNode }) {
+    const rows = data?.items ?? [];
+    const allCount = data?.counts.all ?? 0;
     if (loading) return <TableSkeleton rows={2} />;
+    const request = dir === 'in' ? inbox : mine;
+    if (request.isError) return <Empty text="求助列表加载失败" action={<Button variant="outline" onClick={() => void request.refetch()}>重试</Button>} />;
     if (rows.length === 0) {
       // 全被筛掉和真的一条都没有是两回事：前者要给出口，后者才该讲怎么开始
-      return status === 'pending' && all.length > 0 ? (
+      return status === 'pending' && allCount > 0 ? (
         <Empty
           className="py-6"
-          text={`没有待回复的求助，${all.length} 条已了结的记录都在「全部」里。`}
+          text={`没有待回复的求助，${allCount} 条已了结的记录都在「全部」里。`}
           action={
-            <Button variant="outline" size="sm" onClick={() => setParams({ status: 'all' })}>
+            <Button variant="outline" size="sm" onClick={() => setParams({ status: 'all', page: '1' })}>
               查看全部
             </Button>
           }
@@ -184,7 +204,7 @@ export function HelpPage() {
         }
       />
 
-      <Tabs value={tab} onValueChange={(v) => setParams({ tab: v })}>
+      <Tabs value={tab} onValueChange={(v) => setParams({ tab: v, page: '1' })}>
         {/* 两个维度并排一行：左边页签选方向（实心轨道 = 导航），右边分段选进展（描边轨道 = 筛选），
             外观不同才不会被当成同一组开关；窄屏下换行，筛选仍紧挨着清单 */}
         <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -202,14 +222,14 @@ export function HelpPage() {
             variant="outline"
             ariaLabel="按进展筛选"
             value={status}
-            onChange={(v) => setParams({ status: v })}
+            onChange={(v) => setParams({ status: v, page: '1' })}
             options={[
               {
                 value: 'pending',
                 label: (
                   <>
                     <span title={PENDING_HINT}>待回复</span>
-                    {activeRows && <span className="text-xs tabular-nums opacity-60">{pendingCount}</span>}
+                    {counts && <span className="text-xs tabular-nums opacity-60">{counts.pending}</span>}
                   </>
                 ),
               },
@@ -218,7 +238,7 @@ export function HelpPage() {
                 label: (
                   <>
                     全部
-                    {activeRows && <span className="text-xs tabular-nums opacity-60">{activeRows.length}</span>}
+                    {counts && <span className="text-xs tabular-nums opacity-60">{counts.all}</span>}
                   </>
                 ),
               },
@@ -227,25 +247,43 @@ export function HelpPage() {
         </div>
         <TabsContent value="inbox" className="mt-4">
           <Card>
-            <CardContent>
+            <CardContent className="space-y-4">
               <RequestTable
-                all={inbox.data ?? []}
+                data={inbox.data}
                 dir="in"
                 loading={inbox.isLoading}
                 emptyText="暂无找你的求助。完善「可求助登记」的能力描述，同事的 AI 才找得到你。"
               />
+              {tab === 'inbox' && !inbox.isLoading && !inbox.isError && inbox.data && (
+                <Pagination
+                  total={inbox.data.total}
+                  page={inbox.data.page}
+                  pageSize={pageSize}
+                  onPageChange={(value) => setParams({ page: String(value) })}
+                  onPageSizeChange={(value) => setParams({ pageSize: String(value), page: '1' })}
+                />
+              )}
             </CardContent>
           </Card>
         </TabsContent>
         <TabsContent value="mine" className="mt-4">
           <Card>
-            <CardContent>
+            <CardContent className="space-y-4">
               <RequestTable
-                all={mine.data ?? []}
+                data={mine.data}
                 dir="out"
                 loading={mine.isLoading}
                 emptyText="暂无。AI 也可以通过 MCP 的 create_help_request 替你发起。"
               />
+              {tab === 'mine' && !mine.isLoading && !mine.isError && mine.data && (
+                <Pagination
+                  total={mine.data.total}
+                  page={mine.data.page}
+                  pageSize={pageSize}
+                  onPageChange={(value) => setParams({ page: String(value) })}
+                  onPageSizeChange={(value) => setParams({ pageSize: String(value), page: '1' })}
+                />
+              )}
             </CardContent>
           </Card>
         </TabsContent>

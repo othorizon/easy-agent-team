@@ -1,10 +1,12 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
 import {
   createHelpRequestSchema,
+  helpListQuerySchema,
   distillRequestSchema,
   replyHelpRequestSchema,
   upsertHelperProfileSchema,
   type CreateHelpRequest,
+  type HelpListQuery,
   type DistillRequest,
   type ReplyHelpRequest,
   type UpsertHelperProfileRequest,
@@ -63,6 +65,16 @@ export class HelpController {
   @Get('help-requests/inbox')
   inbox(@CurrentUser() user: AuthUser) {
     return this.help.listInbox(user);
+  }
+
+  @Get('help-requests/mine/page')
+  minePage(@CurrentUser() user: AuthUser, @Query(new ZodValidationPipe(helpListQuerySchema)) query: HelpListQuery) {
+    return this.help.listPage(user, 'mine', query);
+  }
+
+  @Get('help-requests/inbox/page')
+  inboxPage(@CurrentUser() user: AuthUser, @Query(new ZodValidationPipe(helpListQuerySchema)) query: HelpListQuery) {
+    return this.help.listPage(user, 'inbox', query);
   }
 
   @Get('help-requests/:id')

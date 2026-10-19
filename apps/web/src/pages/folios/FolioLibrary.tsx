@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
@@ -8,6 +8,8 @@ import {
 import { toast } from 'sonner';
 import type { SiteCapabilityInfo, SiteInfo } from '@eat/shared';
 import { api } from '../../api';
+import { PAGE_SIZE_OPTIONS, Pagination } from '../../components/pagination';
+import { useQueryParams } from '../../lib/use-query-params';
 import { Button } from '../../components/ui/button';
 import { Input, Textarea } from '../../components/ui/input';
 import {
@@ -115,10 +117,13 @@ export function FoliosPage() {
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [access, setAccess] = useState('authenticated');
-  const [query, setQuery] = useState('');
+  const [params, setParams] = useQueryParams({ q: '', scope: 'all', sort: 'updated', page: '1', pageSize: '20' });
+  const query = params.q;
+  const scope = params.scope === 'managed' ? 'managed' : 'all';
+  const sort: LibrarySort = params.sort === 'created' || params.sort === 'name' ? params.sort : 'updated';
+  const requestedPage = Number(params.page);
+  const pageSize = PAGE_SIZE_OPTIONS.includes(Number(params.pageSize)) ? Number(params.pageSize) : 20;
   const searchInput = useRef<HTMLInputElement>(null);
-  const [scope, setScope] = useState('all');
-  const [sort, setSort] = useState<LibrarySort>('updated');
   const [view, setView] = useState<LibraryView>(() => {
     try { return localStorage.getItem(viewPreference) === 'list' ? 'list' : 'grid'; }
     catch { return 'grid'; }
@@ -133,9 +138,18 @@ export function FoliosPage() {
     (site) =>
       (scope !== 'managed' || site.canManage) &&
       `${site.name} ${site.description} ${site.slug}`.toLowerCase().includes(query.trim().toLowerCase()),
-  ).sort((a, b) => sort === 'name'
+  ).sort((a, b) => (sort === 'name'
     ? a.name.localeCompare(b.name, 'zh-CN', { numeric: true })
-    : Date.parse(sort === 'created' ? b.createdAt : b.updatedAt) - Date.parse(sort === 'created' ? a.createdAt : a.updatedAt));
+    : Date.parse(sort === 'created' ? b.createdAt : b.updatedAt) - Date.parse(sort === 'created' ? a.createdAt : a.updatedAt))
+    || a.slug.localeCompare(b.slug));
+  const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
+  const page = Math.min(pageCount, Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1);
+  const pageItems = visible.slice((page - 1) * pageSize, page * pageSize);
+  useEffect(() => {
+    if (capability.data?.enabled && list.data && !list.isFetching && params.page !== String(page)) {
+      setParams({ page: String(page) });
+    }
+  }, [capability.data?.enabled, list.data, list.isFetching, params.page, page, setParams]);
   return (
     <Dialog
       open={creating}
@@ -171,10 +185,10 @@ export function FoliosPage() {
           <>
             <div className="folio-library-toolbar">
               <div className="folio-filter" role="group" aria-label="Folio 范围">
-                <button type="button" aria-pressed={scope === 'all'} onClick={() => setScope('all')}>
+                <button type="button" aria-pressed={scope === 'all'} onClick={() => setParams({ scope: 'all', page: '1' })}>
                   全部 Folio <span>{items.length}</span>
                 </button>
-                <button type="button" aria-pressed={scope === 'managed'} onClick={() => setScope('managed')}>
+                <button type="button" aria-pressed={scope === 'managed'} onClick={() => setParams({ scope: 'managed', page: '1' })}>
                   我管理的 <span>{items.filter((site) => site.canManage).length}</span>
                 </button>
               </div>
@@ -184,16 +198,16 @@ export function FoliosPage() {
                   <Input
                     ref={searchInput}
                     aria-label="搜索 Folio" value={query}
-                    onChange={(e) => setQuery(e.target.value)} placeholder="搜索 Folio…"
+                    onChange={(e) => setParams({ q: e.target.value, page: '1' })} placeholder="搜索 Folio…"
                   />
                   {query && (
                     <button type="button" aria-label="清空搜索" title="清空搜索" onClick={() => {
-                      setQuery('');
+                      setParams({ q: '', page: '1' });
                       searchInput.current?.focus();
                     }}><X /></button>
                   )}
                 </div>
-                <select className="folio-library-sort" aria-label="Folio 排序" value={sort} onChange={(e) => setSort(e.target.value as LibrarySort)}>
+                <select className="folio-library-sort" aria-label="Folio 排序" value={sort} onChange={(e) => setParams({ sort: e.target.value, page: '1' })}>
                   <option value="updated">最近更新</option>
                   <option value="created">最近创建</option>
                   <option value="name">名称排序</option>
@@ -228,8 +242,7 @@ export function FoliosPage() {
                 </p>
                 {query || scope !== 'all' ? (
                   <Button variant="outline" onClick={() => {
-                    setQuery('');
-                    setScope('all');
+                    setParams({ q: '', scope: 'all', page: '1' });
                     searchInput.current?.focus();
                   }}>重置筛选</Button>
                 ) : (
@@ -242,9 +255,18 @@ export function FoliosPage() {
                 )}
               </div>
             )}
-            {!!visible.length && <div className="folio-library-grid" data-view={view}>
-              {visible.map((site) => <FolioProject key={site.id} site={site} />)}
+            {!list.isLoading && !list.error && !!pageItems.length && <div className="folio-library-grid" data-view={view}>
+              {pageItems.map((site) => <FolioProject key={site.id} site={site} />)}
             </div>}
+            {!list.isLoading && !list.error && (
+              <Pagination
+                total={visible.length}
+                page={page}
+                pageSize={pageSize}
+                onPageChange={(value) => setParams({ page: String(value) })}
+                onPageSizeChange={(value) => setParams({ pageSize: String(value), page: '1' })}
+              />
+            )}
           </>
         )}
         <DialogContent className="folio-dialog sm:max-w-xl">

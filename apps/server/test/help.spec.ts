@@ -10,7 +10,8 @@ import { Test } from '@nestjs/testing';
 import * as bcrypt from 'bcryptjs';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
-import { createHmac } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
+import { helpListResultSchema } from '@eat/shared';
 import * as http from 'node:http';
 import * as path from 'node:path';
 import { Pool } from 'pg';
@@ -614,5 +615,71 @@ describe('求助删除', () => {
 
     expect((await api('DELETE', `/api/help-requests/${requestId}`, { token: requesterToken })).status).toBe(409);
     expect((await api('DELETE', `/api/help-requests/${requestId}`, { token: adminToken })).status).toBe(409);
+  });
+});
+
+describe('求助分页', () => {
+  it('可读取第 100 条以后的记录，筛选先于分页，计数和可见范围不受页码影响', async () => {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    try {
+      const db = drizzle(pool, { schema });
+      const people = ['requester', 'helper', 'outsider'].map((role) => ({
+        id: randomUUID(), name: `Pagination ${role}`, email: `pagination-${role}@example.test`,
+      }));
+      const passwordHash = await bcrypt.hash('pagination-test-password', 4);
+      await db.insert(schema.users).values(people.map((person) => ({ ...person, passwordHash })));
+      const tokens: string[] = [];
+      for (const person of people) {
+        tokens.push((await api('POST', '/api/auth/login', {
+          payload: { email: person.email, password: 'pagination-test-password' },
+        })).body.token);
+      }
+      const rows = Array.from({ length: 125 }, (_, i) => ({
+        id: randomUUID(), requesterId: people[0].id, helperId: people[1].id,
+        title: `Pagination fixture ${i}`, description: 'Test fixture', tried: 'Test fixture',
+        status: i < 100 ? 'resolved' as const : i < 115 ? 'open' as const : 'answered' as const,
+        updatedAt: new Date(Date.UTC(2020, 0, 1) - Math.floor(i / 2) * 1000),
+      }));
+      await db.insert(schema.helpRequests).values(rows);
+      const ordered = [...rows].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || b.id.localeCompare(a.id));
+      const getPage = async (direction: 'mine' | 'inbox', token: string, query: string) => {
+        const response = await api('GET', `/api/help-requests/${direction}/page?${query}`, { token });
+        expect(response.status).toBe(200);
+        return helpListResultSchema.parse(response.body);
+      };
+      const sixth = await getPage('inbox', tokens[1], 'status=all&page=6&pageSize=20');
+      expect(sixth).toMatchObject({ total: 125, page: 6, pageSize: 20, counts: { all: 125, pending: 25, attention: 15 } });
+      expect(sixth.items.map((r) => r.id)).toEqual(ordered.slice(100, 120).map((r) => r.id));
+      const last = await getPage('inbox', tokens[1], 'status=all&page=999&pageSize=20');
+      expect(last.page).toBe(7);
+      expect(last.items.map((r) => r.id)).toEqual(ordered.slice(120).map((r) => r.id));
+      const pending = await getPage('inbox', tokens[1], 'status=pending&page=1&pageSize=20');
+      expect(pending.total).toBe(25);
+      expect(pending.items.map((r) => r.id)).toEqual(ordered.slice(100, 120).map((r) => r.id));
+      const mine = await getPage('mine', tokens[0], 'status=pending&page=2&pageSize=20');
+      expect(mine.counts).toEqual({ all: 125, pending: 25, attention: 10 });
+      expect(mine.items.map((r) => r.id)).toEqual(ordered.slice(120).map((r) => r.id));
+      for (const [direction, token] of [['inbox', tokens[0]], ['mine', tokens[1]], ['inbox', tokens[2]], ['mine', tokens[2]]] as const) {
+        expect(await getPage(direction, token, 'status=all&page=10')).toMatchObject({
+          items: [], total: 0, page: 1, counts: { all: 0, pending: 0, attention: 0 },
+        });
+      }
+      // 原有 CLI / MCP 仍收到数组，新增分页接口不改变旧协议。
+      const legacy = await api('GET', '/api/help-requests/mine', { token: tokens[0] });
+      expect(legacy.status).toBe(200);
+      expect(Array.isArray(legacy.body)).toBe(true);
+      expect(legacy.body).toHaveLength(100);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('分页接口要求登录并拒绝非法页码、每页数量和状态', async () => {
+    for (const direction of ['mine', 'inbox']) {
+      expect((await api('GET', `/api/help-requests/${direction}/page`)).status).toBe(401);
+      for (const query of ['page=0', 'page=-1', 'page=1.5', 'page=Infinity', 'pageSize=0', 'pageSize=101', 'status=invalid']) {
+        expect((await api('GET', `/api/help-requests/${direction}/page?${query}`, { token: requesterToken })).status).toBe(400);
+      }
+    }
   });
 });

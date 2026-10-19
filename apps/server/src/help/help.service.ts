@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { and, desc, eq, gt, or, sql } from 'drizzle-orm';
 import { buildHelpFeishuCard, type HelpFeishuCardInput } from '@eat/shared';
-import type { CreateHelpRequest, HelpRequestDetail, HelpRequestInfo, HelpStatus } from '@eat/shared';
+import type { CreateHelpRequest, HelpListQuery, HelpListResult, HelpRequestDetail, HelpRequestInfo, HelpStatus } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
 import { isFullId, resolveShortId } from '../common/short-id';
@@ -183,6 +183,25 @@ export class HelpService {
       .orderBy(desc(helpRequests.updatedAt))
       .limit(100);
     return Promise.all(rows.map((r) => this.toInfo(r)));
+  }
+
+  async listPage(user: AuthUser, direction: 'mine' | 'inbox', query: HelpListQuery): Promise<HelpListResult> {
+    const visible = eq(direction === 'mine' ? helpRequests.requesterId : helpRequests.helperId, user.id);
+    const pending = or(eq(helpRequests.status, 'open'), eq(helpRequests.status, 'answered'))!;
+    const attention = eq(helpRequests.status, direction === 'mine' ? 'answered' : 'open');
+    const [counts] = await this.db.select({
+      all: sql<number>`count(*)::int`,
+      pending: sql<number>`(count(*) filter (where ${pending}))::int`,
+      attention: sql<number>`(count(*) filter (where ${attention}))::int`,
+    }).from(helpRequests).where(visible);
+    const total = query.status === 'pending' ? counts.pending : counts.all;
+    const page = Math.min(query.page, Math.max(1, Math.ceil(total / query.pageSize)));
+    const rows = await this.db.select().from(helpRequests)
+      .where(and(visible, query.status === 'pending' ? pending : undefined))
+      .orderBy(desc(helpRequests.updatedAt), desc(helpRequests.id))
+      .limit(query.pageSize)
+      .offset((page - 1) * query.pageSize);
+    return { items: await Promise.all(rows.map((r) => this.toInfo(r))), total, page, pageSize: query.pageSize, counts };
   }
 
   async detail(user: AuthUser, rawId: string): Promise<HelpRequestDetail> {

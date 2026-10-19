@@ -1,7 +1,7 @@
 import type { CreateDbInstanceRequest, DbAssignmentInfo, DbInstanceInfo } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRight, Plus } from 'lucide-react';
-import { useState } from 'react';
+import { ArrowRight, Plus, Search } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -11,6 +11,7 @@ import { Confirm } from '../components/confirm';
 import { Empty } from '../components/empty';
 import { Field, rules } from '../components/form';
 import { PageHeader } from '../components/page-header';
+import { PAGE_SIZE_OPTIONS, Pagination } from '../components/pagination';
 import { Segmented } from '../components/segmented';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -21,7 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { TableSkeleton } from '../components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { useTabParam } from '../lib/use-tab-param';
+import { useQueryParams } from '../lib/use-query-params';
 import { AssignmentActions, DB_STATUS_BADGE, useAssignmentAction } from './db-shared';
 
 export function DbsPage() {
@@ -30,7 +31,10 @@ export function DbsPage() {
   const isAdmin = me?.role === 'admin';
   const [addingInstance, setAddingInstance] = useState(false);
   const [requesting, setRequesting] = useState(false);
-  const [tab, setTab] = useTabParam('mine');
+  const [params, setParams] = useQueryParams({ tab: 'mine', q: '', page: '1', pageSize: '20' });
+  const tab = params.tab === 'instances' ? 'instances' : isAdmin && params.tab === 'all' ? 'all' : 'mine';
+  const requestedPage = Number(params.page);
+  const pageSize = PAGE_SIZE_OPTIONS.includes(Number(params.pageSize)) ? Number(params.pageSize) : 20;
 
   const instances = useQuery({ queryKey: ['db-instances'], queryFn: () => api<DbInstanceInfo[]>('GET', '/api/db/instances') });
   const mine = useQuery({ queryKey: ['db-mine'], queryFn: () => api<DbAssignmentInfo[]>('GET', '/api/db/assignments/mine') });
@@ -42,6 +46,40 @@ export function DbsPage() {
 
   // 管理员 tab 角标：待批准的申请数
   const pendingCount = (all.data ?? []).filter((r) => r.status === 'pending').length;
+
+  const keyword = params.q.trim().toLowerCase();
+  const assignments = ((tab === 'all' ? all.data : mine.data) ?? []).filter(
+    (r) => r.dbName.toLowerCase().includes(keyword) || r.instanceName.toLowerCase().includes(keyword),
+  );
+  const filteredInstances = (instances.data ?? []).filter((r) => r.name.toLowerCase().includes(keyword));
+  const activeQuery = tab === 'instances' ? instances : tab === 'all' ? all : mine;
+  const total = tab === 'instances' ? filteredInstances.length : assignments.length;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(pageCount, Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1);
+  const offset = (page - 1) * pageSize;
+  const assignmentRows = assignments.slice(offset, offset + pageSize);
+  const instanceRows = filteredInstances.slice(offset, offset + pageSize);
+
+  // 删除或刷新后回到有效页码；等待当前页签的数据加载完成再同步 URL。
+  useEffect(() => {
+    if (activeQuery.data && !activeQuery.isFetching && params.page !== String(page)) {
+      setParams({ page: String(page) });
+    }
+  }, [activeQuery.data, activeQuery.isFetching, params.page, page, setParams]);
+
+  const clearSearch = keyword ? <Button variant="outline" onClick={() => setParams({ q: '', page: '1' })}>清除搜索</Button> : undefined;
+  const loadError = (
+    <Empty text="列表加载失败" action={<Button variant="outline" onClick={() => void activeQuery.refetch()}>重试</Button>} />
+  );
+  const pagination = !activeQuery.isLoading && !activeQuery.isError ? (
+    <Pagination
+      total={total}
+      page={page}
+      pageSize={pageSize}
+      onPageChange={(value) => setParams({ page: String(value) })}
+      onPageSizeChange={(value) => setParams({ pageSize: String(value), page: '1' })}
+    />
+  ) : null;
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['db-instances'] });
@@ -82,7 +120,7 @@ export function DbsPage() {
 
   function AssignmentTable({ rows, admin, loading, emptyText }: { rows: DbAssignmentInfo[]; admin: boolean; loading: boolean; emptyText: React.ReactNode }) {
     if (loading) return <TableSkeleton rows={2} />;
-    if (rows.length === 0) return <Empty text={emptyText} className="py-6" />;
+    if (rows.length === 0) return <Empty text={keyword ? '没有符合条件的数据库' : emptyText} action={clearSearch} className="py-6" />;
     return (
       <Table className={admin ? 'min-w-[760px]' : 'min-w-[600px]'}>
         <TableHeader>
@@ -169,7 +207,19 @@ export function DbsPage() {
         }
       />
 
-      <Tabs value={!isAdmin && tab === 'all' ? 'mine' : tab} onValueChange={setTab}>
+      <div className="relative sm:w-[300px]">
+        <Search aria-hidden className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          type="search"
+          className="pl-9"
+          placeholder={tab === 'instances' ? '搜索实例名称' : '搜索库名 / 实例名称'}
+          aria-label={tab === 'instances' ? '搜索实例名称' : '搜索库名或实例名称'}
+          value={params.q}
+          onChange={(e) => setParams({ q: e.target.value, page: '1' })}
+        />
+      </div>
+
+      <Tabs value={tab} onValueChange={(value) => setParams({ tab: value, page: '1' })}>
         <TabsList>
           <TabsTrigger value="mine">我的数据库</TabsTrigger>
           <TabsTrigger value="instances">数据库实例</TabsTrigger>
@@ -183,24 +233,29 @@ export function DbsPage() {
 
         <TabsContent value="mine" className="mt-4">
           <Card>
-            <CardContent>
-              <AssignmentTable
-                rows={mine.data ?? []}
-                admin={false}
-                loading={mine.isLoading}
-                emptyText="暂无。点击「申请数据库」，批准后凭证会出现在你的环境列表里。"
-              />
+            <CardContent className="space-y-4">
+              {mine.isError ? loadError : (
+                <AssignmentTable
+                  rows={assignmentRows}
+                  admin={false}
+                  loading={mine.isLoading}
+                  emptyText="暂无。点击「申请数据库」，批准后凭证会出现在你的环境列表里。"
+                />
+              )}
+              {pagination}
             </CardContent>
           </Card>
         </TabsContent>
 
         <TabsContent value="instances" className="mt-4">
           <Card>
-            <CardContent>
+            <CardContent className="space-y-4">
               {instances.isLoading ? (
                 <TableSkeleton rows={2} />
-              ) : (instances.data ?? []).length === 0 ? (
-                <Empty text="暂无实例（由管理员登记）" className="py-6" />
+              ) : instances.isError ? (
+                loadError
+              ) : instanceRows.length === 0 ? (
+                <Empty text={keyword ? '没有符合条件的实例' : '暂无实例（由管理员登记）'} action={clearSearch} className="py-6" />
               ) : (
                 <Table>
                   <TableHeader>
@@ -214,7 +269,7 @@ export function DbsPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {(instances.data ?? []).map((r) => (
+                    {instanceRows.map((r) => (
                       <TableRow key={r.id}>
                         <TableCell className="font-medium whitespace-nowrap">
                           {r.name}
@@ -251,6 +306,7 @@ export function DbsPage() {
                   </TableBody>
                 </Table>
               )}
+              {pagination}
             </CardContent>
           </Card>
         </TabsContent>
@@ -258,8 +314,9 @@ export function DbsPage() {
         {isAdmin && (
           <TabsContent value="all" className="mt-4">
             <Card>
-              <CardContent>
-                <AssignmentTable rows={all.data ?? []} admin loading={all.isLoading} emptyText="暂无分配" />
+              <CardContent className="space-y-4">
+                {all.isError ? loadError : <AssignmentTable rows={assignmentRows} admin loading={all.isLoading} emptyText="暂无分配" />}
+                {pagination}
               </CardContent>
             </Card>
           </TabsContent>

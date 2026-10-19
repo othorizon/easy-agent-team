@@ -23,8 +23,8 @@ import {
   githubRepoWebUrl,
 } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ExternalLink, Link2, Pencil, Plus, RefreshCw, Rocket, ShieldCheck, ShieldOff, Trash2, X } from 'lucide-react';
-import { useState } from 'react';
+import { ExternalLink, Link2, Pencil, Plus, RefreshCw, Rocket, Search, ShieldCheck, ShieldOff, Trash2, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
@@ -35,6 +35,7 @@ import { DokployAppPicker } from '../components/dokploy-app-picker';
 import { Empty } from '../components/empty';
 import { Field, rules } from '../components/form';
 import { PageHeader } from '../components/page-header';
+import { PAGE_SIZE_OPTIONS, Pagination } from '../components/pagination';
 import { Segmented } from '../components/segmented';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -46,6 +47,7 @@ import { Switch } from '../components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { formatDateTime } from '../lib/format';
+import { useQueryParams } from '../lib/use-query-params';
 
 /** 部署状态（决策 30：queued/archived 是平台补的，其余直接是 Dokploy 构建记录的取值） */
 const STATUS_BADGE: Record<string, JSX.Element> = {
@@ -102,7 +104,10 @@ export function AppsPage() {
   const [mounting, setMounting] = useState(false);
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
   const [viewingSlug, setViewingSlug] = useState<string | null>(null);
-  const [filter, setFilter] = useState<'all' | 'pending'>('all');
+  const [params, setParams] = useQueryParams({ q: '', filter: 'all', page: '1', pageSize: '20' });
+  const filter = isAdmin && params.filter === 'pending' ? 'pending' : 'all';
+  const requestedPage = Number(params.page);
+  const pageSize = PAGE_SIZE_OPTIONS.includes(Number(params.pageSize)) ? Number(params.pageSize) : 20;
 
   const apps = useQuery({ queryKey: ['apps'], queryFn: () => api<AppInfo[]>('GET', '/api/apps') });
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['apps'] });
@@ -152,8 +157,20 @@ export function AppsPage() {
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '删除失败'),
   });
 
-  const pendingCount = (apps.data ?? []).filter((a) => !a.deployApproved).length;
-  const rows = (apps.data ?? []).filter((a) => filter === 'all' || !a.deployApproved);
+  const keyword = params.q.trim().toLowerCase();
+  const matching = (apps.data ?? []).filter((a) => a.name.toLowerCase().includes(keyword) || a.slug.toLowerCase().includes(keyword));
+  const pendingCount = matching.filter((a) => !a.deployApproved).length;
+  const filtered = matching.filter((a) => filter === 'all' || !a.deployApproved);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const page = Math.min(pageCount, Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1);
+  const rows = filtered.slice((page - 1) * pageSize, page * pageSize);
+
+  // 删除或刷新后总页数可能缩小；同步有效页码，避免停在空白页。
+  useEffect(() => {
+    if (apps.data && !apps.isFetching && params.page !== String(page)) {
+      setParams({ page: String(page) });
+    }
+  }, [apps.data, apps.isFetching, params.page, page, setParams]);
 
   return (
     <div className="space-y-5">
@@ -180,22 +197,41 @@ export function AppsPage() {
           </div>
         }
       />
-      {isAdmin && pendingCount > 0 && (
-        <Segmented
-          value={filter}
-          onChange={setFilter}
-          options={[
-            { label: '全部', value: 'all' },
-            { label: `待授权 ${pendingCount}`, value: 'pending' },
-          ]}
-        />
-      )}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="relative sm:w-[300px]">
+          <Search aria-hidden className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            type="search"
+            className="pl-9"
+            placeholder="搜索应用名称 / 标识"
+            aria-label="搜索应用名称或标识"
+            value={params.q}
+            onChange={(e) => setParams({ q: e.target.value, page: '1' })}
+          />
+        </div>
+        {isAdmin && (pendingCount > 0 || filter === 'pending') && (
+          <Segmented
+            value={filter}
+            ariaLabel="部署授权筛选"
+            onChange={(value) => setParams({ filter: value, page: '1' })}
+            options={[
+              { label: '全部', value: 'all' },
+              { label: `待授权 ${pendingCount}`, value: 'pending' },
+            ]}
+          />
+        )}
+      </div>
       <Card>
-        <CardContent>
+        <CardContent className="space-y-4">
           {apps.isLoading ? (
             <TableSkeleton />
+          ) : apps.isError ? (
+            <Empty text="应用列表加载失败" action={<Button variant="outline" onClick={() => void apps.refetch()}>重试</Button>} />
           ) : rows.length === 0 ? (
-            <Empty text={filter === 'pending' ? '没有待授权的应用' : '暂无应用'} />
+            <Empty
+              text={keyword ? '没有符合条件的应用' : filter === 'pending' ? '没有待授权的应用' : '暂无应用'}
+              action={keyword || filter === 'pending' ? <Button variant="outline" onClick={() => setParams({ q: '', filter: 'all', page: '1' })}>清除筛选</Button> : undefined}
+            />
           ) : (
             <Table>
               <TableHeader>
@@ -245,6 +281,15 @@ export function AppsPage() {
                 ))}
               </TableBody>
             </Table>
+          )}
+          {!apps.isLoading && !apps.isError && (
+            <Pagination
+              total={filtered.length}
+              page={page}
+              pageSize={pageSize}
+              onPageChange={(value) => setParams({ page: String(value) })}
+              onPageSizeChange={(value) => setParams({ pageSize: String(value), page: '1' })}
+            />
           )}
         </CardContent>
       </Card>
@@ -305,7 +350,7 @@ function AppDetailDialog({
             <TabsTrigger value="deployments">部署记录</TabsTrigger>
           </TabsList>
           <TabsContent value="overview" className="mt-4">
-            <Overview app={app} isAdmin={isAdmin} canManage={canManage} onEdit={onEdit} onRemove={onRemove} onChanged={onChanged} />
+            <Overview app={app} isAdmin={isAdmin} canManage={canManage} onEdit={onEdit} onRemove={onRemove} onChanged={onChanged} onDeployed={() => setTab('deployments')} />
           </TabsContent>
           <TabsContent value="env" className="mt-4">
             {app.isMember ? <EnvEditor app={app} /> : <Empty text="仅应用成员可查看与修改环境变量" className="py-6" />}
@@ -326,6 +371,7 @@ function Overview({
   onEdit,
   onRemove,
   onChanged,
+  onDeployed,
 }: {
   app: AppInfo;
   isAdmin: boolean;
@@ -333,6 +379,7 @@ function Overview({
   onEdit: () => void;
   onRemove: () => void;
   onChanged: () => void;
+  onDeployed: () => void;
 }) {
   const queryClient = useQueryClient();
   const users = useQuery({ queryKey: ['users'], queryFn: () => api<UserRow[]>('GET', '/api/users'), enabled: canManage });
@@ -340,9 +387,10 @@ function Overview({
   const deploy = useMutation({
     mutationFn: () => api<DeploymentInfo>('POST', `/api/apps/${app.slug}/deploy`, { source: 'console' }),
     onSuccess: () => {
-      toast.success('已触发部署，排队中；到「部署记录」查看进度');
+      toast.success('已触发部署，排队中');
       void queryClient.invalidateQueries({ queryKey: ['deployments', app.slug] });
       onChanged();
+      onDeployed();
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '触发失败'),
   });

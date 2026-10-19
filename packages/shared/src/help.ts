@@ -92,6 +92,28 @@ export const helpRequestInfoSchema = z.object({
 });
 export type HelpRequestInfo = z.infer<typeof helpRequestInfoSchema>;
 
+/** 控制台分页接口；既有 mine / inbox 数组接口继续供 CLI / MCP 使用。 */
+export const helpListQuerySchema = z.object({
+  status: z.enum(['pending', 'all']).default('pending'),
+  page: z.coerce.number().int().min(1).max(Number.MAX_SAFE_INTEGER).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+});
+export type HelpListQuery = z.infer<typeof helpListQuerySchema>;
+
+export const helpListResultSchema = z.object({
+  items: z.array(helpRequestInfoSchema),
+  total: z.number(),
+  page: z.number(),
+  pageSize: z.number(),
+  counts: z.object({
+    all: z.number(),
+    pending: z.number(),
+    /** 找我的：等待我回复；我发起的：已有回复待我确认。计数不受分页影响。 */
+    attention: z.number(),
+  }),
+});
+export type HelpListResult = z.infer<typeof helpListResultSchema>;
+
 export const helpRequestDetailSchema = helpRequestInfoSchema.extend({
   messages: z.array(helpMessageSchema),
 });
