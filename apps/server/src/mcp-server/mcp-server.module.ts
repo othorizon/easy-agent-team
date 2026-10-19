@@ -1,3 +1,4 @@
+import { OssModule } from '../oss/oss.module';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { DbsModule } from '../dbs/dbs.module';
@@ -11,7 +12,7 @@ import { McpToolsService } from './mcp-tools.service';
 
 /** 平台自身能力的 MCP 端点（决策 55）：工具实现直接复用各业务 Service */
 @Module({
-  imports: [AuthModule, EnvsModule, HelpModule, DeployModule, DbsModule, SitesModule],
+  imports: [AuthModule, EnvsModule, HelpModule, DeployModule, DbsModule, SitesModule, OssModule],
   controllers: [McpServerController],
   providers: [McpServerService, McpToolsService],
 })

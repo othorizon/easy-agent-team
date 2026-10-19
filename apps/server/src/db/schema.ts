@@ -12,7 +12,8 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
-import type { SiteAnchor, SiteCapabilityStatus, SiteManifest, SiteSetupCheck, SiteCdnStatus } from '@eat/shared';
+import type { SiteAnchor, SiteCapabilityStatus, SiteManifest, SiteSetupCheck, SiteCdnStatus, OssCheck, OssSpaceStatus } from '@eat/shared';
+import type { OssStatement } from '../oss/oss-policy';
 
 export const users = pgTable('user', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -27,6 +28,70 @@ export const users = pgTable('user', {
     .default('active'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const ossSettings = pgTable('oss_setting', {
+  id: integer('id').primaryKey().default(1),
+  instanceId: uuid('instance_id').notNull().defaultRandom(),
+  bucket: text('bucket').notNull(),
+  region: text('region').notNull(),
+  accountId: text('account_id'),
+  accessKeyIdEncrypted: text('access_key_id_encrypted').notNull(),
+  accessKeySecretEncrypted: text('access_key_secret_encrypted').notNull(),
+  status: text('status').$type<'disabled' | 'checking' | 'enabled' | 'failed'>().notNull().default('disabled'),
+  customDomainsEnabled: boolean('custom_domains_enabled').notNull().default(false),
+  domains: jsonb('domains').$type<{ domain: string; cdn: boolean }[]>().notNull().default([]),
+  managedPolicy: jsonb('managed_policy').$type<OssStatement[]>().notNull().default([]),
+  pendingPolicy: jsonb('pending_policy').$type<OssStatement[] | null>(),
+  checks: jsonb('checks').$type<OssCheck[]>().notNull().default([]),
+  lastError: text('last_error'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+export const ossAccounts = pgTable('oss_account', {
+  userId: uuid('user_id').primaryKey().references(() => users.id),
+  ramName: text('ram_name').notNull().unique(),
+  policyName: text('policy_name').notNull().unique(),
+  keyIdEncrypted: text('key_id_encrypted'),
+  keySecretEncrypted: text('key_secret_encrypted'),
+  // Persist before creating a key. New cloud keys outside this baseline are recoverable orphans.
+  keyBaseline: jsonb('key_baseline').$type<string[] | null>(),
+  retiringKeyIds: jsonb('retiring_key_ids').$type<string[]>().notNull().default([]),
+  keyGeneration: integer('key_generation').notNull().default(0),
+  userEnabled: boolean('user_enabled').notNull().default(true),
+  syncPending: boolean('sync_pending').notNull().default(false),
+  lastError: text('last_error'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+export const ossSpaces = pgTable('oss_space', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  ownerId: uuid('owner_id').notNull().references(() => users.id),
+  requestId: uuid('request_id').notNull(),
+  name: text('name').notNull(),
+  purpose: text('purpose').notNull(),
+  prefix: text('prefix').notNull().unique(),
+  status: text('status').$type<OssSpaceStatus>().notNull().default('pending'),
+  publicRead: boolean('public_read').notNull().default(false),
+  requestedPublicRead: boolean('requested_public_read').notNull().default(false),
+  operationPending: boolean('operation_pending').notNull().default(false),
+  lastError: text('last_error'),
+  rejectionReason: text('rejection_reason'),
+  decidedBy: uuid('decided_by').references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('oss_space_request_idx').on(t.ownerId, t.requestId), index('oss_space_owner_idx').on(t.ownerId)]);
+export const ossOperations = pgTable('oss_operation', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  kind: text('kind').$type<'setup' | 'approve' | 'revoke' | 'public' | 'reset' | 'sync'>().notNull(),
+  actorId: uuid('actor_id').notNull(),
+  userId: uuid('user_id'),
+  spaceId: uuid('space_id'),
+  state: text('state').$type<'pending' | 'running' | 'failed' | 'complete'>().notNull().default('pending'),
+  context: jsonb('context').$type<{ objectsStarted?: boolean; ramStarted?: boolean; publicTouched?: boolean; multipartStarted?: boolean; generation?: number; probeId?: string; cleanup?: boolean; probeError?: string; keyId?: string; keySecretEncrypted?: string; keyBaseline?: string[] }>().notNull().default({}),
+  attempts: integer('attempts').notNull().default(0),
+  lastError: text('last_error'),
+  retryAt: timestamp('retry_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('oss_operation_state_idx').on(t.state)]);
 
 export const llmGatewaySettings = pgTable('llm_gateway_setting', {
   id: integer('id').primaryKey().default(1),

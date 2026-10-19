@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { isOssTool, ossToolRequest } from '@eat/shared';
 /**
  * eat MCP server（stdio）：把平台能力暴露给本地 AI。
  * 使用底层 Server API + 手写 JSON Schema，避免与 SDK 内置 zod 版本耦合。
@@ -95,6 +97,10 @@ export async function startMcpServer(): Promise<void> {
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const args = (req.params.arguments ?? {}) as Record<string, unknown>;
     try {
+      if (isOssTool(req.params.name)) {
+        const request = ossToolRequest(req.params.name, args, randomUUID());
+        return jsonResult(await api.request(request.method, request.path, request.body));
+      }
       if (isFolioTool(req.params.name)) {
         const request = folioToolRequest(req.params.name, args);
         return jsonResult(await api.request(request.method, request.path, request.body, request.headers));

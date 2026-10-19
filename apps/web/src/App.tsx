@@ -1,5 +1,6 @@
 import {
   Database,
+  HardDrive,
   Download,
   Files,
   KeyRound,
@@ -34,6 +35,7 @@ import { Sheet, SheetContent, SheetTitle, SheetTrigger } from './components/ui/s
 import { cn } from './lib/utils';
 import { AuthorizedDevicesPage } from './pages/AuthorizedDevices';
 import { DbAssignmentDetailPage } from './pages/DbAssignmentDetail';
+import { OssPage, OssDetailPage } from './pages/Oss';
 import { DbsPage } from './pages/Dbs';
 import { DevicePage } from './pages/Device';
 import { EnvDetailPage } from './pages/EnvDetail';
@@ -88,6 +90,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: '资源',
     items: [
       { to: '/db', label: '数据库', icon: Database },
+      { to: '/oss', label: 'OSS 对象存储', icon: HardDrive, match: ['/oss'] },
       { to: '/llm-gateway', label: 'LLM API 网关', icon: Network },
       { to: '/apps', label: '应用', icon: Rocket },
       { to: '/folios', label: 'Folio', icon: Files },
@@ -284,6 +287,8 @@ export function App() {
       {/* /mcp 留给平台自己的 MCP 端点（决策 55），控制台页面挪到 /mcp-configs */}
       <Route path="/mcp-configs" element={<RequireAuth><McpConfigsPage /></RequireAuth>} />
       <Route path="/db" element={<RequireAuth><DbsPage /></RequireAuth>} />
+      <Route path="/oss" element={<RequireAuth><OssPage /></RequireAuth>} />
+      <Route path="/oss/:id" element={<RequireAuth><OssDetailPage /></RequireAuth>} />
       <Route path="/db/:id" element={<RequireAuth><DbAssignmentDetailPage /></RequireAuth>} />
       <Route path="/apps" element={<RequireAuth><AppsPage /></RequireAuth>} />
       <Route path="/folios" element={<RequireAuth><FoliosPage /></RequireAuth>} />

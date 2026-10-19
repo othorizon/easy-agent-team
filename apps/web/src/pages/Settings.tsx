@@ -42,6 +42,7 @@ import { Switch } from '../components/ui/switch';
 import { FolioSettingsCard } from './FolioSettings';
 import { FolioCdnSettings } from './FolioCdnSettings';
 import { LlmGatewaySettingsCard } from './LlmGatewaySettings';
+import { OssSettingsCard } from './OssSettings';
 import './settings.css';
 
 const NONE = '__none__';
@@ -53,6 +54,7 @@ const categories = [
       { id: 'llm-gateway', label: 'LLM API 网关', icon: Network },
     ],
   },
+  { group: '资源存储', items: [{ id: 'oss', label: 'OSS 存储', icon: Cloud }] },
   {
     group: '应用托管',
     items: [{ id: 'deployment', label: '部署接入', icon: Server }],
@@ -159,6 +161,7 @@ export function SettingsPage() {
             <div key={id} hidden={active !== id} data-settings-panel={id}>
               {id === 'platform-ai' && <AiSettingsCard active={active === id} />}
               {id === 'llm-gateway' && <LlmGatewaySettingsCard active={active === id} />}
+              {id === 'oss' && <OssSettingsCard active={active === id} />}
               {id === 'deployment' && <DokploySettingsCard active={active === id} />}
               {id === 'folio' && <FolioSettingsCard active={active === id} />}
               {id === 'folio-cdn' && <FolioCdnSettings active={active === id} />}

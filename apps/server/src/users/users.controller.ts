@@ -1,3 +1,4 @@
+import { OssService } from '../oss/oss.service';
 import {
   BadRequestException,
   Body,
@@ -33,6 +34,7 @@ export class UsersController {
     @Inject(DB) private readonly db: Db,
     private readonly audit: AuditService,
     private readonly llmGateway: LlmGatewayService,
+    private readonly oss: OssService,
   ) {}
 
   /** 用户列表（登录即可见——授权、求助都需要选人） */
@@ -90,6 +92,7 @@ export class UsersController {
     if (body.status === 'disabled') {
       await this.revokeTokens(id);
     }
+    const ossSyncPending = body.status ? await this.oss.onUserStatusChanged(id) : false;
     const llmGatewaySyncPending = body.status ? await this.llmGateway.onUserStatusChanged(id, actor.id) : false;
     await this.audit.record({
       actorId: actor.id,
@@ -98,7 +101,7 @@ export class UsersController {
       targetId: id,
       meta: { role: body.role, status: body.status },
     });
-    return { ...row, llmGatewaySyncPending };
+    return { ...row, llmGatewaySyncPending, ossSyncPending };
   }
 
   /** 重置密码（仅管理员）。吊销该用户全部 Token，强制重新登录 */

@@ -1,3 +1,4 @@
+import { registerOssCommands } from './commands/oss.js';
 import { Command } from 'commander';
 import { CLI_VERSION, LOG_TAIL_DEFAULT, SKILL_LIST_MAX_PAGE_SIZE } from '@eat/shared';
 import { ApiError, formatErrorDetails } from './client.js';
@@ -147,6 +148,8 @@ configCmd
   .option('--project', '只清项目配置')
   .option('--user', '只清用户配置')
   .action(configUnset);
+
+registerOssCommands(program);
 
 const db = program.command('db').description('数据库账号：查看实例、申请库、查看我的分配');
 db.command('instances').description('查看可用的数据库实例').action(dbInstances);

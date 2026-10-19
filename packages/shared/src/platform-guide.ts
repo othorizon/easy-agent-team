@@ -4,6 +4,7 @@ import content from './eat-platform-guide/SKILL.md';
 import openaiMetadata from './eat-platform-guide/agents/openai.yaml';
 import access from './eat-platform-guide/references/access.md';
 import environment from './eat-platform-guide/references/environment.md';
+import oss from './eat-platform-guide/references/oss.md';
 import databases from './eat-platform-guide/references/databases.md';
 import llmApi from './eat-platform-guide/references/llm-api.md';
 import applications from './eat-platform-guide/references/applications.md';
@@ -15,7 +16,7 @@ import updates from './eat-platform-guide/references/updates.md';
 /** Built-in skill: sources are real Markdown files, embedded at build time for browser/CLI/server. */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
 /** Increment whenever the entry, metadata, or any reference file changes. */
-export const PLATFORM_GUIDE_VERSION = 37;
+export const PLATFORM_GUIDE_VERSION = 38;
 
 const metadata = parseSkillFrontmatter(content);
 const files: Record<string, string> = {
@@ -23,6 +24,7 @@ const files: Record<string, string> = {
   'references/access.md': access,
   'references/environment.md': environment,
   'references/databases.md': databases,
+  'references/oss.md': oss,
   'references/llm-api.md': llmApi,
   'references/applications.md': applications,
   'references/folio.md': folio,

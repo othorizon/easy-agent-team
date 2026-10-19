@@ -1,3 +1,4 @@
+import { buildOssTools } from './oss-tools.js';
 import { LOG_TAIL_DEFAULT, LOG_TAIL_MAX, STATIC_CONTAINER_PORT } from './deploy.js';
 import { buildFolioTools } from './folio-tools.js';
 
@@ -386,6 +387,7 @@ export function buildEatTools(mode: EatToolMode): EatToolDef[] {
     ...dbTools(),
     ...appTools(),
     ...deployTools(),
+    ...buildOssTools(),
     ...buildFolioTools(),
   ];
 }

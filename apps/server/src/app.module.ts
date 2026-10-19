@@ -1,3 +1,4 @@
+import { OssModule } from './oss/oss.module';
 import { Module, OnModuleInit } from '@nestjs/common';
 import { APP_FILTER, APP_INTERCEPTOR, HttpAdapterHost } from '@nestjs/core';
 import { AiModule } from './ai/ai.module';
@@ -40,6 +41,7 @@ import { LlmGatewayModule } from './llm-gateway/llm-gateway.module';
     McpGatewayModule,
     McpServerModule,
     DbsModule,
+    OssModule,
     DeployModule,
     SitesModule,
     LlmGatewayModule,

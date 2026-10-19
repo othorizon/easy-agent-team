@@ -1,6 +1,6 @@
 ---
 name: eat-platform-guide
-description: 通过团队 EAT 平台获取内部配置与密钥、申请数据库、管理或调用 LLM API、创建部署应用、发布 Folio、同步 Skill/MCP、查询团队经验与求助。当任务涉及 EAT 资源、eat CLI、平台 MCP 或这些平台操作报错时使用；普通编程和非 EAT 服务不需要本 Skill。
+description: 通过团队 EAT 平台获取内部配置与密钥、申请数据库或 OSS 存储、管理或调用 LLM API、创建部署应用、发布 Folio、同步 Skill/MCP、查询团队经验与求助。当任务涉及 EAT 资源、eat CLI、平台 MCP 或这些平台操作报错时使用；普通编程和非 EAT 服务不需要本 Skill。
 ---
 
 # eat 平台使用指南
@@ -16,6 +16,7 @@ EAT（easy-agent-team）统一管理团队资源、权限与审计。终端可�
 | 登录失败、确认身份或区分凭证 | [身份与登录](references/access.md) | 非阻塞登录；区分 EAT、HTTP MCP、模型 Key |
 | 获取配置、密钥、连接串或申请权限 | [环境变量](references/environment.md) | 先查清单，按需取值；无权限走申请 |
 | 为自己的应用申请数据库 | [数据库](references/databases.md) | 先看已有分配，再按需申请独立账号 |
+| 申请文件存储、读取 OSS 凭证或修改公开读 | [OSS 对象存储](references/oss.md) | 先审批；用户共用 AK/SK；区分目录公开读与 CDN |
 | 申请模型 Key、查询额度、编写模型调用代码 | [LLM API](references/llm-api.md) | 个人 Key、可用模型及 New API 官方调用文档 |
 | 创建应用、配置 env、部署或排查服务 | [应用与部署](references/applications.md) | Git 源、整体 env 覆盖、部署授权与日志 |
 | 发布网页、演示、报告或处理页面反馈 | [Folio](references/folio.md) | 静态产物、先确认访问范围、版本与评论 |

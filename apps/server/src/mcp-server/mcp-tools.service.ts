@@ -1,3 +1,5 @@
+import { OssToolsService } from '../oss/oss-tools.service';
+import { isOssTool } from '@eat/shared';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import {
   buildEatTools,
@@ -82,6 +84,7 @@ export class McpToolsService {
     private readonly deploy: DeployService,
     private readonly dbs: DbsService,
     private readonly folioTools: FolioToolsService,
+    private readonly ossTools: OssToolsService,
   ) {}
 
   listTools(): EatToolDef[] {
@@ -90,6 +93,7 @@ export class McpToolsService {
 
   /** 逐个工具分发。抛出的异常由调用方转成 MCP 的 isError 结果 */
   async call(user: AuthUser, name: string, rawArgs: unknown, ip?: string): Promise<unknown> {
+    if (isOssTool(name)) return this.ossTools.call(user, name, rawArgs);
     if (isFolioTool(name)) return this.folioTools.call(user, name, rawArgs);
     const args = (rawArgs ?? {}) as Record<string, unknown>;
     switch (name) {
