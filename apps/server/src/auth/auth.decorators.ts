@@ -3,6 +3,8 @@ import { createParamDecorator, ExecutionContext, SetMetadata } from '@nestjs/com
 export const IS_PUBLIC_KEY = 'isPublic';
 /** 标记无需登录的端点 */
 export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
+export const ALLOW_INCOMPLETE_PROFILE = 'allowIncompleteProfile';
+export const AllowIncompleteProfile = () => SetMetadata(ALLOW_INCOMPLETE_PROFILE, true);
 
 export const ROLES_KEY = 'roles';
 /** 标记仅特定平台角色可访问的端点 */
@@ -14,6 +16,7 @@ export interface AuthUser {
   email: string;
   role: 'admin' | 'member';
   tokenId: string;
+  tokenKind?: 'web' | 'cli' | 'apikey';
 }
 
 /** 从请求中取当前登录用户（由 AuthGuard 注入） */

@@ -196,6 +196,7 @@ async function apiHandler(route) {
     const data = request.postDataJSON();
     const json = (body, status = 200) =>
       route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+    if (path === '/api/account/onboarding') return json({ requireBio: false, requireNotification: false, bioComplete: false, notificationComplete: false, required: false });
     if (request.method() !== 'GET')
       writes.push({ path, method: request.method(), data, headers: request.headers() });
     if (path === '/api/sites/capability') return json({ enabled: true, status: 'enabled' });

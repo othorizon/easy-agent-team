@@ -14,6 +14,7 @@ import {
 import * as bcrypt from 'bcryptjs';
 import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import {
+  updateBioSchema,
   createUserRequestSchema,
   resetUserPasswordRequestSchema,
   updateUserRequestSchema,
@@ -41,7 +42,7 @@ export class UsersController {
   @Get()
   list() {
     return this.db
-      .select({ id: users.id, name: users.name, email: users.email, role: users.role, status: users.status })
+      .select({ id: users.id, name: users.name, email: users.email, role: users.role, status: users.status, bio: users.bio })
       .from(users)
       .orderBy(asc(users.createdAt));
   }
@@ -102,6 +103,18 @@ export class UsersController {
       meta: { role: body.role, status: body.status },
     });
     return { ...row, llmGatewaySyncPending, ossSyncPending };
+  }
+
+  /** 管理员可修改任意用户的简介，包含本人；角色/状态保护保持独立。 */
+  @Patch(':id/bio')
+  @Roles('admin')
+  async updateBio(@Param('id') id: string,
+    @Body(new ZodValidationPipe(updateBioSchema)) body: { bio: string }, @CurrentUser() actor: AuthUser) {
+    const [row] = await this.db.update(users).set({ bio: body.bio }).where(eq(users.id, id))
+      .returning({ id: users.id, bio: users.bio });
+    if (!row) throw new NotFoundException({ error: 'NOT_FOUND', message: '用户不存在' });
+    await this.audit.record({ actorId: actor.id, action: 'user.bio_updated', targetType: 'user', targetId: id });
+    return row;
   }
 
   /** 重置密码（仅管理员）。吊销该用户全部 Token，强制重新登录 */

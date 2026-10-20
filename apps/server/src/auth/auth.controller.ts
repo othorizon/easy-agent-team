@@ -13,7 +13,7 @@ import {
   type RegisterRequest,
 } from '@eat/shared';
 import { ZodValidationPipe } from '../common/zod.pipe';
-import { CurrentUser, Public, type AuthUser } from './auth.decorators';
+import { AllowIncompleteProfile, CurrentUser, Public, type AuthUser } from './auth.decorators';
 import { AuthService } from './auth.service';
 import { RegistrationService } from './registration.service';
 
@@ -43,9 +43,10 @@ export class AuthController {
     return this.registration.register(body, req.ip);
   }
 
+  @AllowIncompleteProfile()
   @Get('whoami')
   whoami(@CurrentUser() user: AuthUser) {
-    const { tokenId: _tokenId, ...rest } = user;
+    const { tokenId: _tokenId, tokenKind: _tokenKind, ...rest } = user;
     return rest;
   }
 
@@ -55,6 +56,7 @@ export class AuthController {
     return this.auth.deviceStart();
   }
 
+  @AllowIncompleteProfile()
   @Post('device/approve')
   deviceApprove(
     @Body(new ZodValidationPipe(deviceApproveRequestSchema)) body: DeviceApproveRequest,
@@ -86,6 +88,7 @@ export class AuthController {
     return this.auth.listTokens(user.id);
   }
 
+  @AllowIncompleteProfile()
   @Delete('tokens/:id')
   revokeToken(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.auth.revokeToken(user, id);

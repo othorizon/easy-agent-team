@@ -87,6 +87,7 @@ await ctx.route('**/api/**', async (route) => {
       contentType: 'application/json',
       body: JSON.stringify(data),
     });
+    if (path === '/api/account/onboarding') return reply({ requireBio: false, requireNotification: false, bioComplete: false, notificationComplete: false, required: false });
   if (path === '/api/admin/oss-settings') {
     if (method === 'PUT') {
       if (failSave) {

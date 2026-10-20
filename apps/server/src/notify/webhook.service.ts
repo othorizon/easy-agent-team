@@ -3,6 +3,7 @@ import { createHmac } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { DB, type Db } from '../db/db.module';
 import { webhookDeliveries } from '../db/schema';
+import { feishuWebhookSchema } from '@eat/shared';
 
 const MAX_ATTEMPTS = 5;
 const BACKOFF_MS = [0, 2000, 4000, 8000, 16000];
@@ -21,6 +22,25 @@ export class WebhookService {
   private readonly logger = new Logger(WebhookService.name);
 
   constructor(@Inject(DB) private readonly db: Db) {}
+
+  async sendVerification(url: string, secret: string | null, code: string): Promise<void> {
+    feishuWebhookSchema.parse(url);
+    const response = await fetch(url, {
+      method: 'POST',
+      redirect: 'error',
+      headers: { 'content-type': 'application/json' },
+      body: this.buildFeishuBody(secret, {
+        header: { title: { tag: 'plain_text', content: 'EAT 通知配置验证码' } },
+        elements: [{ tag: 'div', text: {
+          tag: 'plain_text',
+          content: `EAT 验证码：${code}\n10 分钟内有效，请返回用户中心填写。非本人操作请忽略。`,
+        } }],
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const error = await this.feishuError(response);
+    if (error) throw new Error(error);
+  }
 
   /** 触发即返回，投递在后台进行。card 为飞书卡片 JSON（不含加签字段） */
   notify(eventType: string, targetUrl: string, secret: string | null, card: Record<string, unknown>, summary = ''): void {
@@ -46,6 +66,7 @@ export class WebhookService {
       try {
         const res = await fetch(targetUrl, {
           method: 'POST',
+          redirect: 'error',
           headers: { 'content-type': 'application/json' },
           body: this.buildFeishuBody(secret, card),
           signal: AbortSignal.timeout(10_000),
@@ -66,7 +87,16 @@ export class WebhookService {
   }
 
   private buildFeishuBody(secret: string | null, card: Record<string, unknown>): string {
-    const msg: Record<string, unknown> = { msg_type: 'interactive', card };
+    const msg: Record<string, unknown> = {
+      msg_type: 'interactive',
+      card: {
+        ...card,
+        elements: [
+          ...(Array.isArray(card.elements) ? card.elements : []),
+          { tag: 'note', elements: [{ tag: 'plain_text', content: 'EAT 平台通知' }] },
+        ],
+      },
+    };
     if (secret) {
       const timestamp = String(Math.floor(Date.now() / 1000));
       msg.timestamp = timestamp;
@@ -80,6 +110,7 @@ export class WebhookService {
     if (!res.ok) return `HTTP ${res.status}`;
     const parsed = (await res.json().catch(() => null)) as { code?: number; msg?: string; StatusCode?: number } | null;
     const code = parsed?.code ?? parsed?.StatusCode;
+    if (typeof code !== 'number') return '飞书返回无效响应';
     if (typeof code === 'number' && code !== 0) return `飞书返回 code=${code} ${parsed?.msg ?? ''}`.trim();
     return null;
   }

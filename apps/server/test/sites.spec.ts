@@ -469,10 +469,10 @@ describe('版本评论、区域锚点、@ 与工具接入', () => {
     ).toBe(400);
   });
   it('被 @ 用户有飞书配置时通知一次，正文与密码不进入通知', async () => {
-    await api('PUT', '/api/helpers/me', other, {
-      description: '',
+    await app.get<Db>(DB).insert(schema.userNotifications).values({
+      userId: otherId,
       webhookUrl: 'https://open.feishu.cn/open-apis/bot/v2/hook/test-only',
-      webhookSecret: 'test-signature',
+      webhookSecretEncrypted: encryptSecret('test-signature'), verifiedAt: new Date(),
     });
     const r = await api('POST', `/api/sites/demo/threads/${threadId}/replies`, owner, {
       versionId: v2,

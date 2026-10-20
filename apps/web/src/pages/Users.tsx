@@ -1,22 +1,20 @@
-import type { RegistrationSettings } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, UserPlus } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
 import { Confirm } from '../components/confirm';
 import { Field, rules } from '../components/form';
 import { PageHeader } from '../components/page-header';
-import { TagsInput } from '../components/tags-input';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { Input } from '../components/ui/input';
+import { Input, Textarea } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { TableSkeleton } from '../components/ui/skeleton';
-import { Switch } from '../components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 
 interface UserRow {
@@ -25,6 +23,7 @@ interface UserRow {
   email: string;
   role: 'admin' | 'member';
   status: 'active' | 'disabled';
+  bio: string;
 }
 
 /** 用户管理（仅管理员）：建号、改角色、禁用/启用、重置密码 */
@@ -33,7 +32,8 @@ export function UsersPage() {
   const me = getStoredUser();
   const [creating, setCreating] = useState(false);
   const [resetting, setResetting] = useState<UserRow | null>(null);
-  const [editingRegistration, setEditingRegistration] = useState(false);
+  const [editingBio, setEditingBio] = useState<UserRow | null>(null);
+  const [bio, setBio] = useState('');
 
   const users = useQuery({ queryKey: ['users'], queryFn: () => api<UserRow[]>('GET', '/api/users') });
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['users'] });
@@ -71,18 +71,9 @@ export function UsersPage() {
     onError,
   });
 
-  const registration = useQuery({
-    queryKey: ['registration-settings'],
-    queryFn: () => api<RegistrationSettings>('GET', '/api/admin/registration-settings'),
-  });
-  const saveRegistration = useMutation({
-    mutationFn: (v: RegistrationSettings) => api('PUT', '/api/admin/registration-settings', v),
-    onSuccess: () => {
-      toast.success('注册设置已保存');
-      setEditingRegistration(false);
-      void queryClient.invalidateQueries({ queryKey: ['registration-settings'] });
-    },
-    onError,
+  const saveBio = useMutation({
+    mutationFn: () => api('PATCH', `/api/users/${editingBio!.id}/bio`, { bio }),
+    onSuccess: () => { toast.success('个人简介已更新'); setEditingBio(null); invalidate(); }, onError,
   });
 
   return (
@@ -92,16 +83,7 @@ export function UsersPage() {
         description="账号由管理员创建后线下告知初始密码，或开放注册让成员自助注册。禁用与重置密码会吊销 EAT 登录凭证，禁用还会同步停用模型 API Key 和 OSS AK。"
         actions={
           <>
-            <Button variant="outline" onClick={() => setEditingRegistration(true)}>
-              <UserPlus />
-              注册设置
-              {registration.data && (
-                <span
-                  className={`size-1.5 rounded-full ${registration.data.enabled ? 'bg-success' : 'bg-muted-foreground/40'}`}
-                  title={registration.data.enabled ? '已开放注册' : '未开放注册'}
-                />
-              )}
-            </Button>
+            <Button variant="outline" asChild><Link to="/settings?section=registration">注册与登录设置</Link></Button>
             <Button onClick={() => setCreating(true)}>
               <Plus />
               新建用户
@@ -159,6 +141,7 @@ export function UsersPage() {
                       {row.status === 'active' ? <Badge variant="success">正常</Badge> : <Badge variant="destructive">已禁用</Badge>}
                     </TableCell>
                     <TableCell>
+                      <Button size="sm" variant="outline" className="mb-1.5" onClick={() => { setEditingBio(row); setBio(row.bio); }}>编辑简介</Button>
                       {row.id === me?.id ? null : (
                         <div className="flex items-center gap-1.5">
                           <Button size="sm" variant="outline" onClick={() => setResetting(row)}>
@@ -191,28 +174,14 @@ export function UsersPage() {
         </CardContent>
       </Card>
 
-      {editingRegistration && (
-        <Dialog open onOpenChange={(open) => !open && setEditingRegistration(false)}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>注册设置</DialogTitle>
-              <DialogDescription>
-                开启后登录页出现「注册」入口，任何能访问平台的人都可自助注册为<strong>成员</strong>账号。
-                可用邮箱后缀限制注册范围（如 @your-company.com）；留空表示任意邮箱都可注册。
-              </DialogDescription>
-            </DialogHeader>
-            {registration.data ? (
-              <RegistrationForm
-                settings={registration.data}
-                pending={saveRegistration.isPending}
-                onSubmit={(v) => saveRegistration.mutate(v)}
-              />
-            ) : (
-              <TableSkeleton rows={2} />
-            )}
-          </DialogContent>
-        </Dialog>
-      )}
+      {editingBio && <Dialog open onOpenChange={(open) => !open && setEditingBio(null)}>
+        <DialogContent><DialogHeader><DialogTitle>编辑 {editingBio.name} 的个人简介</DialogTitle>
+          <DialogDescription>此内容会用于 AI 查询用户、了解擅长领域并匹配求助对象。</DialogDescription>
+        </DialogHeader><form className="space-y-4" onSubmit={(e) => { e.preventDefault(); saveBio.mutate(); }}>
+          <Field label="个人简介" htmlFor="admin-user-bio"><Textarea id="admin-user-bio" rows={6} maxLength={2000} value={bio} onChange={(e) => setBio(e.target.value)} /></Field>
+          <Button type="submit" loading={saveBio.isPending}>保存简介</Button>
+        </form></DialogContent>
+      </Dialog>}
       {creating && (
         <CreateUserDialog pending={create.isPending} onClose={() => setCreating(false)} onSubmit={(v) => create.mutate(v)} />
       )}
@@ -225,38 +194,6 @@ export function UsersPage() {
         />
       )}
     </div>
-  );
-}
-
-function RegistrationForm({
-  settings,
-  pending,
-  onSubmit,
-}: {
-  settings: RegistrationSettings;
-  pending: boolean;
-  onSubmit: (v: RegistrationSettings) => void;
-}) {
-  const [enabled, setEnabled] = useState(settings.enabled);
-  const [suffixes, setSuffixes] = useState<string[]>(settings.allowedEmailSuffixes ?? []);
-  return (
-    <form
-      className="flex flex-col gap-4"
-      onSubmit={(e) => {
-        e.preventDefault();
-        onSubmit({ enabled, allowedEmailSuffixes: suffixes });
-      }}
-    >
-      <Field label="开放注册">
-        <Switch checked={enabled} onCheckedChange={setEnabled} />
-      </Field>
-      <Field label="允许的邮箱后缀" hint="回车添加，如 @example.com；留空 = 任意邮箱">
-        <TagsInput value={suffixes} onChange={setSuffixes} placeholder="@example.com" />
-      </Field>
-      <Button type="submit" loading={pending} className="w-full">
-        保存
-      </Button>
-    </form>
   );
 }
 

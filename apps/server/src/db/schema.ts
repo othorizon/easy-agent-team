@@ -18,6 +18,8 @@ import type { OssStatement } from '../oss/oss-policy';
 export const users = pgTable('user', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: text('name').notNull(),
+  bio: text('bio').notNull().default(''),
+  allowHelp: boolean('allow_help').notNull().default(true),
   email: text('email').notNull().unique(),
   role: text('role', { enum: ['admin', 'member'] })
     .notNull()
@@ -27,6 +29,24 @@ export const users = pgTable('user', {
     .notNull()
     .default('active'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** 平台级个人通知；待验证配置与当前有效配置分开保存。 */
+export const userNotifications = pgTable('user_notification', {
+  userId: uuid('user_id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+  webhookUrl: text('webhook_url'),
+  webhookSecretEncrypted: text('webhook_secret_encrypted'),
+  verifiedAt: timestamp('verified_at', { withTimezone: true }),
+  notifyHelp: boolean('notify_help').notNull().default(true),
+  notifyReply: boolean('notify_reply').notNull().default(true),
+  notifyMention: boolean('notify_mention').notNull().default(true),
+  pendingUrl: text('pending_url'),
+  pendingSecretEncrypted: text('pending_secret_encrypted'),
+  challengeId: uuid('challenge_id'),
+  codeHash: text('code_hash'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }),
+  sentAt: timestamp('sent_at', { withTimezone: true }),
+  attempts: integer('attempts').notNull().default(0),
 });
 
 export const ossSettings = pgTable('oss_setting', {
@@ -767,7 +787,7 @@ export const dbAssignments = pgTable(
   ],
 );
 
-/** 可求助者登记：description 会被 AI 读取用于选择求助对象 */
+/** 旧版可求助登记，仅保留历史表结构；0028 起资料和通知分别使用 user / user_notification。 */
 export const helperProfiles = pgTable('helper_profile', {
   userId: uuid('user_id')
     .primaryKey()
@@ -867,6 +887,8 @@ export const registrationSettings = pgTable('registration_setting', {
   enabled: boolean('enabled').notNull().default(false),
   /** 允许的邮箱后缀（小写、含 @ 前缀）；空数组 = 任意邮箱 */
   allowedEmailSuffixes: jsonb('allowed_email_suffixes').$type<string[]>().notNull().default([]),
+  requireBio: boolean('require_bio').notNull().default(false),
+  requireNotification: boolean('require_notification').notNull().default(false),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

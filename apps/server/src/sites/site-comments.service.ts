@@ -10,9 +10,9 @@ import { and, asc, desc, eq, exists, inArray, isNull } from 'drizzle-orm';
 import type { CreateSiteThread, SiteCommentBody, SiteThread, SiteThreadQuery } from '@eat/shared';
 import type { AuthUser } from '../auth/auth.decorators';
 import { AuditService } from '../audit/audit.service';
-import { decryptSecret } from '../common/crypto';
 import { DB, type Db } from '../db/db.module';
-import { helperProfiles, siteComments, siteThreads, siteVersions, users } from '../db/schema';
+import { siteComments, siteThreads, siteVersions, users } from '../db/schema';
+import { UserNotificationsService } from '../notify/user-notifications.service';
 import { WebhookService } from '../notify/webhook.service';
 import { SiteRuntime } from './site-config';
 import { SitesService, type SiteRow } from './sites.service';
@@ -24,6 +24,7 @@ export class SiteCommentsService {
     @Inject(DB) private readonly db: Db,
     private readonly sites: SitesService,
     private readonly webhook: WebhookService,
+    private readonly notifications: UserNotificationsService,
     private readonly audit: AuditService,
     private readonly runtime: SiteRuntime,
   ) {}
@@ -250,12 +251,8 @@ export class SiteCommentsService {
     void (async () => {
       for (const userId of mentions) {
         if (userId === author.id) continue;
-        const [profile] = await this.db
-          .select()
-          .from(helperProfiles)
-          .where(eq(helperProfiles.userId, userId))
-          .limit(1);
-        if (!profile?.webhookUrl) continue;
+        const profile = await this.notifications.webhookOf(userId, 'mention');
+        if (!profile) continue;
         const url = `${await this.runtime.platform()}/folios/${site.slug}?thread=${threadId}`;
         const card = {
           header: {
@@ -280,8 +277,8 @@ export class SiteCommentsService {
         };
         this.webhook.notify(
           'site.comment.mentioned',
-          profile.webhookUrl,
-          profile.webhookSecretEncrypted ? decryptSecret(profile.webhookSecretEncrypted) : null,
+          profile.url,
+          profile.secret,
           card,
           `comment=${commentId}; recipient=${userId}`,
         );

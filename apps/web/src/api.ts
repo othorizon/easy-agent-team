@@ -52,6 +52,9 @@ export async function api<T>(method: string, path: string, body?: unknown, heade
         location.href = `/login?next=${encodeURIComponent(location.pathname + location.search)}`;
       }
     }
+    if (res.status === 403 && json.error === 'PROFILE_INCOMPLETE' && location.pathname !== '/complete-profile') {
+      location.href = `/complete-profile?next=${encodeURIComponent(location.pathname + location.search)}`;
+    }
     throw new ApiError(res.status, json.error ?? 'ERROR', json.message ?? `请求失败（${res.status}）`);
   }
   return json as T;

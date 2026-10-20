@@ -205,6 +205,7 @@ async function context(role = 'admin') {
         contentType: 'application/json',
         body: JSON.stringify(data),
       });
+    if (path === '/api/account/onboarding') return reply({ requireBio: false, requireNotification: false, bioComplete: false, notificationComplete: false, required: false });
     if (role !== 'admin' && path.startsWith('/api/admin/')) return reply({ message: '没有管理员权限' }, 403);
     if (method !== 'GET') writes.push({ path, body });
     if (path.endsWith('/test')) {
@@ -681,6 +682,8 @@ try {
   await personalView.getByRole('button', { name: '复制模型名称：gemini-2.5-pro', exact: true }).click();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'gemini-2.5-pro');
   await personalView.getByRole('textbox', { name: '搜索模型' }).fill('');
+  // 指针停在提示上会暂停 Sonner 的自动消失计时。
+  await page.mouse.move(0, 0);
   await page.waitForFunction(() => !document.querySelector('[data-sonner-toast]'));
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 });
@@ -743,11 +746,11 @@ try {
   await retry.page.locator('#ai-url').waitFor();
   await retry.ctx.close();
   const member = await context('member');
-  const count = requests.filter((r) => r.role === 'member').length;
+  const count = requests.filter((r) => r.role === 'member' && r.path.startsWith('/api/admin/')).length;
   await member.page.goto(base + '/settings?section=folio-cdn');
   await member.page.getByText('只有管理员可以查看和修改系统设置。', { exact: true }).waitFor();
   assert.equal(
-    requests.filter((r) => r.role === 'member').length,
+    requests.filter((r) => r.role === 'member' && r.path.startsWith('/api/admin/')).length,
     count,
     'Member requested administrator settings',
   );

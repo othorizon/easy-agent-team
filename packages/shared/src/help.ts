@@ -1,19 +1,19 @@
 import { z } from 'zod';
 import { slugSchema } from './common.js';
 
-// ---------- 可求助者登记 ----------
+// ---------- 旧客户端个人资料兼容接口 ----------
 
 export const upsertHelperProfileSchema = z.object({
-  /** 能力描述：会被 AI 读取用于选择向谁求助，写清楚擅长领域。可为空 */
+  /** 个人简介的旧字段别名；会被 AI 读取用于选择求助对象。可为空 */
   description: z.string().max(2000).default(''),
-  /** 新求助/新回复推送到此地址（飞书群自定义机器人 webhook，§10 决策 16） */
+  /** 已废弃：旧接口提交此字段会被拒绝，必须到用户中心验证 Webhook */
   webhookUrl: z.url().max(500).optional().or(z.literal('')),
-  /** 飞书机器人「加签」密钥（可选）。留空 = 保持已保存的值不变；清空 webhookUrl 时一并清除 */
+  /** 已废弃：必须在用户中心配置并验证。 */
   webhookSecret: z.string().max(200).optional().or(z.literal('')),
-  /** webhook 开关：接收求助（找我的新求助推送到群） */
-  notifyHelp: z.boolean().default(true),
-  /** webhook 开关：接收回复（我参与的求助有新回复时推送到群） */
-  notifyReply: z.boolean().default(true),
+  /** 已废弃：通知偏好迁至用户中心。 */
+  notifyHelp: z.boolean().optional(),
+  /** 已废弃：通知偏好迁至用户中心。 */
+  notifyReply: z.boolean().optional(),
   /** 勿扰时不出现在 AI 的候选名单 */
   available: z.boolean().default(true),
 });
@@ -29,7 +29,7 @@ export const helperInfoSchema = z.object({
 });
 export type HelperInfo = z.infer<typeof helperInfoSchema>;
 
-/** AI 选择求助对象的完整候选：登记的 helper + 允许求助的 skill 作者 */
+/** AI 选择求助对象的完整候选：允许求助的用户 + 允许求助的 skill 作者 */
 export const helpTargetsSchema = z.object({
   helpers: z.array(helperInfoSchema),
   skillAuthors: z.array(
@@ -52,7 +52,7 @@ export const createHelpRequestSchema = z
     description: z.string().min(1).max(10000),
     /** 已经尝试过什么（必填，减少伸手党问题） */
     tried: z.string().min(1).max(5000),
-    /** 二选一：向登记的 helper 求助 */
+    /** 二选一：向可求助用户求助 */
     helperUserId: z.string().optional(),
     /** 二选一：向某个允许求助的 skill 的作者求助 */
     skillSlug: slugSchema.optional(),

@@ -18,25 +18,34 @@ export class RegistrationService {
 
   async getSettings(): Promise<RegistrationSettings> {
     const row = (await this.db.select().from(registrationSettings).limit(1))[0];
-    return { enabled: row?.enabled ?? false, allowedEmailSuffixes: row?.allowedEmailSuffixes ?? [] };
+    return {
+      enabled: row?.enabled ?? false,
+      allowedEmailSuffixes: row?.allowedEmailSuffixes ?? [],
+      requireBio: row?.requireBio ?? false,
+      requireNotification: row?.requireNotification ?? false,
+    };
   }
 
   async updateSettings(actor: { id: string }, dto: RegistrationSettings): Promise<RegistrationSettings> {
     const row = (await this.db.select().from(registrationSettings).limit(1))[0];
+    const values = {
+      enabled: dto.enabled, allowedEmailSuffixes: dto.allowedEmailSuffixes,
+      requireBio: dto.requireBio, requireNotification: dto.requireNotification,
+    };
     if (row) {
       await this.db
         .update(registrationSettings)
-        .set({ enabled: dto.enabled, allowedEmailSuffixes: dto.allowedEmailSuffixes, updatedAt: sql`now()` })
+        .set({ ...values, updatedAt: sql`now()` })
         .where(eq(registrationSettings.id, row.id));
     } else {
       await this.db
         .insert(registrationSettings)
-        .values({ enabled: dto.enabled, allowedEmailSuffixes: dto.allowedEmailSuffixes });
+        .values(values);
     }
     await this.audit.record({
       actorId: actor.id,
       action: 'registration.settings_updated',
-      meta: { enabled: dto.enabled, allowedEmailSuffixes: dto.allowedEmailSuffixes },
+      meta: values,
     });
     return this.getSettings();
   }

@@ -18,6 +18,8 @@ import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
 import * as schema from '../src/db/schema';
+import { DB, type Db } from '../src/db/db.module';
+import { encryptSecret } from '../src/common/crypto';
 
 let app: NestFastifyApplication;
 let helperToken: string;
@@ -124,33 +126,36 @@ afterAll(async () => {
 let requestId: string;
 let skillRequestId: string;
 
-describe('Helper 登记', () => {
-  it('登记（含飞书 webhook + 用户粘贴的加签密钥）；出现在候选名单', async () => {
-    const r = await api('PUT', '/api/helpers/me', {
+describe('用户简介与可求助状态', () => {
+  it('完善个人简介后出现在候选名单，使用平台通知配置', async () => {
+    const r = await api('PATCH', '/api/account', {
       token: helperToken,
-      payload: { description: '熟悉支付对账、内部 ERP 系统', webhookUrl, webhookSecret, available: true },
+      payload: { bio: '熟悉支付对账、内部 ERP 系统', allowHelp: true },
     });
+    // 本组验证投递卡片与签名；地址验证流程由 account.spec.ts 覆盖。
+    await app.get<Db>(DB).insert(schema.userNotifications).values({ userId: helperId, webhookUrl, webhookSecretEncrypted: encryptSecret(webhookSecret), verifiedAt: new Date() });
     expect(r.status).toBe(200);
-    expect(r.body.hasWebhookSecret).toBe(true);
-    expect(r.body.webhookSecret).toBeUndefined(); // 密钥不回显
+    const notification = (await api('GET', '/api/account', { token: helperToken })).body.notification;
+    expect(notification.hasWebhookSecret).toBe(true);
+    expect(notification.webhookSecret).toBeUndefined(); // 密钥不回显
 
     const targets = await api('GET', '/api/helpers', { token: requesterToken });
     expect(targets.body.helpers.map((h: { name: string }) => h.name)).toContain('资深同事D');
     expect(targets.body.helpers[0].description).toContain('支付对账');
   });
 
-  it('勿扰后从候选名单消失，恢复后回来；更新时留空加签密钥保持不变', async () => {
-    await api('PUT', '/api/helpers/me', {
+  it('勿扰后从候选名单消失，恢复后回来；修改简介不影响通知密钥', async () => {
+    await api('PATCH', '/api/account', {
       token: helperToken,
-      payload: { description: '熟悉支付对账、内部 ERP 系统', webhookUrl, available: false },
+      payload: { allowHelp: false },
     });
     const off = await api('GET', '/api/helpers', { token: requesterToken });
     expect(off.body.helpers).toEqual([]);
-    const back = await api('PUT', '/api/helpers/me', {
+    const back = await api('PATCH', '/api/account', {
       token: helperToken,
-      payload: { description: '熟悉支付对账、内部 ERP 系统', webhookUrl, available: true },
+      payload: { allowHelp: true },
     });
-    expect(back.body.hasWebhookSecret).toBe(true); // 两次都没带 webhookSecret，仍保留首次配置的值
+    expect(back.body.notification.hasWebhookSecret).toBe(true); // 两次都没带 webhookSecret，仍保留首次配置的值
   });
 });
 
@@ -339,23 +344,22 @@ describe('求助流程', () => {
 });
 
 describe('通知开关与卡片（决策 17）', () => {
-  const HELPER_PROFILE = { description: '熟悉支付对账、内部 ERP 系统', available: true };
   let switchRequestId: string;
 
-  it('能力描述可留空，通知开关默认开启', async () => {
-    const r = await api('PUT', '/api/helpers/me', { token: thirdToken, payload: {} });
+  it('个人简介可留空，通知开关默认开启', async () => {
+    const r = await api('PATCH', '/api/account', { token: thirdToken, payload: { bio: '' } });
     expect(r.status).toBe(200);
-    expect(r.body.description).toBe('');
-    expect(r.body.notifyHelp).toBe(true);
-    expect(r.body.notifyReply).toBe(true);
+    expect(r.body.bio).toBe('');
+    expect(r.body.notification.notifyHelp).toBe(true);
+    expect(r.body.notification.notifyReply).toBe(true);
     await api('DELETE', '/api/helpers/me', { token: thirdToken }); // 不留在候选名单
   });
 
   it('关闭「接收求助」后创建求助不推送；打开后推送恢复且描述被截断', async () => {
     const baseline = webhookHits.length;
-    await api('PUT', '/api/helpers/me', {
+    await api('PUT', '/api/account/notification/preferences', {
       token: helperToken,
-      payload: { ...HELPER_PROFILE, webhookUrl, notifyHelp: false },
+      payload: { notifyHelp: false, notifyReply: true, notifyMention: true },
     });
     const muted = await api('POST', '/api/help-requests', {
       token: thirdToken,
@@ -365,9 +369,9 @@ describe('通知开关与卡片（决策 17）', () => {
     await new Promise((r) => setTimeout(r, 600));
     expect(webhookHits.length).toBe(baseline);
 
-    await api('PUT', '/api/helpers/me', {
+    await api('PUT', '/api/account/notification/preferences', {
       token: helperToken,
-      payload: { ...HELPER_PROFILE, webhookUrl, notifyReply: false },
+      payload: { notifyHelp: true, notifyReply: false, notifyMention: true },
     });
     const longDesc = '这是一段用来验证卡片截断效果的很长描述。'.repeat(10);
     const r = await api('POST', '/api/help-requests', {
@@ -391,7 +395,7 @@ describe('通知开关与卡片（决策 17）', () => {
     await new Promise((r) => setTimeout(r, 600));
     expect(webhookHits.length).toBe(baseline);
 
-    await api('PUT', '/api/helpers/me', { token: helperToken, payload: { ...HELPER_PROFILE, webhookUrl } });
+    await api('PUT', '/api/account/notification/preferences', { token: helperToken, payload: { notifyHelp: true, notifyReply: true, notifyMention: true } });
     await api('POST', `/api/help-requests/${switchRequestId}/reply`, {
       token: thirdToken,
       payload: { content: '这条追问应收到回复卡片' },

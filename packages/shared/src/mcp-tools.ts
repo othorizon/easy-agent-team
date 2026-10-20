@@ -120,7 +120,7 @@ function helpTools(mode: EatToolMode): EatToolDef[] {
     {
       name: 'list_helpers',
       description:
-        '列出可求助的对象：登记的可求助者（description 描述其擅长领域，据此选择最合适的人）+ 开启了求助的 skill 及其作者（问题与某个 skill 相关时优先走 skill 入口）。发起求助前先调用这个。',
+        '列出可求助的对象：填写了个人简介且允许被求助的用户（description 为用户个人简介，据此了解擅长领域并选择最合适的人）+ 开启了求助的 skill 及其作者（问题与某个 skill 相关时优先走 skill 入口）。发起求助前先调用这个。',
       inputSchema: { type: 'object', properties: {} },
     },
     {
@@ -133,7 +133,7 @@ function helpTools(mode: EatToolMode): EatToolDef[] {
           title: { type: 'string', description: '问题标题（一句话）' },
           description: { type: 'string', description: '问题详细描述与上下文（不要携带密钥等敏感值）' },
           tried: { type: 'string', description: '已经尝试过什么（必填）' },
-          helperUserId: { type: 'string', description: '向登记的 helper 求助（其 userId，来自 list_helpers）' },
+          helperUserId: { type: 'string', description: '向可求助的用户求助（其 userId，来自 list_helpers）' },
           skillSlug: { type: 'string', description: '向某个 skill 的作者求助（skill slug，来自 list_helpers）' },
         },
         required: ['title', 'description', 'tried'],

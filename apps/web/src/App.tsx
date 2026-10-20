@@ -18,8 +18,11 @@ import {
   Users,
 } from 'lucide-react';
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import type { OnboardingStatus } from '@eat/shared';
+import { AccountPage } from './pages/Account';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { clearSession, getStoredUser, getToken } from './api';
+import { api, clearSession, getStoredUser, getToken } from './api';
 import { BrandIcon } from './components/brand-icon';
 import { Badge } from './components/ui/badge';
 import { Button } from './components/ui/button';
@@ -198,6 +201,9 @@ function UserMenu({ compact }: { compact?: boolean }) {
           <div className="truncate">{user?.email}</div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => navigate('/account')}>
+          <Users />用户中心
+        </DropdownMenuItem>
         <DropdownMenuItem
           destructive
           onSelect={() => {
@@ -268,9 +274,20 @@ function Shell({ children }: { children: React.ReactNode }) {
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const location = useLocation();
-  if (!getToken()) {
-    // 连 query string 一起带回来：/device?code=… 这类链接登录后才不会把参数丢掉
-    return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`} replace />;
+  const token = getToken();
+  // 设备授权用于 CLI 登录，不受网站补全流程限制。
+  const exempt = location.pathname === '/device';
+  const status = useQuery({
+    queryKey: ['onboarding', token, location.pathname],
+    queryFn: () => api<OnboardingStatus>('GET', '/api/account/onboarding'),
+    enabled: !!token && !exempt,
+    staleTime: 0, refetchOnMount: 'always', refetchOnWindowFocus: true, refetchInterval: 30_000,
+  });
+  if (!token) return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`} replace />;
+  if (!exempt) {
+    if (status.isError) return <div className="p-8 space-y-4"><p>账号状态加载失败：{status.error.message}</p><Button onClick={() => void status.refetch()}>重试</Button></div>;
+    if (!status.data) return <p className="p-8 text-muted-foreground">正在检查账号状态…</p>;
+    if (status.data.required) return <Navigate to={`/complete-profile?next=${encodeURIComponent(location.pathname + location.search)}`} replace />;
   }
   return <Shell>{children}</Shell>;
 }
@@ -279,6 +296,8 @@ export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/complete-profile" element={<AccountPage completion />} />
+      <Route path="/account" element={<RequireAuth><AccountPage /></RequireAuth>} />
       <Route path="/" element={<RequireAuth><EnvsPage /></RequireAuth>} />
       <Route path="/envs/:slug" element={<RequireAuth><EnvDetailPage /></RequireAuth>} />
       <Route path="/skills" element={<RequireAuth><SkillsPage /></RequireAuth>} />

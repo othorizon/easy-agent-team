@@ -83,6 +83,7 @@ export class AuthService {
     const rows = await this.db
       .select({
         tokenId: apiTokens.id,
+        tokenKind: apiTokens.kind,
         userId: users.id,
         name: users.name,
         email: users.email,
@@ -109,7 +110,7 @@ export class AuthService {
       .where(eq(apiTokens.id, row.tokenId))
       .catch(() => undefined);
 
-    return { id: row.userId, name: row.name, email: row.email, role: row.role, tokenId: row.tokenId };
+    return { id: row.userId, name: row.name, email: row.email, role: row.role, tokenId: row.tokenId, tokenKind: row.tokenKind };
   }
 
   /** 生成 API Key（决策 55）：明文只在这一次响应里出现，之后平台只有哈希 */

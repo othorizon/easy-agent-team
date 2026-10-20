@@ -14,7 +14,7 @@ import type { AuthUser } from '../auth/auth.decorators';
 import { isFullId, resolveShortId } from '../common/short-id';
 import { loadConfig } from '../config';
 import { DB, type Db } from '../db/db.module';
-import { experiences, helpMessages, helperProfiles, helpRequests, skills, users } from '../db/schema';
+import { experiences, helpMessages, helpRequests, skills, users } from '../db/schema';
 import { WebhookService } from '../notify/webhook.service';
 import { HelpersService } from './helpers.service';
 
@@ -119,7 +119,7 @@ export class HelpService {
       });
     }
 
-    // 解析求助对象：skill 作者 或 登记的 helper
+    // 解析求助对象：skill 作者或已填写个人简介的用户
     let helperId: string;
     let skillId: string | null = null;
     if (dto.skillSlug) {
@@ -131,12 +131,17 @@ export class HelpService {
       skillId = skill.id;
     } else {
       const profile = (
-        await this.db.select().from(helperProfiles).where(eq(helperProfiles.userId, dto.helperUserId!)).limit(1)
+        await this.db.select().from(users).where(eq(users.id, dto.helperUserId!)).limit(1)
       )[0];
-      if (!profile || !profile.available) {
-        throw new BadRequestException({ error: 'NOT_FOUND', message: '对方未登记为可求助者或当前勿扰' });
+      if (!profile || !profile.allowHelp || !profile.bio.trim() || profile.status !== 'active') {
+        throw new BadRequestException({ error: 'NOT_FOUND', message: '对方未填写个人简介、当前勿扰或账号已停用' });
       }
-      helperId = profile.userId;
+      helperId = profile.id;
+    }
+    const [recipient] = await this.db.select({ status: users.status, allowHelp: users.allowHelp })
+      .from(users).where(eq(users.id, helperId)).limit(1);
+    if (!recipient || recipient.status !== 'active' || !recipient.allowHelp) {
+      throw new BadRequestException({ error: 'NOT_FOUND', message: '对方当前勿扰或账号已停用' });
     }
     if (helperId === user.id) {
       throw new BadRequestException({ error: 'VALIDATION_FAILED', message: '不能向自己求助' });

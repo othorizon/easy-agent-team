@@ -75,6 +75,7 @@ try {
     await context.route('**/api/**', async (route) => {
       const req = route.request(),
         path = new URL(req.url()).pathname;
+      if (path === '/api/account/onboarding') return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ requireBio: false, requireNotification: false, bioComplete: false, notificationComplete: false, required: false }) });
       let body = {};
       if (path === '/api/admin/site-settings/cdn') {
         if (req.method() === 'PUT') {

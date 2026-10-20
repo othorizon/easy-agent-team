@@ -44,9 +44,11 @@ import { FolioCdnSettings } from './FolioCdnSettings';
 import { LlmGatewaySettingsCard } from './LlmGatewaySettings';
 import { OssSettingsCard } from './OssSettings';
 import './settings.css';
+import { RegistrationSettingsCard } from './RegistrationSettings';
 
 const NONE = '__none__';
 const categories = [
+  { group: '账号管理', items: [{ id: 'registration', label: '注册与登录', icon: LockKeyhole }] },
   {
     group: 'AI 与模型',
     items: [
@@ -159,6 +161,7 @@ export function SettingsPage() {
         <div className="settings-workspace">
           {mounted.map((id) => (
             <div key={id} hidden={active !== id} data-settings-panel={id}>
+              {id === 'registration' && <RegistrationSettingsCard />}
               {id === 'platform-ai' && <AiSettingsCard active={active === id} />}
               {id === 'llm-gateway' && <LlmGatewaySettingsCard active={active === id} />}
               {id === 'oss' && <OssSettingsCard active={active === id} />}

@@ -20,6 +20,6 @@ CLI/Web 每次提交完整文件清单，仅将缺失 SHA-256 内容以二进制
 
 MCP 中通过 folio 参数指定 Folio 标识。读取密码访问的 Folio 时，先 `unlock_folio` 验证，后续调用携带返回的 accessToken；`create_folio_share_link` 返回免输密码链接，它只授予 Folio 访问能力，不代表用户身份。发表评论或回复始终需要 EAT 登录。
 
-处理反馈用 `list_folio_comments`（支持 page / versionId / status），每条评论与回复均附实际浏览版本，讨论还附元素或区域锚点及原版本链接。创建或回复时必须传实际查看的 versionId，不要拿当前最新版代替旧 Folio 的版本。`list_folio_mention_users` 查询用户 ID，在 mentions 中指定即可 @；配置过个人飞书 webhook 的用户会收到事件通知。修复后发布新版、回复说明，再按需 `set_folio_thread_status` 标记解决；发布不会自动解决旧评论。删除评论用 `delete_folio_comment` / `eat folio delete-comment <folio> <comment-id>`，仅评论作者、Folio 所有者或管理员可操作；清除正文并保留其他人的回复。
+处理反馈用 `list_folio_comments`（支持 page / versionId / status），每条评论与回复均附实际浏览版本，讨论还附元素或区域锚点及原版本链接。创建或回复时必须传实际查看的 versionId，不要拿当前最新版代替旧 Folio 的版本。`list_folio_mention_users` 查询用户 ID，在 mentions 中指定即可 @；在用户中心配置并验证过飞书 Webhook、且开启评论提及通知的用户会收到事件通知。修复后发布新版、回复说明，再按需 `set_folio_thread_status` 标记解决；发布不会自动解决旧评论。删除评论用 `delete_folio_comment` / `eat folio delete-comment <folio> <comment-id>`，仅评论作者、Folio 所有者或管理员可操作；清除正文并保留其他人的回复。
 
 删除整个 Folio 用 `eat folio delete <folio>` / `delete_folio`，仅所有者或管理员可操作。必须先取得用户明确的删除指令；这会永久清除全部历史版本、发布文件、评论与会话，固定链接和分享链接立即失效，无法恢复。返回 `cleanupFailed: true` 时 Folio 已删除，但部分私有文件清理失败，需通知管理员按审计记录检查清理；`cleanupPending: true` 表示旧上传签名仍有效，后台将继续清扫该 Folio 前缀。

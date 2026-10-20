@@ -1,8 +1,8 @@
-import type { HelperInfo, HelpListResult, HelpTargets, UpsertHelperProfileRequest } from '@eat/shared';
+import type { HelperInfo, HelpListResult, HelpTargets } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, Plus, UserCog } from 'lucide-react';
+import { Plus, UserCog } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Controller, useForm } from 'react-hook-form';
+import { useForm } from 'react-hook-form';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api, ApiError } from '../api';
@@ -16,11 +16,9 @@ import { Segmented } from '../components/segmented';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { TableSkeleton } from '../components/ui/skeleton';
-import { Switch } from '../components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { formatDateTime } from '../lib/format';
@@ -41,22 +39,9 @@ export const HELP_STATUS_BADGE: Record<string, JSX.Element> = {
  */
 const PENDING_HINT = '还等着某一方回应的求助：等待回复 + 已回复但未确认解决';
 
-type MyProfile =
-  | { registered: false }
-  | {
-      registered: true;
-      description: string;
-      webhookUrl: string;
-      hasWebhookSecret: boolean;
-      notifyHelp: boolean;
-      notifyReply: boolean;
-      available: boolean;
-    };
-
 export function HelpPage() {
   const queryClient = useQueryClient();
   const [asking, setAsking] = useState(false);
-  const [editingProfile, setEditingProfile] = useState(false);
   // 方向、进展与分页同步到 URL；等于默认值的不写进去。
   const [params, setParams] = useQueryParams({ tab: 'inbox', status: 'pending', page: '1', pageSize: '20' });
   const tab = params.tab === 'mine' ? 'mine' : 'inbox';
@@ -66,7 +51,6 @@ export function HelpPage() {
   const pageSize = PAGE_SIZE_OPTIONS.includes(Number(params.pageSize)) ? Number(params.pageSize) : 20;
   const query = new URLSearchParams({ status, page: String(page), pageSize: String(pageSize) });
 
-  const profile = useQuery({ queryKey: ['helper-me'], queryFn: () => api<MyProfile>('GET', '/api/helpers/me') });
   const targets = useQuery({ queryKey: ['help-targets'], queryFn: () => api<HelpTargets>('GET', '/api/helpers') });
   const inbox = useQuery({
     queryKey: ['help-inbox', status, page, pageSize],
@@ -82,17 +66,6 @@ export function HelpPage() {
       setParams({ page: String(activeQuery.data.page) });
     }
   }, [activeQuery.data, activeQuery.isFetching, params.page, setParams]);
-
-  const saveProfile = useMutation({
-    mutationFn: (v: UpsertHelperProfileRequest) => api<MyProfile>('PUT', '/api/helpers/me', v),
-    onSuccess: () => {
-      toast.success('已保存');
-      setEditingProfile(false);
-      void queryClient.invalidateQueries({ queryKey: ['helper-me'] });
-      void queryClient.invalidateQueries({ queryKey: ['help-targets'] });
-    },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : '保存失败'),
-  });
 
   const createRequest = useMutation({
     mutationFn: (v: { title: string; description: string; tried: string; target: string }) => {
@@ -183,19 +156,10 @@ export function HelpPage() {
     <div className="space-y-5">
       <PageHeader
         title="求助"
-        description="遇到 AI 解决不了的问题时向擅长的同事求助；也可以登记为可求助者，帮助他人并沉淀经验。"
+        description="遇到 AI 解决不了的问题时向擅长的同事求助；完善用户中心的个人简介，让 AI 找到擅长的同事。"
         actions={
           <>
-            <Button variant="outline" onClick={() => setEditingProfile(true)}>
-              <UserCog />
-              可求助登记
-              {profile.data?.registered && (
-                <span
-                  className={`size-1.5 rounded-full ${profile.data.available ? 'bg-success' : 'bg-muted-foreground/40'}`}
-                  title={profile.data.available ? '接单中' : '勿扰中'}
-                />
-              )}
-            </Button>
+            <Button variant="outline" asChild><Link to="/account"><UserCog />用户中心</Link></Button>
             <Button onClick={() => setAsking(true)}>
               <Plus />
               发起求助
@@ -252,7 +216,7 @@ export function HelpPage() {
                 data={inbox.data}
                 dir="in"
                 loading={inbox.isLoading}
-                emptyText="暂无找你的求助。完善「可求助登记」的能力描述，同事的 AI 才找得到你。"
+                emptyText="暂无找你的求助。在用户中心完善个人简介并允许被求助，同事的 AI 就能找到你。"
               />
               {tab === 'inbox' && !inbox.isLoading && !inbox.isError && inbox.data && (
                 <Pagination
@@ -289,29 +253,6 @@ export function HelpPage() {
         </TabsContent>
       </Tabs>
 
-      {editingProfile && (
-        <Dialog open onOpenChange={(open) => !open && setEditingProfile(false)}>
-          <DialogContent className="max-w-xl">
-            <DialogHeader>
-              <DialogTitle>我的可求助登记</DialogTitle>
-              <DialogDescription>
-                登记后，其他成员（和他们的 AI）遇到你擅长的问题时会来求助。「能力描述」会被 AI 读取用于选择求助对象，请写清楚擅长领域。
-              </DialogDescription>
-            </DialogHeader>
-            {profile.data ? (
-              <ProfileForm
-                key={profile.data.registered ? 'registered' : 'new'}
-                profile={profile.data}
-                pending={saveProfile.isPending}
-                onSubmit={(v) => saveProfile.mutate(v)}
-              />
-            ) : (
-              <TableSkeleton rows={2} />
-            )}
-          </DialogContent>
-        </Dialog>
-      )}
-
       {asking && (
         <AskDialog
           targets={targets.data}
@@ -321,94 +262,6 @@ export function HelpPage() {
         />
       )}
     </div>
-  );
-}
-
-interface ProfileFormValues extends UpsertHelperProfileRequest {
-  webhookSecret?: string;
-}
-
-function ProfileForm({
-  profile,
-  pending,
-  onSubmit,
-}: {
-  profile: MyProfile;
-  pending: boolean;
-  onSubmit: (v: UpsertHelperProfileRequest) => void;
-}) {
-  const [webhookOpen, setWebhookOpen] = useState(false);
-  const { register, handleSubmit, control } = useForm<ProfileFormValues>({
-    defaultValues: profile.registered
-      ? { ...profile, webhookSecret: '' }
-      : { description: '', webhookUrl: '', webhookSecret: '', notifyHelp: true, notifyReply: true, available: true },
-  });
-  const webhookConfigured = profile.registered && !!profile.webhookUrl;
-  return (
-    <form className="flex flex-col gap-4" onSubmit={handleSubmit(onSubmit)}>
-      <Field label="能力描述" htmlFor="helper-desc" hint="AI 会读取，可留空">
-        <Textarea id="helper-desc" rows={2} placeholder="例如：熟悉支付对账、内部 ERP 系统、部署流程" {...register('description')} />
-      </Field>
-
-      <Collapsible open={webhookOpen} onOpenChange={setWebhookOpen} className="rounded-lg border">
-        <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 px-4 py-3 text-sm font-medium cursor-pointer">
-          <span className="flex flex-wrap items-center gap-2">
-            飞书群机器人通知
-            {webhookConfigured ? <Badge variant="success">已配置</Badge> : <Badge variant="outline">未配置</Badge>}
-          </span>
-          <ChevronDown className={`size-4 text-muted-foreground transition-transform ${webhookOpen ? 'rotate-180' : ''}`} />
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <div className="flex flex-col gap-4 border-t px-4 py-4">
-            <Field label="飞书机器人 Webhook 地址" htmlFor="helper-webhook" hint="求助/回复以卡片消息推送到该飞书群">
-              <Input id="helper-webhook" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." {...register('webhookUrl')} />
-            </Field>
-            <Field
-              label="飞书加签密钥"
-              htmlFor="helper-secret"
-              hint={
-                profile.registered && profile.hasWebhookSecret
-                  ? '已配置加签密钥；留空保持不变，重新填写则覆盖'
-                  : '可选：机器人开启「签名校验」时，从飞书复制粘贴到这里；未开加签则留空'
-              }
-            >
-              <Input
-                id="helper-secret"
-                type="password"
-                placeholder="飞书机器人安全设置里的签名密钥"
-                autoComplete="new-password"
-                {...register('webhookSecret')}
-              />
-            </Field>
-            <Field label="接收求助" hint="找我的新求助推送到群">
-              <Controller
-                control={control}
-                name="notifyHelp"
-                render={({ field }) => <Switch checked={field.value} onCheckedChange={field.onChange} />}
-              />
-            </Field>
-            <Field label="接收回复" hint="我参与的求助有新回复时推送到群">
-              <Controller
-                control={control}
-                name="notifyReply"
-                render={({ field }) => <Switch checked={field.value} onCheckedChange={field.onChange} />}
-              />
-            </Field>
-          </div>
-        </CollapsibleContent>
-      </Collapsible>
-
-      <Field label="接单状态" hint="关闭 = 勿扰，不出现在候选名单">
-        <Controller
-          control={control}
-          name="available"
-          render={({ field }) => <Switch checked={field.value} onCheckedChange={field.onChange} />}
-        />
-      </Field>
-      <Button type="submit" loading={pending} className="w-full">
-        {profile.registered ? '更新登记' : '登记为可求助者'}
-      </Button>
-    </form>
   );
 }
 

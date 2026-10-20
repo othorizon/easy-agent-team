@@ -179,7 +179,10 @@ describe('开放注册', () => {
     expect(put.body.allowedEmailSuffixes).toEqual(['@corp.com', '@sub.example.com']);
     // 探测对未登录用户公开同一形状（登录页据此展示注册入口与后缀提示）
     const probe = await api('GET', '/api/auth/registration');
-    expect(probe.body).toEqual({ enabled: true, allowedEmailSuffixes: ['@corp.com', '@sub.example.com'] });
+    expect(probe.body).toEqual({
+      enabled: true, allowedEmailSuffixes: ['@corp.com', '@sub.example.com'],
+      requireBio: false, requireNotification: false,
+    });
 
     const bad = await api('POST', '/api/auth/register', {
       payload: { name: '外人', email: 'evil@other.com', password: 'password123' },

@@ -85,6 +85,8 @@ export const registrationSettingsSchema = z.object({
   enabled: z.boolean(),
   /** 允许注册的邮箱后缀；空数组 = 任意邮箱 */
   allowedEmailSuffixes: z.array(emailSuffixSchema).max(20).default([]),
+  requireBio: z.boolean().default(false),
+  requireNotification: z.boolean().default(false),
 });
 export type RegistrationSettings = z.infer<typeof registrationSettingsSchema>;
 
