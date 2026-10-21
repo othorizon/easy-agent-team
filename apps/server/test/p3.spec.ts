@@ -696,7 +696,11 @@ describe('应用：更新、成员与权限', () => {
   it('成员管理：非 Owner 不能改配置 / 加成员；isMember 与 canDeploy 分开算', async () => {
     expect((await api('PATCH', '/api/apps/crm-tool', { token: memberToken, payload: { name: 'x' } })).status).toBe(403);
     expect((await api('POST', '/api/apps/crm-tool/members', { token: memberToken, payload: { userId: memberId } })).status).toBe(403);
-    await api('POST', '/api/apps/crm-tool/members', { token: ownerToken, payload: { userId: memberId } });
+    expect((await api('POST', '/api/apps/crm-tool/members', { token: ownerToken, payload: { userId: memberId } })).status).toBe(403);
+    await api('POST', '/api/apps/crm-tool/approve', { token: adminToken });
+    expect((await api('POST', '/api/apps/crm-tool/members', { token: ownerToken, payload: { userId: memberId } })).status).toBe(201);
+    // Approval can subsequently be revoked without deleting existing members.
+    await api('DELETE', '/api/apps/crm-tool/approve', { token: adminToken });
 
     const find = (rows: Array<{ slug: string }>) => rows.find((a) => a.slug === 'crm-tool') as Record<string, unknown>;
     const asMember = find((await api('GET', '/api/apps', { token: memberToken })).body);

@@ -940,6 +940,8 @@ export const dokploySettings = pgTable('dokploy_setting', {
  * managed=false 的是管理员挂载的既有 application，构建配置归 Dokploy 侧维护、平台不替它记。
  */
 export const apps = pgTable('app', {
+  repoVersion: integer('repo_version').notNull().default(1),
+  approvedRepoVersion: integer('approved_repo_version'),
   id: uuid('id').primaryKey().defaultRandom(),
   slug: text('slug').notNull().unique(),
   name: text('name').notNull(),
@@ -1055,3 +1057,63 @@ export const auditLogs = pgTable(
   },
   (t) => [index('audit_log_action_idx').on(t.action), index('audit_log_created_idx').on(t.createdAt)],
 );
+
+/** GitHub integration state. These are mutable work records, not an audit trail. */
+export const githubSettings = pgTable('github_setting', {
+  id: integer('id').primaryKey().default(1), enabled: boolean('enabled').notNull().default(false),
+  organization: text('organization').notNull(), appId: text('app_id').notNull(), clientId: text('client_id').notNull(),
+  installationId: text('installation_id').notNull(), clientSecretEncrypted: text('client_secret_encrypted').notNull(),
+  privateKeyEncrypted: text('private_key_encrypted').notNull(), organizationId: text('organization_id'),
+  revision: uuid('revision').notNull().defaultRandom(), appSlug: text('app_slug'),
+  connectionState: text('connection_state').$type<import('@eat/shared').GithubConnectionState>().notNull().default('app_ready'),
+  connectionError: text('connection_error').notNull().default(''),
+  checkedAt: timestamp('checked_at', { withTimezone: true }),
+});
+export const githubSetupStates = pgTable('github_setup_state', {
+  stateHash: text('state_hash').primaryKey(), browserHash: text('browser_hash').notNull(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tokenId: uuid('token_id').notNull(), kind: text('kind').$type<'manifest' | 'installation'>().notNull(),
+  configRevision: uuid('config_revision'), organization: text('organization').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+});
+export const githubAccounts = pgTable('github_account', {
+  userId: uuid('user_id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+  githubId: text('github_id').notNull().unique(), login: text('login').notNull(),
+  version: uuid('version').notNull().defaultRandom(), accessTokenEncrypted: text('access_token_encrypted').notNull(),
+  refreshTokenEncrypted: text('refresh_token_encrypted'), expiresAt: timestamp('expires_at', { withTimezone: true }),
+  needsAuthorization: boolean('needs_authorization').notNull().default(false),
+  orgState: text('org_state').$type<import('@eat/shared').GithubOrgState>().notNull().default('unknown'),
+  orgRole: text('org_role'), checkedAt: timestamp('checked_at', { withTimezone: true }),
+  error: text('error').notNull().default(''),
+});
+export const githubOauthStates = pgTable('github_oauth_state', {
+  stateHash: text('state_hash').primaryKey(), browserHash: text('browser_hash').notNull(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tokenId: uuid('token_id').notNull(), bindingVersion: text('binding_version'),
+  configRevision: uuid('config_revision'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+});
+export const githubRepositories = pgTable('github_repository', {
+  appId: uuid('app_id').primaryKey().references(() => apps.id, { onDelete: 'cascade' }),
+  version: integer('version').notNull(), repositoryId: text('repository_id'), fullName: text('full_name'),
+  data: jsonb('data').$type<import('@eat/shared').GithubAppInfo>().notNull(),
+  checkedAt: timestamp('checked_at', { withTimezone: true }).notNull().defaultNow(),
+});
+export const githubGrants = pgTable('github_grant', {
+  key: text('key').primaryKey(), repositoryId: text('repository_id').notNull(), fullName: text('full_name').notNull(),
+  githubId: text('github_id').notNull(), login: text('login').notNull(), userId: uuid('user_id').notNull(),
+  previousRole: text('previous_role'), baselineSafe: boolean('baseline_safe').notNull().default(false),
+  appliedRole: text('applied_role').notNull(), managed: boolean('managed').notNull().default(false),
+  roleChangedAt: timestamp('role_changed_at', { withTimezone: true }),
+  prepared: boolean('prepared').notNull().default(true), error: text('error').notNull().default(''),
+});
+export const githubTasks = pgTable('github_task', {
+  key: text('key').primaryKey(), kind: text('kind').notNull(),
+  payload: jsonb('payload').$type<{ userId?: string; appId?: string; actorId?: string; version?: number;
+    bindingVersion?: string; actorBindingVersion?: string; intentAt?: string; repositoryId?: string; observedRole?: string; role?: import('@eat/shared').GithubRole; grantKey?: string; manual?: boolean }>().notNull(),
+  generation: integer('generation').notNull().default(1), state: text('state').notNull().default('pending'),
+  attempts: integer('attempts').notNull().default(0), error: text('error').notNull().default(''),
+  notification: text('notification').notNull().default(''),
+  retryAt: timestamp('retry_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('github_task_retry_idx').on(t.state, t.retryAt)]);

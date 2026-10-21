@@ -1,3 +1,4 @@
+import { GithubSettings } from './GithubSettings';
 import type {
   AiSettingsInfo,
   ConnectionTestResult,
@@ -59,7 +60,7 @@ const categories = [
   { group: '资源存储', items: [{ id: 'oss', label: 'OSS 存储', icon: Cloud }] },
   {
     group: '应用托管',
-    items: [{ id: 'deployment', label: '部署接入', icon: Server }],
+    items: [{ id: 'deployment', label: '部署接入', icon: Server }, { id: 'github', label: 'GitHub 接入', icon: Network }],
   },
   {
     group: 'Folio 发布',
@@ -165,6 +166,7 @@ export function SettingsPage() {
               {id === 'platform-ai' && <AiSettingsCard active={active === id} />}
               {id === 'llm-gateway' && <LlmGatewaySettingsCard active={active === id} />}
               {id === 'oss' && <OssSettingsCard active={active === id} />}
+              {id === 'github' && <GithubSettings active={active === id} />}
               {id === 'deployment' && <DokploySettingsCard active={active === id} />}
               {id === 'folio' && <FolioSettingsCard active={active === id} />}
               {id === 'folio-cdn' && <FolioCdnSettings active={active === id} />}

@@ -1,3 +1,4 @@
+import { GithubAppSummary, GithubMembers } from '../components/github';
 import type {
   AppBuildType,
   AppEnv,
@@ -179,7 +180,7 @@ export function AppsPage() {
         description={
           <>
             应用对应 Dokploy 上的 application：填 Git 地址与构建方式即可自助创建，平台自动在 Dokploy 上建好应用并绑定 SSH key。
-            首次部署需管理员授权一次，之后命令行 <InlineCode>eat deploy &lt;slug&gt;</InlineCode> 与详情里的「部署」按钮都能触发，均按绑定的 Git 分支构建。
+            当前仓库需管理员授权后才能部署；更换仓库需重新审批，更换分支无需重审。命令行 <InlineCode>eat deploy &lt;slug&gt;</InlineCode> 与详情里的「部署」按钮均按绑定的 Git 分支构建。
           </>
         }
         actions={
@@ -257,6 +258,7 @@ export function AppsPage() {
                         <span className="font-medium">{a.name}</span>
                         <Badge variant="outline">{a.buildType ? APP_BUILD_TYPE_LABEL[a.buildType] : '挂载'}</Badge>
                       </button>
+                      <GithubAppSummary slug={a.slug} compact />
                       {a.url && (
                         <a href={a.url} target="_blank" rel="noreferrer" className="mt-0.5 block truncate font-mono text-xs text-muted-foreground hover:underline">
                           {a.domain}
@@ -405,7 +407,8 @@ function Overview({
   const addMember = useMutation({
     mutationFn: (userId: string) => api('POST', `/api/apps/${app.slug}/members`, { userId }),
     onSuccess: () => {
-      toast.success('已添加成员');
+      toast.success('EAT 成员已添加，GitHub 授权状态请查看下方列表');
+      void queryClient.invalidateQueries({ queryKey: ['github-app', app.slug] });
       onChanged();
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '添加失败'),
@@ -414,6 +417,7 @@ function Overview({
     mutationFn: (userId: string) => api('DELETE', `/api/apps/${app.slug}/members/${userId}`),
     onSuccess: () => {
       toast.success('已移除');
+      void queryClient.invalidateQueries({ queryKey: ['github-app', app.slug] });
       onChanged();
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '移除失败'),
@@ -526,13 +530,14 @@ function Overview({
         ))}
       </dl>
 
+      <GithubAppSummary slug={app.slug} />
       <div className="rounded-md border px-3 py-2.5 text-sm">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <span className="font-medium">部署授权</span>
             <span className="ml-2 text-muted-foreground">
               {app.deployApproved
-                ? `已由 ${app.approvedByName ?? '-'} 于 ${app.approvedAt ? formatDateTime(app.approvedAt) : '-'} 授权，之后不再拦`
+                ? `已由 ${app.approvedByName ?? '-'} 于 ${app.approvedAt ? formatDateTime(app.approvedAt) : '-'} 授权当前仓库；更换仓库需重新审批`
                 : app.approvalRequestedAt
                   ? `待管理员授权；${formatDateTime(app.approvalRequestedAt)} 有成员尝试部署被拒`
                   : '待管理员授权（首次部署前需放行一次）'}
@@ -570,7 +575,7 @@ function Overview({
                 </button>
               </Badge>
             ))}
-            <div className="w-52">
+            {app.deployApproved ? <div className="w-52">
               <Combobox
                 groups={[
                   {
@@ -585,10 +590,11 @@ function Overview({
                 searchPlaceholder="搜索姓名或邮箱…"
                 className="h-7 text-xs"
               />
-            </div>
+            </div> : <p className="text-xs text-muted-foreground">当前仓库获部署批准后可添加成员。</p>}
           </div>
         </div>
       )}
+      <GithubMembers slug={app.slug} />
     </div>
   );
 }

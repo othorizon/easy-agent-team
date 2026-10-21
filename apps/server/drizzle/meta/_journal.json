@@ -204,6 +204,20 @@
       "when": 1792486426871,
       "tag": "0028_user_account",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1792540800000,
+      "tag": "0029_github",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1792627200000,
+      "tag": "0030_github_setup",
+      "breakpoints": true
     }
   ]
 }

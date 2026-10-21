@@ -107,7 +107,7 @@ export class DeployService {
     if (!(await this.apps.isMember(app, user))) {
       throw new ForbiddenException({ error: 'FORBIDDEN', message: '仅应用成员可部署（找 Owner 把你加入应用）' });
     }
-    if (!app.deployApproved) {
+    if (!app.deployApproved || app.approvedRepoVersion !== app.repoVersion) {
       await this.apps.markApprovalRequested(app.id);
       await this.audit.record({
         actorId: user.id,

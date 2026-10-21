@@ -1,3 +1,4 @@
+import { GithubAccountPanel } from '../components/github';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { useState } from 'react';
@@ -107,6 +108,7 @@ export function UsersPage() {
                   <TableHead>邮箱</TableHead>
                   <TableHead className="w-28">角色</TableHead>
                   <TableHead className="w-20">状态</TableHead>
+                  <TableHead>GitHub 组织</TableHead>
                   <TableHead className="w-40">操作</TableHead>
                 </TableRow>
               </TableHeader>
@@ -140,6 +142,7 @@ export function UsersPage() {
                     <TableCell>
                       {row.status === 'active' ? <Badge variant="success">正常</Badge> : <Badge variant="destructive">已禁用</Badge>}
                     </TableCell>
+                    <TableCell className="min-w-64"><GithubAccountPanel userId={row.id} /></TableCell>
                     <TableCell>
                       <Button size="sm" variant="outline" className="mb-1.5" onClick={() => { setEditingBio(row); setBio(row.bio); }}>编辑简介</Button>
                       {row.id === me?.id ? null : (

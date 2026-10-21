@@ -1,3 +1,5 @@
+import { GithubService } from '../github/github.service';
+import { GithubStore, repositoryIdentity } from '../github/github.store';
 import {
   BadRequestException,
   ConflictException,
@@ -47,7 +49,7 @@ const GIT_BUILD_PATH = '/';
  *                 改 Git / 构建字段同步写回 Dokploy，删除时连 Dokploy 上的应用一起删；
  *   managed=false 管理员挂载既有 application——平台只记 id，构建配置归 Dokploy 侧维护、删除只解绑。
  *
- * 部署授权：用户自建的应用 deployApproved 默认 false，管理员放行一次后永久有效；
+ * 部署授权：用户自建的应用 deployApproved 默认 false，管理员批准当前仓库关联后有效；
  * 管理员自己建的 / 挂载的创建即视为已授权。门禁本身在 DeployService.deploy 里。
  */
 @Injectable()
@@ -58,6 +60,8 @@ export class AppsService {
     @Inject(DB) private readonly db: Db,
     private readonly audit: AuditService,
     private readonly dokploy: DokploySettingsService,
+    private readonly github: GithubStore,
+    private readonly githubService: GithubService,
   ) {}
 
   // ---------- 查询与权限 ----------
@@ -130,7 +134,7 @@ export class AppsService {
       ownerName: names.get(row.ownerId) ?? '(已删除)',
       members,
       isMember,
-      canDeploy: isMember && row.deployApproved,
+      canDeploy: isMember && row.deployApproved && row.approvedRepoVersion === row.repoVersion,
       managed: row.managed,
       deployApproved: row.deployApproved,
       approvedByName: row.approvedBy ? (names.get(row.approvedBy) ?? '(已删除)') : null,
@@ -234,6 +238,7 @@ export class AppsService {
         managed: true,
         // 管理员自己建的不必再走一遍授权
         deployApproved: admin,
+        approvedRepoVersion: admin ? 1 : null,
         approvedBy: admin ? user.id : null,
         approvedAt: admin ? new Date() : null,
       })
@@ -264,6 +269,7 @@ export class AppsService {
         ownerId: user.id,
         managed: false,
         deployApproved: true,
+        approvedRepoVersion: 1,
         approvedBy: user.id,
         approvedAt: new Date(),
       })
@@ -395,9 +401,13 @@ export class AppsService {
       }
     }
 
-    const [row] = await this.db
+    const repositoryChanged = repositoryIdentity(app.repoUrl) !== repositoryIdentity(next.repoUrl);
+    const row = await this.db.transaction(async tx => {
+      const [updated] = await tx
       .update(apps)
       .set({
+        ...(repositoryChanged ? { repoVersion: sql`${apps.repoVersion} + 1`, approvedRepoVersion: null,
+          deployApproved: false, approvedBy: null, approvedAt: null, approvalRequestedAt: null } : {}),
         name: next.name,
         description: next.description,
         repoUrl: next.repoUrl,
@@ -410,8 +420,13 @@ export class AppsService {
         port: next.port,
         dokployApplicationId: next.dokployApplicationId,
       })
-      .where(eq(apps.id, app.id))
+      .where(and(eq(apps.id, app.id), eq(apps.repoVersion, app.repoVersion)))
       .returning();
+      if (!updated) throw new ConflictException('应用仓库已被修改，请刷新后重试');
+      if (repositoryChanged) await this.github.appChanged(tx, app.id);
+      return updated;
+    });
+    this.githubService.wake();
     await this.audit.record({
       actorId: user.id,
       actorTokenId: user.tokenId,
@@ -431,7 +446,11 @@ export class AppsService {
       const client = await this.dokploy.client();
       await this.dokploy.callDokploy(() => client.deleteApplication(app.dokployApplicationId), '在部署后台删除应用失败');
     }
-    await this.db.delete(apps).where(eq(apps.id, app.id));
+    await this.db.transaction(async tx => {
+      await this.github.appChanged(tx, app.id);
+      await tx.delete(apps).where(eq(apps.id, app.id));
+    });
+    this.githubService.wake();
     await this.audit.record({
       actorId: user.id,
       actorTokenId: user.tokenId,
@@ -448,15 +467,26 @@ export class AppsService {
   async addMember(user: AuthUser, slug: string, userId: string) {
     const app = await this.getApp(slug);
     this.assertCanManage(app, user, '管理成员');
-    await this.db.insert(appMembers).values({ appId: app.id, userId }).onConflictDoNothing();
+    await this.db.transaction(async tx => {
+      const [current] = await tx.select().from(apps).where(eq(apps.id, app.id)).for('update');
+      if (!current?.deployApproved || current.approvedRepoVersion !== current.repoVersion)
+        throw new ForbiddenException({ error: 'DEPLOY_NOT_APPROVED', message: '应用需先获当前仓库的部署批准，才能添加成员' });
+      const inserted = await tx.insert(appMembers).values({ appId: app.id, userId }).onConflictDoNothing().returning();
+      if (inserted.length) await this.github.memberAdded(tx, current, userId, user.id);
+    });
+    this.githubService.wake();
     await this.audit.record({ actorId: user.id, action: 'app.member_added', targetType: 'app', targetId: app.id, meta: { userId } });
-    return { ok: true };
+    return { ok: true, githubState: (await this.github.config(false))?.enabled ? 'pending' : 'disabled' };
   }
 
   async removeMember(user: AuthUser, slug: string, userId: string) {
     const app = await this.getApp(slug);
     this.assertCanManage(app, user, '管理成员');
-    await this.db.delete(appMembers).where(and(eq(appMembers.appId, app.id), eq(appMembers.userId, userId)));
+    await this.db.transaction(async tx => {
+      await tx.delete(appMembers).where(and(eq(appMembers.appId, app.id), eq(appMembers.userId, userId)));
+      await this.github.memberRemoved(tx, app.id, userId);
+    });
+    this.githubService.wake();
     return { ok: true };
   }
 
@@ -466,9 +496,10 @@ export class AppsService {
     const app = await this.getApp(slug);
     const [row] = await this.db
       .update(apps)
-      .set({ deployApproved: true, approvedBy: admin.id, approvedAt: new Date(), approvalRequestedAt: null })
-      .where(eq(apps.id, app.id))
+      .set({ deployApproved: true, approvedRepoVersion: app.repoVersion, approvedBy: admin.id, approvedAt: new Date(), approvalRequestedAt: null })
+      .where(and(eq(apps.id, app.id), eq(apps.repoVersion, app.repoVersion)))
       .returning();
+    if (!row) throw new ConflictException('仓库已变化，请刷新后重新审批');
     await this.audit.record({ actorId: admin.id, action: 'app.deploy_approved', targetType: 'app', targetId: app.id, meta: { slug } });
     return this.toAppInfo(row, admin);
   }
@@ -477,7 +508,7 @@ export class AppsService {
     const app = await this.getApp(slug);
     const [row] = await this.db
       .update(apps)
-      .set({ deployApproved: false, approvedBy: null, approvedAt: null })
+      .set({ deployApproved: false, approvedRepoVersion: null, approvedBy: null, approvedAt: null })
       .where(eq(apps.id, app.id))
       .returning();
     await this.audit.record({ actorId: admin.id, action: 'app.deploy_approval_revoked', targetType: 'app', targetId: app.id, meta: { slug } });

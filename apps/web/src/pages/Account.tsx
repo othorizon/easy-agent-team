@@ -1,3 +1,4 @@
+import { GithubAccountPanel } from '../components/github';
 import type { AccountInfo, NotificationSettings, UpdateAccountRequest } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -68,6 +69,7 @@ export function AccountPage({ completion = false }: { completion?: boolean }) {
           ? <Card><CardContent className="flex items-center justify-between py-5"><span>飞书通知</span><Badge variant="success">已验证</Badge></CardContent></Card>
           : <NotificationForm settings={data.notification} completion={completion} onSaved={refresh} />
       )}
+      {!completion && <GithubAccountPanel />}
       {!completion && <PasswordForm />}
     </div>
   );

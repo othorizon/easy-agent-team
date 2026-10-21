@@ -57,7 +57,8 @@ async function fixture({ requireBio = false, requireNotification = false, role =
     } else if (path === '/api/admin/registration-settings') {
       if (method === 'PUT') Object.assign(settings, registrationSettingsSchema.parse(body));
       result = settings;
-    } else if (path === '/api/users') result = [{ ...user, status: 'active' }];
+    } else if (path === '/api/account/github' || /^\/api\/users\/[^/]+\/github$/.test(path)) result = { enabled: false, organization: '', linked: false, login: null, needsAuthorization: false, orgState: 'unknown', orgRole: null, checkedAt: null, error: '', task: null };
+    else if (path === '/api/users') result = [{ ...user, status: 'active' }];
     else if (path.endsWith('/bio')) { user.bio = updateBioSchema.parse(body).bio; result = { id: user.id, bio: user.bio }; }
     else if (path === '/api/helpers') result = { helpers: [], skillAuthors: [] };
     else if (path.includes('/help-requests/') && path.endsWith('/page')) result = { items: [], total: 0, page: 1, pageSize: 20, counts: { all: 0, pending: 0, attention: 0 } };

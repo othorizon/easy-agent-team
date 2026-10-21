@@ -23,6 +23,16 @@ export class WebhookService {
 
   constructor(@Inject(DB) private readonly db: Db) {}
 
+  /** A tracked integration task owns retries and records the delivery outcome. */
+  async sendCardOnce(url: string, secret: string | null, card: Record<string, unknown>): Promise<void> {
+    feishuWebhookSchema.parse(url);
+    const response = await fetch(url, { method: 'POST', redirect: 'error',
+      headers: { 'content-type': 'application/json' }, body: this.buildFeishuBody(secret, card),
+      signal: AbortSignal.timeout(10000) });
+    const error = await this.feishuError(response);
+    if (error) throw new Error(error);
+  }
+
   async sendVerification(url: string, secret: string | null, code: string): Promise<void> {
     feishuWebhookSchema.parse(url);
     const response = await fetch(url, {

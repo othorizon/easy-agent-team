@@ -1,3 +1,5 @@
+import { GithubStore } from '../github/github.store';
+import { GithubService } from '../github/github.service';
 import { OssService } from '../oss/oss.service';
 import {
   BadRequestException,
@@ -36,6 +38,8 @@ export class UsersController {
     private readonly audit: AuditService,
     private readonly llmGateway: LlmGatewayService,
     private readonly oss: OssService,
+    private readonly github: GithubStore,
+    private readonly githubService: GithubService,
   ) {}
 
   /** 用户列表（登录即可见——授权、求助都需要选人） */
@@ -82,15 +86,20 @@ export class UsersController {
     if (id === actor.id) {
       throw new BadRequestException({ error: 'BAD_REQUEST', message: '不能修改自己的角色或状态' });
     }
-    const [row] = await this.db
+    const row = await this.db.transaction(async tx => {
+      const [updated] = await tx
       .update(users)
       .set({ ...(body.role ? { role: body.role } : {}), ...(body.status ? { status: body.status } : {}) })
       .where(eq(users.id, id))
       .returning({ id: users.id, name: users.name, email: users.email, role: users.role, status: users.status });
+      if (updated && body.status === 'disabled') await this.github.userChanged(tx, id);
+      return updated;
+    });
     if (!row) {
       throw new NotFoundException({ error: 'NOT_FOUND', message: '用户不存在' });
     }
     if (body.status === 'disabled') {
+      this.githubService.wake();
       await this.revokeTokens(id);
     }
     const ossSyncPending = body.status ? await this.oss.onUserStatusChanged(id) : false;
