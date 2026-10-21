@@ -57,6 +57,17 @@ export function GithubAccountPanel({ userId }: { userId?: string }) {
 function useGithubApp(slug: string) {
   return useQuery({ queryKey: ['github-app', slug, getToken()], queryFn: () => api<GithubAppInfo>('GET', `/api/apps/${slug}/github`), refetchInterval: 10000 });
 }
+/** 列表只显示仓库归属；使用独立缓存查询，不阻塞应用列表或推断查询失败的结果。 */
+export function GithubRepositoryScope({ slug }: { slug: string }) {
+  const query = useGithubApp(slug);
+  if (query.isError) return <span title="GitHub 状态查询失败，可进入详情刷新">归属暂不可用</span>;
+  if (!query.data) return <span>归属加载中…</span>;
+  const d = query.data;
+  if (!d.enabled) return <span title="GitHub 集成未启用，仓库归属尚未重新核验">归属待核验 · GitHub 未启用</span>;
+  return <span title={d.error || (d.checkedAt ? `最近核验：${new Date(d.checkedAt).toLocaleString()}` : undefined)}>
+    {d.scope === 'organization' ? 'EAT 组织仓库' : d.scope === 'outside' ? '非 EAT 组织仓库' : '仓库归属待核验'}
+  </span>;
+}
 export function GithubAppSummary({ slug, compact = false, showOwner = true }: { slug: string; compact?: boolean; showOwner?: boolean }) {
   const query = useGithubApp(slug), cache = useQueryClient();
   const refresh = useMutation({ mutationFn: () => api('POST', `/api/apps/${slug}/github/refresh`),

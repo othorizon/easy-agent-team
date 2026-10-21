@@ -1,4 +1,4 @@
-import { GithubAppSummary } from '../components/github';
+import { GithubRepositoryScope } from '../components/github';
 import type {
   AppBuildType,
   AppInfo,
@@ -14,9 +14,10 @@ import {
   DEFAULT_DOCKERFILE,
   DEFAULT_PUBLISH_DIRECTORY,
   STATIC_CONTAINER_PORT,
+  githubRepoWebUrl,
 } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link2, Plus, Search } from 'lucide-react';
+import { ChevronRight, GitBranch, Link2, Plus, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { toast } from 'sonner';
@@ -31,12 +32,12 @@ import { PAGE_SIZE_OPTIONS, Pagination } from '../components/pagination';
 import { Segmented } from '../components/segmented';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
-import { Card, CardContent } from '../components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { TableSkeleton } from '../components/ui/skeleton';
 import { Switch } from '../components/ui/switch';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { useQueryParams } from '../lib/use-query-params';
 
 const BUILD_TYPE_OPTIONS: Array<{ label: string; value: AppBuildType }> = [
@@ -57,8 +58,9 @@ export function AppsPage() {
   const isAdmin = me?.role === 'admin';
   const [creating, setCreating] = useState(false);
   const [mounting, setMounting] = useState(false);
-  const [params, setParams] = useQueryParams({ q: '', filter: 'all', page: '1', pageSize: '20' });
-  const filter = isAdmin && params.filter === 'pending' ? 'pending' : 'all';
+  const [params, setParams] = useQueryParams({ scope: 'mine', q: '', filter: 'all', page: '1', pageSize: '20' });
+  const scope = params.scope === 'all' ? 'all' : 'mine';
+  const filter = ['ready', 'pending', 'unavailable'].includes(params.filter) ? params.filter : 'all';
   const requestedPage = Number(params.page);
   const pageSize = PAGE_SIZE_OPTIONS.includes(Number(params.pageSize)) ? Number(params.pageSize) : 20;
 
@@ -88,9 +90,11 @@ export function AppsPage() {
   });
 
   const keyword = params.q.trim().toLowerCase();
-  const matching = (apps.data ?? []).filter((a) => a.name.toLowerCase().includes(keyword) || a.slug.toLowerCase().includes(keyword));
-  const pendingCount = matching.filter((a) => !a.deployApproved).length;
-  const filtered = matching.filter((a) => filter === 'all' || !a.deployApproved);
+  const allApps = apps.data ?? [];
+  const myApps = allApps.filter(a => a.ownerId === me?.id || a.members.some(m => m.userId === me?.id));
+  const scopedApps = scope === 'mine' ? myApps : allApps;
+  const matching = scopedApps.filter((a) => a.name.toLowerCase().includes(keyword) || a.slug.toLowerCase().includes(keyword));
+  const filtered = matching.filter(a => filter === 'all' || deploymentAccess(a) === filter);
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const page = Math.min(pageCount, Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1);
   const rows = filtered.slice((page - 1) * pageSize, page * pageSize);
@@ -103,127 +107,114 @@ export function AppsPage() {
   }, [apps.data, apps.isFetching, params.page, page, setParams]);
 
   return (
-    <div className="space-y-5">
-      <PageHeader
-        title="应用"
-        description="从代码仓库部署应用，管理成员协作、环境变量与部署记录。"
-        actions={
-          <div className="flex flex-wrap gap-2">
-            {isAdmin && (
-              <Button variant="outline" onClick={() => setMounting(true)}>
-                <Link2 />
-                挂载已有应用
-              </Button>
-            )}
-            <Button onClick={() => setCreating(true)}>
-              <Plus />
-              创建应用
-            </Button>
-          </div>
-        }
-      />
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <div className="relative sm:w-[300px]">
-          <Search aria-hidden className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            type="search"
-            className="pl-9"
-            placeholder="搜索应用名称 / 标识"
-            aria-label="搜索应用名称或标识"
-            value={params.q}
-            onChange={(e) => setParams({ q: e.target.value, page: '1' })}
-          />
+    <div className="mx-auto max-w-7xl space-y-6">
+      <PageHeader title="应用" description="找到正在协作的应用，继续你的工作。" actions={
+        <div className="flex flex-wrap items-center gap-2">
+          {isAdmin && <Button variant="ghost" className="text-muted-foreground" onClick={() => setMounting(true)}><Link2 />挂载应用</Button>}
+          <Button onClick={() => setCreating(true)}><Plus />创建应用</Button>
         </div>
-        {isAdmin && (pendingCount > 0 || filter === 'pending') && (
-          <Segmented
-            value={filter}
-            ariaLabel="部署授权筛选"
-            onChange={(value) => setParams({ filter: value, page: '1' })}
-            options={[
-              { label: '全部', value: 'all' },
-              { label: `待授权 ${pendingCount}`, value: 'pending' },
-            ]}
-          />
-        )}
-      </div>
-      <Card>
-        <CardContent className="space-y-4">
-          {apps.isLoading ? (
-            <TableSkeleton />
-          ) : apps.isError ? (
+      } />
+      <Tabs value={scope} onValueChange={value => setParams({ scope: value, page: '1' })}>
+        <div className="flex flex-col gap-4 border-b sm:flex-row sm:items-end sm:justify-between sm:gap-6">
+          <TabsList aria-label="应用范围" className="gap-7 rounded-none bg-transparent p-0">
+            {([{ value: 'mine', label: '我的', count: myApps.length }, { value: 'all', label: '全部', count: allApps.length }] as const).map(item =>
+              <TabsTrigger key={item.value} value={item.value} className="-mb-px gap-2 rounded-none border-b-2 border-transparent px-0 py-3 data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none">
+                {item.label}{apps.data && <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-normal tabular-nums text-muted-foreground">{item.count}</span>}
+              </TabsTrigger>)}
+          </TabsList>
+          <div className="flex min-w-0 gap-2 pb-3 sm:pb-2">
+            <div className="relative min-w-0 flex-1 sm:w-56">
+              <Search aria-hidden className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input type="search" className="pl-9 text-xs" placeholder="搜索名称或标识" aria-label="搜索应用名称或标识" value={params.q} onChange={e => setParams({ q: e.target.value, page: '1' })} />
+            </div>
+            <Select value={filter} onValueChange={value => setParams({ filter: value, page: '1' })}>
+              <SelectTrigger className="w-32 shrink-0 text-xs" aria-label="部署权限筛选"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部部署权限</SelectItem>
+                <SelectItem value="ready">可部署</SelectItem>
+                <SelectItem value="pending">待授权</SelectItem>
+                <SelectItem value="unavailable">无部署权限</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <TabsContent value={scope} className="mt-4 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>{scope === 'mine' ? '我创建或加入的应用' : '全部应用'}</span>
+            {apps.data && <span className="tabular-nums">{filtered.length} 个应用</span>}
+          </div>
+          {apps.isLoading ? <TableSkeleton /> : apps.isError ? (
             <Empty text="应用列表加载失败" action={<Button variant="outline" onClick={() => void apps.refetch()}>重试</Button>} />
           ) : rows.length === 0 ? (
-            <Empty
-              text={keyword ? '没有符合条件的应用' : filter === 'pending' ? '没有待授权的应用' : '暂无应用'}
-              action={keyword || filter === 'pending' ? <Button variant="outline" onClick={() => setParams({ q: '', filter: 'all', page: '1' })}>清除筛选</Button> : undefined}
-            />
+            <div className="rounded-xl border bg-card"><Empty
+              text={keyword || filter !== 'all' ? '没有符合条件的应用' : scope === 'mine' ? '暂无我创建或加入的应用' : '暂无应用'}
+              action={keyword || filter !== 'all' ? <Button variant="outline" onClick={() => setParams({ q: '', filter: 'all', page: '1' })}>清除筛选</Button> : scope === 'mine' ? <Button variant="outline" onClick={() => setParams({ scope: 'all', page: '1' })}>查看全部应用</Button> : undefined}
+            /></div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>应用</TableHead>
-                  <TableHead className="hidden md:table-cell">Git</TableHead>
-                  <TableHead className="hidden w-24 sm:table-cell">所有者</TableHead>
-                  <TableHead className="hidden lg:table-cell">成员</TableHead>
-                  <TableHead className="w-28">部署授权</TableHead>
-                  <TableHead className="w-20">我可部署</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((a) => (
-                  <TableRow key={a.id}>
-                    <TableCell>
-                      <Link
-                        className="group inline-flex flex-wrap items-center gap-x-2 gap-y-0.5 text-left rounded-sm focus-visible:outline-2 focus-visible:outline-ring"
-                        to={`/apps/${encodeURIComponent(a.slug)}`}
-                        state={{ from: location.pathname + location.search }}
-                      >
-                        <InlineCode className="text-primary group-hover:underline">{a.slug}</InlineCode>
-                        <span className="font-medium">{a.name}</span>
-                        <Badge variant="outline">{a.buildType ? APP_BUILD_TYPE_LABEL[a.buildType] : '挂载'}</Badge>
-                      </Link>
-                      <GithubAppSummary slug={a.slug} compact />
-                      {a.url && (
-                        <a href={a.url} target="_blank" rel="noreferrer" className="mt-0.5 block truncate font-mono text-xs text-muted-foreground hover:underline">
-                          {a.domain}
-                        </a>
-                      )}
-                    </TableCell>
-                    <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell" title={a.repoUrl}>
-                      {a.repoUrl || '—'}
-                      {a.managed && <span className="ml-1 text-xs">({a.branch})</span>}
-                    </TableCell>
-                    <TableCell className="hidden text-muted-foreground sm:table-cell">{a.ownerName}</TableCell>
-                    <TableCell className="hidden max-w-xs truncate text-muted-foreground lg:table-cell">
-                      {a.members.length > 0 ? a.members.map((m) => m.name).join('、') : '—'}
-                    </TableCell>
-                    <TableCell>
-                      <ApprovalBadge a={a} />
-                    </TableCell>
-                    <TableCell>
-                      {a.canDeploy ? <Badge variant="success">是</Badge> : <Badge variant="outline">{a.isMember ? '等授权' : '否'}</Badge>}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <div className="overflow-hidden rounded-xl border bg-card">
+              <div aria-hidden className="hidden grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_6rem_6rem_1rem] gap-6 border-b bg-muted/25 px-5 py-3 text-xs text-muted-foreground lg:grid">
+                <span>应用</span><span>仓库与分支</span><span>我的身份</span><span>部署权限</span><span />
+              </div>
+              <ul className="divide-y" aria-label="应用列表">
+                {rows.map(a => <AppListRow key={a.id} app={a} userId={me?.id} isAdmin={isAdmin} showOwner={scope === 'all'} from={location.pathname + location.search} />)}
+              </ul>
+            </div>
           )}
-          {!apps.isLoading && !apps.isError && (
-            <Pagination
-              total={filtered.length}
-              page={page}
-              pageSize={pageSize}
-              onPageChange={(value) => setParams({ page: String(value) })}
-              onPageSizeChange={(value) => setParams({ pageSize: String(value), page: '1' })}
-            />
-          )}
-        </CardContent>
-      </Card>
-
-      {creating && <CreateAppDialog pending={create.isPending} onClose={() => setCreating(false)} onSubmit={(v) => create.mutate(v)} />}
-      {mounting && <MountAppDialog pending={mount.isPending} onClose={() => setMounting(false)} onSubmit={(v) => mount.mutate(v)} />}
+          {!apps.isLoading && !apps.isError && <Pagination total={filtered.length} page={page} pageSize={pageSize}
+            onPageChange={value => setParams({ page: String(value) })} onPageSizeChange={value => setParams({ pageSize: String(value), page: '1' })} />}
+        </TabsContent>
+      </Tabs>
+      {creating && <CreateAppDialog pending={create.isPending} onClose={() => setCreating(false)} onSubmit={v => create.mutate(v)} />}
+      {mounting && <MountAppDialog pending={mount.isPending} onClose={() => setMounting(false)} onSubmit={v => mount.mutate(v)} />}
     </div>
   );
+}
+
+function deploymentAccess(app: AppInfo): 'ready' | 'pending' | 'unavailable' {
+  if (app.canDeploy) return 'ready';
+  return app.isMember && !app.deployApproved ? 'pending' : 'unavailable';
+}
+
+/** 展示安全的仓库简称，不把 Git URL 中可能包含的用户名、密码或查询串带入列表。 */
+function repositoryName(raw: string): string {
+  if (!raw.trim()) return '未配置仓库';
+  const github = githubRepoWebUrl(raw);
+  if (github) return new URL(github).pathname.slice(1);
+  try {
+    const url = new URL(raw);
+    return `${url.host}${url.pathname.replace(/\.git\/?$/i, '').replace(/\/$/, '')}`;
+  } catch {
+    const parts = /^(?:[^@/:\s]+@)?([^@/:\s]+)[:/](\S+)$/.exec(raw.trim());
+    return parts ? `${parts[1]}/${parts[2].replace(/[?#].*$/, '').replace(/\.git\/?$/i, '')}` : '仓库地址待核验';
+  }
+}
+
+function AppListRow({ app: a, userId, isAdmin, showOwner, from }: { app: AppInfo; userId?: string; isAdmin: boolean; showOwner: boolean; from: string }) {
+  const mine = a.ownerId === userId;
+  const joined = a.members.some(m => m.userId === userId);
+  const relationship = mine ? '我创建' : joined ? '我加入' : isAdmin ? '管理员访问' : '未加入';
+  const access = deploymentAccess(a);
+  const status = access === 'ready' ? '可部署' : access === 'pending' ? '待授权' : !a.isMember ? '未加入' : '权限待核验';
+  const repository = repositoryName(a.repoUrl);
+  return <li>
+    <Link to={`/apps/${encodeURIComponent(a.slug)}`} state={{ from }} aria-label={`${a.slug} ${a.name}，查看应用详情`}
+      className="group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-4 px-5 py-5 outline-none transition-colors hover:bg-muted/25 focus-visible:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_6rem_6rem_1rem] lg:gap-6 lg:py-6">
+      <div className="col-span-2 min-w-0 lg:col-span-1">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5"><span className="break-words text-sm font-semibold">{a.name}</span><span className="break-all font-mono text-[10px] text-muted-foreground">{a.slug}</span></div>
+        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"><span>{a.managed ? '平台创建' : '挂载应用'}</span><span aria-hidden className="text-muted-foreground/50">·</span><span>{!a.managed ? '构建由部署后台管理' : a.buildType === 'dockerfile' ? 'Dockerfile' : a.buildType === 'static' ? '静态站点' : '构建方式待核验'}</span></div>
+      </div>
+      <div className="col-span-2 min-w-0 lg:col-span-1">
+        <p title={repository} className="break-all font-mono text-xs text-muted-foreground lg:truncate">{repository}</p>
+        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-[11px] text-muted-foreground">
+          <span className="inline-flex min-w-0 items-center gap-1 rounded bg-muted/70 px-1.5 py-0.5"><GitBranch className="size-3 shrink-0" aria-hidden /><span className="break-all">{a.managed ? a.branch || '分支未配置' : '分支由部署后台管理'}</span></span>
+          {a.repoUrl && <GithubRepositoryScope slug={a.slug} />}
+        </div>
+      </div>
+      <div className="min-w-0"><p className={`text-xs ${mine ? 'text-foreground' : 'text-muted-foreground'}`}>{relationship}</p>{showOwner && <p className="mt-1 break-words text-[11px] text-muted-foreground">所有者 {a.ownerName}</p>}</div>
+      <div className="justify-self-end lg:justify-self-start"><span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded px-2 py-1 text-[11px] ${access === 'ready' ? 'bg-success/10 text-success' : access === 'pending' ? 'bg-warning/10 text-warning' : 'bg-muted text-muted-foreground'}`}><span aria-hidden className="size-1.5 rounded-full bg-current" />{status}</span></div>
+      <ChevronRight aria-hidden className="hidden size-4 text-muted-foreground/50 group-hover:text-foreground lg:block" />
+    </Link>
+  </li>;
 }
 
 // ---------- 表单：构建方式字段（创建与编辑共用） ----------

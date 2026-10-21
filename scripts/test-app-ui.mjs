@@ -23,7 +23,7 @@ async function fixture(width, role = 'admin') {
   const user = { id: role === 'admin' ? 'owner' : 'reader', name: '林小满', email: 'owner@example.test', role, status: 'active', bio: '', allowHelp: true };
   const app = { id: 'app-id', slug: 'demo', name: '团队知识库', description: '汇总团队经验与常用资料，让知识在协作中持续积累。', repoUrl: 'git@github.com:eat-org/team-knowledge.git', branch: 'main', buildType: 'dockerfile', dockerfile: 'Dockerfile', dockerContextPath: '', publishDirectory: '.', staticSpa: false, port: 3000, domain: 'knowledge.example.test', url: 'https://knowledge.example.test', dokployApplicationId: 'demo', ownerId: 'owner', ownerName: '林小满', members: [{ userId: 'member', name: '陈予安' }], isMember: true, canDeploy: true, managed: true, deployApproved: true, approvedByName: '管理员', approvedAt: '2026-10-21T08:00:00Z', approvalRequestedAt: null, createdAt: '2026-10-20T10:30:00Z' };
   const candidates = [{ id: 'yan', name: '颜悦', email: 'yanyue@example.test' }, { id: 'pan', name: '潘彦琳', email: 'panyanlin@example.test' }, { id: 'zhang', name: '张静远', email: 'zhangjingyuan@example.test' }, { id: 'long', name: '用于检查完整姓名展示的测试成员', email: 'long-address-for-responsive-layout@example.test' }];
-  const state = { addError: false, usersError: false, appsError: false, deploymentsError: false, enabled: true, env: { runtime: 'NODE_ENV=production\nPORT=3000', build: 'PUBLIC_APP_NAME=Knowledge' } };
+  const state = { extraApps: [], repoStates: {}, addError: false, usersError: false, appsError: false, deploymentsError: false, enabled: true, env: { runtime: 'NODE_ENV=production\nPORT=3000', build: 'PUBLIC_APP_NAME=Knowledge' } };
   const writes = [], context = await browser.newContext({ viewport: { width, height: 900 } });
   await context.addInitScript(user => { localStorage.setItem('eat.token', 'fixture-token'); localStorage.setItem('eat.user', JSON.stringify(user)); }, user);
   await context.route('**/api/**', async route => {
@@ -32,7 +32,7 @@ async function fixture(width, role = 'admin') {
     if (method !== 'GET') writes.push({ path, method, body });
     let result = {}, status = 200;
     if (path === '/api/account/onboarding') result = { required: false, requireBio: false, requireNotification: false };
-    else if (path === '/api/apps') { result = [app]; if (state.appsError) { status = 500; result = { message: '加载失败' }; } }
+    else if (path === '/api/apps') { result = [app, ...state.extraApps]; if (state.appsError) { status = 500; result = { message: '加载失败' }; } }
     else if (path === '/api/users') { result = [user, { id: 'member', name: '陈予安', email: 'chen@example.test' }, ...candidates]; if (state.usersError) { status = 500; result = { message: '用户加载失败' }; } }
     else if (path === '/api/apps/demo/github') result = { enabled: state.enabled, organization: 'eat-org', repository: 'eat-org/team-knowledge', repositoryId: '100', scope: 'organization', checkedAt: '2026-10-21T08:00:00Z', error: '', ownerLogin: 'xiaoman', ownerRole: 'admin', ownerIsOrgOwner: false,
       members: [{ userId: 'owner', name: app.ownerName, login: 'xiaoman', isOwner: true, orgState: 'active', role: 'admin', state: 'succeeded', error: '', notification: '', canGrant: role === 'admin', canChangeRole: role === 'admin' },
@@ -51,6 +51,11 @@ async function fixture(width, role = 'admin') {
     else if (path.endsWith('/build-logs')) result = { logs: 'Step 1/3: Installing dependencies\nStep 2/3: Building application\nStep 3/3: Application ready', deployment: { deploymentId: 'd1', status: 'done' } };
     else if (path.endsWith('/run-logs')) result = { logs: 'Listening on port 3000\nGET /health 200', container: { name: 'knowledge', state: 'running' } };
     else if (path.endsWith('/github/refresh')) result = { ok: true };
+    else if (/^\/api\/apps\/[^/]+\/github$/.test(path)) {
+      const repo = state.repoStates[path.split('/')[3]];
+      if (repo === 'error') { status = 503; result = { message: 'GitHub 暂不可用' }; }
+      else result = { enabled: true, scope: 'unknown', checkedAt: null, error: '', ...repo };
+    }
     else { status = 404; result = { message: `未覆盖的请求 ${method} ${path}` }; errors.push(result.message); }
     await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(result) });
   });
@@ -62,8 +67,91 @@ async function shot(page, name) {
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${name}: horizontal overflow`);
   await page.screenshot({ path: join(shots, `${name}.png`), fullPage: true, animations: 'disabled' });
 }
+async function verifyAppList(width) {
+  const f = await fixture(width), p = f.page;
+  const extra = (slug, name, fields = {}) => ({ ...f.app, id: slug, slug, name, members: [], repoUrl: `git@github.com:eat-org/${slug}.git`, ...fields });
+  f.state.extraApps = [
+    extra('feedback', '客户反馈收集', { ownerId: 'other', ownerName: '陈予安', members: [{ userId: 'owner', name: '林小满' }], repoUrl: 'https://github.com/partner-team/feedback.git' }),
+    extra('operations', '内部运营工具', { deployApproved: false, canDeploy: false }),
+    extra('event', '活动报名页', { buildType: 'static', port: 80, ownerId: 'other', ownerName: '颜悦', members: [{ userId: 'owner', name: '林小满' }] }),
+    extra('report', '数据周报', { managed: false, buildType: null, branch: 'main' }),
+    extra('preview', '产品演示站', { buildType: 'static', deployApproved: false, canDeploy: false, branch: 'preview' }),
+    extra('other', '其他团队应用', { ownerId: 'other', ownerName: '颜悦' }),
+  ];
+  f.state.repoStates = { feedback: { scope: 'outside' }, event: { scope: 'organization' }, report: { scope: 'organization' }, preview: { scope: 'organization' }, other: { scope: 'organization' } };
+  await p.goto(`${base}/apps`);
+  const list = p.getByRole('list', { name: '应用列表' });
+  const row = slug => list.getByRole('link', { name: new RegExp(`^${slug} `) });
+  await p.getByRole('tab', { name: '我的 6', selected: true }).waitFor();
+  await row('feedback').getByText('非 EAT 组织仓库', { exact: true }).waitFor();
+  await row('operations').getByText('仓库归属待核验').waitFor();
+  await row('event').getByText('静态站点').waitFor();
+  await row('report').getByText('挂载应用').waitFor();
+  await row('report').getByText('构建由部署后台管理').waitFor();
+  await row('report').getByText('分支由部署后台管理').waitFor();
+  assert.equal(await row('report').getByText('main', { exact: true }).count(), 0, 'mounted apps must not present a database default as a verified branch');
+  assert.equal(await row('other').count(), 0, 'admin global privileges must not put unrelated apps in My apps');
+  assert.equal(await list.getByRole('listitem').count(), 6);
+  await shot(p, `list-mine-${width}`);
+  await p.getByRole('tab', { name: '全部 7' }).click();
+  await row('other').getByText('管理员访问').waitFor();
+  await row('other').getByText('所有者 颜悦').waitFor();
+  await shot(p, `list-all-${width}`);
+  await p.reload();
+  await p.getByRole('tab', { name: '全部 7', selected: true }).waitFor();
+  await p.getByRole('searchbox').fill('feedback');
+  await row('feedback').waitFor();
+  assert.equal(await list.getByRole('listitem').count(), 1);
+  await p.getByRole('tab', { name: '我的 6' }).click();
+  assert.equal(await p.getByRole('searchbox').inputValue(), 'feedback');
+  await p.getByRole('searchbox').fill('');
+  await p.getByRole('combobox', { name: '部署权限筛选' }).click();
+  await p.getByRole('option', { name: '待授权', exact: true }).click();
+  await row('operations').waitFor();
+  assert.equal(await list.getByRole('listitem').count(), 2);
+  await row('preview').getByText('待授权', { exact: true }).waitFor();
+  await p.getByRole('combobox', { name: '部署权限筛选' }).click();
+  await p.getByRole('option', { name: '可部署', exact: true }).click();
+  await row('demo').click();
+  await p.getByRole('link', { name: '返回应用列表' }).click();
+  await p.waitForURL('**/apps?filter=ready');
+  assert.equal(await list.getByRole('listitem').count(), 4);
+  // Failed, disabled, non-GitHub and empty repositories must not masquerade as verified org repositories.
+  f.state.repoStates.feedback = 'error';
+  f.state.repoStates.preview = { enabled: false };
+  f.state.extraApps.find(a => a.slug === 'event').repoUrl = 'https://fixture-user:fixture-password@git.example.test/team/site.git?fixture-secret=1';
+  f.state.extraApps.find(a => a.slug === 'report').repoUrl = '';
+  await p.goto(`${base}/apps`);
+  await row('feedback').getByText('归属暂不可用').waitFor();
+  await row('preview').getByText('归属待核验 · GitHub 未启用').waitFor();
+  await row('event').getByText('git.example.test/team/site', { exact: true }).waitFor();
+  assert(!(await list.textContent()).includes('fixture-password'));
+  assert(!(await list.textContent()).includes('fixture-secret'));
+  await row('report').getByText('未配置仓库').waitFor();
+  await shot(p, `list-query-states-${width}`);
+  // Page-size/scope changes reset pagination, while permission comes from the API rather than UI role guesses.
+  f.state.extraApps.push(...Array.from({ length: 22 }, (_, i) => extra(`many-${i}`, `附加应用 ${i}`, { ownerId: 'other', repoUrl: '' })));
+  await p.goto(`${base}/apps?scope=all&page=2`);
+  await p.getByRole('tab', { name: '全部 29', selected: true }).waitFor();
+  assert.equal(await list.getByRole('listitem').count(), 9);
+  await p.getByRole('tab', { name: '我的 6' }).click();
+  assert.equal(new URL(p.url()).searchParams.get('page'), null);
+  assert.equal(await list.getByRole('listitem').count(), 6);
+  await f.context.close();
+  const member = await fixture(width, 'member');
+  member.app.isMember = false; member.app.canDeploy = false;
+  await member.page.goto(`${base}/apps`);
+  await member.page.getByText('暂无我创建或加入的应用').waitFor();
+  await member.page.getByRole('button', { name: '查看全部应用' }).click();
+  const outsider = member.page.getByRole('list', { name: '应用列表' });
+  await outsider.getByText('未加入', { exact: true }).first().waitFor();
+  assert.equal(await outsider.getByText('可部署', { exact: true }).count(), 0);
+  await member.context.close();
+  console.log(`Application list verified at ${width}px`);
+}
 try {
   for (const width of [1280, 390]) {
+    await verifyAppList(width);
     const f = await fixture(width), p = f.page;
     await p.goto(`${base}/apps?q=demo`);
     await p.getByRole('link', { name: /demo.*团队知识库/ }).click();
