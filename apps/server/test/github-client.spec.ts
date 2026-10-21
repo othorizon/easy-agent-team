@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Logger } from '@nestjs/common';
 import { generateKeyPairSync } from 'node:crypto';
 import { GithubClient, GithubError, type GithubConfig } from '../src/github/github.client';
 import { encryptSecret } from '../src/common/crypto';
@@ -89,6 +90,59 @@ describe('real Octokit transport and redacted errors', () => {
   it('uses role_name instead of legacy permission so Maintain is not treated as Write', async () => {
     mockFetch(() => json({ permission: 'write', role_name: 'maintain' }));
     expect(await new GithubClient().permission(config, 'eat-org/demo', 'member')).toBe('maintain');
+  });
+  it.each([
+    [{ role_name: '', permission: 'none' }, 'none'],
+    [{ role_name: '  ', permission: 'write' }, 'write'],
+    [{ role_name: null, permission: 'read' }, 'read'],
+    [{ permission: 'admin' }, 'admin'],
+    [{ role_name: 'Maintain', permission: 'write' }, 'maintain'],
+    [{ role_name: ' Read ', permission: 'read' }, 'read'],
+  ])('interprets standard role responses without mistaking an empty role_name for an unsupported role: %j', async (response, role) => {
+    mockFetch(() => json(response));
+    expect(await new GithubClient().permission(config, 'eat-org/demo', 'member')).toBe(role);
+  });
+  it.each([
+    { role_name: 'custom-release-manager', permission: 'admin' },
+    { role_name: {}, permission: 'write' },
+    { role_name: '' }, {}, null,
+  ])('does not turn unsupported or malformed role responses into standard privileges or no access: %j', async response => {
+    mockFetch(() => json(response));
+    await expect(new GithubClient().permission(config, 'eat-org/demo', 'member')).rejects.toBeInstanceOf(GithubError);
+  });
+  it('rechecks a direct collaborator with an empty role name instead of assuming no existing grant', async () => {
+    mockFetch(url => url.endsWith('/permission') ? json({ role_name: 'maintain', permission: 'write' }) : json([{ login: 'member', role_name: '' }]));
+    expect(await new GithubClient().directRole(config, 'eat-org/demo', 'member')).toBe('maintain');
+    expect(hits.some(h => h.url.endsWith('/collaborators/member/permission'))).toBe(true);
+  });
+  it('rejects inconsistent direct membership instead of overwriting an unverified grant', async () => {
+    mockFetch(url => url.endsWith('/permission') ? json({ role_name: '', permission: 'none' }) : json([{ login: 'member' }]));
+    await expect(new GithubClient().directRole(config, 'eat-org/demo', 'member')).rejects.toBeInstanceOf(GithubError);
+  });
+  it('logs only the role fields and request identifiers for a parsing failure', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    mockFetch(() => json({ role_name: 'custom_deployer', permission: 'write', access_token: 'do-not-log-access',
+      nested: { privateKey: 'do-not-log-key' } }, 200, { 'x-github-request-id': 'ABCD:1234:EF56', 'set-cookie': 'do-not-log-cookie' }));
+    await expect(new GithubClient().permission(config, 'eat-org/demo', 'member')).rejects.toBeInstanceOf(GithubError);
+    expect(JSON.parse(String(warn.mock.calls[0][0]))).toMatchObject({ event: 'github.role_parse_failed', appId: '1', installationId: '2',
+      repository: 'eat-org/demo', githubLogin: 'member', httpStatus: 200, githubRequestId: 'ABCD:1234:EF56',
+      roleName: { value: 'custom_deployer', type: 'string' }, permission: { value: 'write' } });
+    const logs = JSON.stringify(warn.mock.calls);
+    for (const secret of ['do-not-log-access', 'do-not-log-key', 'do-not-log-cookie', 'installation-test', 'secret-test', privateKey]) expect(logs).not.toContain(secret);
+  });
+  it.each(['ghp_do-not-log', 'github_pat_do-not-log', { token: 'do-not-log' }])('redacts credential-like or structured role values: %j', async role_name => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    mockFetch(() => json({ role_name, permission: 'read' }));
+    await expect(new GithubClient().permission(config, 'eat-org/demo', 'member')).rejects.toBeInstanceOf(GithubError);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('do-not-log');
+  });
+  it('identifies an installation-auth write failure without logging the provider body or authorization header', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    mockFetch(() => json({ message: 'secret-test user-test' }, 403, { 'x-github-request-id': 'FAIL:403' }));
+    await expect(new GithubClient().setRole(config, 'eat-org/demo', 'member', 'write')).rejects.toBeInstanceOf(GithubError);
+    expect(JSON.parse(String(warn.mock.calls[0][0]))).toMatchObject({ event: 'github.request_failed', httpStatus: 403,
+      route: 'PUT /repos/{owner}/{repo}/collaborators/{username}', authMode: 'installation', stage: 'github_api', githubRequestId: 'FAIL:403' });
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/secret-test|user-test|installation-test/);
   });
   it('encodes OAuth credentials only in the POST body and disables redirects', async () => {
     mockFetch(() => json({ access_token: 'user-test' }));

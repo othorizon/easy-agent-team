@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
-import { api, ApiError, getStoredUser } from '../api';
+import { api, ApiError, getStoredUser, getToken, setSession } from '../api';
 import { Confirm } from '../components/confirm';
 import { Field, rules } from '../components/form';
 import { PageHeader } from '../components/page-header';
@@ -33,7 +33,8 @@ export function UsersPage() {
   const me = getStoredUser();
   const [creating, setCreating] = useState(false);
   const [resetting, setResetting] = useState<UserRow | null>(null);
-  const [editingBio, setEditingBio] = useState<UserRow | null>(null);
+  const [editingProfile, setEditingProfile] = useState<UserRow | null>(null);
+  const [name, setName] = useState('');
   const [bio, setBio] = useState('');
 
   const users = useQuery({ queryKey: ['users'], queryFn: () => api<UserRow[]>('GET', '/api/users') });
@@ -72,9 +73,19 @@ export function UsersPage() {
     onError,
   });
 
-  const saveBio = useMutation({
-    mutationFn: () => api('PATCH', `/api/users/${editingBio!.id}/bio`, { bio }),
-    onSuccess: () => { toast.success('个人简介已更新'); setEditingBio(null); invalidate(); }, onError,
+  const saveProfile = useMutation({
+    mutationFn: (v: { id: string; name: string; bio: string }) =>
+      api<Pick<UserRow, 'id' | 'name' | 'bio'>>('PATCH', `/api/users/${v.id}/profile`, { name: v.name, bio: v.bio }),
+    onSuccess: (profile) => {
+      const token = getToken();
+      const currentUser = getStoredUser();
+      if (token && currentUser?.id === profile.id) setSession(token, { ...currentUser, name: profile.name });
+      toast.success('用户资料已更新');
+      setEditingProfile(null);
+      invalidate();
+      void queryClient.invalidateQueries({ queryKey: ['account'] });
+      void queryClient.invalidateQueries({ queryKey: ['help-targets'] });
+    }, onError,
   });
 
   return (
@@ -144,7 +155,7 @@ export function UsersPage() {
                     </TableCell>
                     <TableCell className="min-w-64"><GithubAccountPanel userId={row.id} /></TableCell>
                     <TableCell>
-                      <Button size="sm" variant="outline" className="mb-1.5" onClick={() => { setEditingBio(row); setBio(row.bio); }}>编辑简介</Button>
+                      <Button size="sm" variant="outline" className="mb-1.5" onClick={() => { setEditingProfile(row); setName(row.name); setBio(row.bio); }}>编辑资料</Button>
                       {row.id === me?.id ? null : (
                         <div className="flex items-center gap-1.5">
                           <Button size="sm" variant="outline" onClick={() => setResetting(row)}>
@@ -177,12 +188,13 @@ export function UsersPage() {
         </CardContent>
       </Card>
 
-      {editingBio && <Dialog open onOpenChange={(open) => !open && setEditingBio(null)}>
-        <DialogContent><DialogHeader><DialogTitle>编辑 {editingBio.name} 的个人简介</DialogTitle>
-          <DialogDescription>此内容会用于 AI 查询用户、了解擅长领域并匹配求助对象。</DialogDescription>
-        </DialogHeader><form className="space-y-4" onSubmit={(e) => { e.preventDefault(); saveBio.mutate(); }}>
+      {editingProfile && <Dialog open onOpenChange={(open) => !open && !saveProfile.isPending && setEditingProfile(null)}>
+        <DialogContent><DialogHeader><DialogTitle>编辑用户资料</DialogTitle>
+          <DialogDescription>修改 {editingProfile.name} 的姓名与个人简介，帮助 AI 识别用户、了解擅长领域并匹配求助对象。</DialogDescription>
+        </DialogHeader><form className="space-y-4" onSubmit={(e) => { e.preventDefault(); saveProfile.mutate({ id: editingProfile.id, name, bio }); }}>
+          <Field label="姓名" htmlFor="admin-user-name"><Input id="admin-user-name" required maxLength={100} value={name} onChange={(e) => setName(e.target.value)} /></Field>
           <Field label="个人简介" htmlFor="admin-user-bio"><Textarea id="admin-user-bio" rows={6} maxLength={2000} value={bio} onChange={(e) => setBio(e.target.value)} /></Field>
-          <Button type="submit" loading={saveBio.isPending}>保存简介</Button>
+          <Button type="submit" disabled={!name.trim()} loading={saveProfile.isPending}>保存资料</Button>
         </form></DialogContent>
       </Dialog>}
       {creating && (

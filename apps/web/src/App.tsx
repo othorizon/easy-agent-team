@@ -49,6 +49,7 @@ import { InstallPage } from './pages/Install';
 import { LoginPage } from './pages/Login';
 import { McpConfigsPage } from './pages/McpConfigs';
 import { AppsPage } from './pages/Apps';
+import { AppDetailPage } from './pages/AppDetail';
 import { RequestsPage } from './pages/Requests';
 import { SettingsPage } from './pages/Settings';
 import { LlmGatewayPage } from './pages/LlmGateway';
@@ -310,6 +311,7 @@ export function App() {
       <Route path="/oss/:id" element={<RequireAuth><OssDetailPage /></RequireAuth>} />
       <Route path="/db/:id" element={<RequireAuth><DbAssignmentDetailPage /></RequireAuth>} />
       <Route path="/apps" element={<RequireAuth><AppsPage /></RequireAuth>} />
+      <Route path="/apps/:slug" element={<RequireAuth><AppDetailPage /></RequireAuth>} />
       <Route path="/folios" element={<RequireAuth><FoliosPage /></RequireAuth>} />
       <Route path="/folios/authorize" element={<RequireAuth><FolioAuthorizePage /></RequireAuth>} />
       <Route path="/folios/:slug" element={<RequireAuth><FolioDetailPage /></RequireAuth>} />

@@ -106,6 +106,35 @@ describe('用户中心与升级迁移', () => {
     expect((await api('PATCH', `/api/users/${ids.admin}/bio`, tokens.admin, { bio: '管理员本人简介' })).status).toBe(200);
     expect((await api('GET', '/api/account', tokens.member)).body.bio).toBe('管理员更新简介');
   });
+  it('管理员可修改本人及其他用户姓名与简介，资料接口不能修改权限', async () => {
+    const path = `/api/users/${ids.member}/profile`;
+    expect((await api('PATCH', path, tokens.other, { name: '越权' })).status).toBe(403);
+    expect((await api('PATCH', path, tokens.member, { name: '绕过个人接口' })).status).toBe(403);
+    expect((await api('PATCH', path, tokens.admin, { name: '  管理员修改的姓名  ', bio: '财务专家' })).body)
+      .toMatchObject({ id: ids.member, name: '管理员修改的姓名', bio: '财务专家' });
+    expect((await api('GET', '/api/account', tokens.member)).body)
+      .toMatchObject({ name: '管理员修改的姓名', bio: '财务专家', role: 'member', allowHelp: true });
+    expect((await api('GET', '/api/helpers', tokens.other)).body.helpers)
+      .toContainEqual(expect.objectContaining({ userId: ids.member, name: '管理员修改的姓名', description: '财务专家' }));
+    for (const body of [{ name: '   ' }, { name: 'x'.repeat(101) }, {}, { name: '越权', role: 'admin' }, { status: 'disabled' }]) {
+      expect((await api('PATCH', path, tokens.admin, body)).status).toBe(400);
+    }
+    expect((await api('PATCH', `/api/users/${randomUUID()}/profile`, tokens.admin, { name: '未知用户' })).status).toBe(404);
+    expect((await api('PATCH', `/api/users/${ids.admin}/profile`, tokens.admin, { name: '管理员新姓名' })).status).toBe(200);
+    expect((await api('GET', '/api/account', tokens.admin)).body)
+      .toMatchObject({ name: '管理员新姓名', bio: '管理员本人简介', role: 'admin' });
+    expect((await api('PATCH', `/api/users/${ids.admin}`, tokens.admin, { role: 'member' })).status).toBe(400);
+  });
+  it('首次单独设置回复偏好保留默认值，只修改当前用户且拒绝未知字段', async () => {
+    const path = '/api/account/notification/preferences';
+    expect((await api('PATCH', path, undefined, { notifyReply: false })).status).toBe(401);
+    expect((await api('PATCH', path, tokens.other, { notifyReply: false })).body)
+      .toMatchObject({ notifyReply: false, notifyHelp: true, notifyMention: true, verified: false });
+    expect((await api('GET', '/api/account', tokens.admin)).body.notification.notifyReply).toBe(true);
+    for (const body of [{}, { notifyReply: 'false' }, { notifyReply: true, verified: true }]) {
+      expect((await api('PATCH', path, tokens.other, body)).status).toBe(400);
+    }
+  });
 });
 
 describe('飞书验证码', () => {
@@ -169,6 +198,12 @@ describe('飞书验证码', () => {
     const notifications = app.get(UserNotificationsService);
     expect(await notifications.webhookOf(ids.member, 'help')).toBeNull();
     expect(await notifications.webhookOf(ids.member, 'mention')).toBeNull();
+    expect(await notifications.webhookOf(ids.member, 'reply')).not.toBeNull();
+    const updated = await api('PATCH', '/api/account/notification/preferences', tokens.member, { notifyReply: false });
+    expect(updated.status).toBe(200);
+    expect(updated.body).toMatchObject({ notifyHelp: false, notifyReply: false, notifyMention: false, verified: true, webhookUrl: replacement });
+    expect(await notifications.webhookOf(ids.member, 'reply')).toBeNull();
+    await api('PATCH', '/api/account/notification/preferences', tokens.member, { notifyReply: true });
     expect(await notifications.webhookOf(ids.member, 'reply')).not.toBeNull();
     await readyToSend(); const challenge = await send();
     await api('DELETE', '/api/account/notification', tokens.member);

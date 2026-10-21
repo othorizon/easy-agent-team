@@ -48,8 +48,8 @@ async function fixture(width) {
     await route.fulfill({ status: 302, headers: { location: `${base}/settings?section=github&github_setup=${result}` }, body: '' });
   });
   const githubApp = { enabled: true, organization: 'eat-org', repository: 'eat-org/demo', repositoryId: '100', scope: 'organization', checkedAt: new Date().toISOString(), error: '', ownerLogin: 'demo-owner', ownerRole: 'maintain', ownerIsOrgOwner: false,
-    members: [{ userId: user.id, name: user.name, login: 'demo-owner', orgState: 'active', role: 'maintain', state: 'succeeded', error: '', notification: '', canGrant: true, canChangeRole: true },
-      { userId: memberId, name: '应用成员', login: 'demo-member', orgState: 'active', role: 'none', state: 'failed', error: '仓库授权暂未完成', notification: '已通知管理员', canGrant: true, canChangeRole: true }] };
+    members: [{ userId: user.id, name: user.name, login: 'demo-owner', isOwner: true, orgState: 'active', role: 'maintain', state: 'succeeded', error: '', notification: '', canGrant: true, canChangeRole: true },
+      { userId: memberId, name: '应用成员', login: 'demo-member', orgState: 'active', role: 'none', state: 'not_requested', error: '', notification: '', canGrant: true, canChangeRole: true }] };
   await context.route('**/api/**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname, method = request.method();
     const body = request.postData() ? JSON.parse(request.postData()) : null;
@@ -64,7 +64,12 @@ async function fixture(width) {
     else if (/^\/api\/users\/[^/]+\/github$/.test(path)) result = method === 'GET' ? account : { ok: true };
     else if (path === '/api/apps') result = [appInfo];
     else if (path === '/api/apps/demo/github') result = githubApp;
-    else if (path === '/api/apps/demo/github/refresh' || path.endsWith('/retry') || path.endsWith('/role')) result = { ok: true };
+    else if (path.endsWith('/add') || path.endsWith('/role')) {
+      const member = githubApp.members.find(m => path.includes(`/members/${m.userId}/`));
+      Object.assign(member, { role: body.role, state: 'succeeded', error: '', notification: '', operation: path.endsWith('/add') ? 'grant' : 'role' });
+      result = { ok: true };
+    }
+    else if (path === '/api/apps/demo/github/refresh' || path.endsWith('/retry')) result = { ok: true };
     else if (path === '/api/settings/github') result = settings;
     else if (path === '/api/settings/github/initialize') {
       settings.organization = body.organization;
@@ -83,7 +88,7 @@ async function fixture(width) {
   });
   const page = await context.newPage(); page.setDefaultTimeout(10000);
   page.on('pageerror', e => errors.push(e.message));
-  return { page, context, writes, account, settings };
+  return { page, context, writes, account, settings, githubApp };
 }
 async function shot(page, name) {
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${name}: horizontal overflow`);
@@ -105,16 +110,60 @@ try {
     await shot(f.page, `users-${width}`);
     await f.page.goto(`${base}/apps`);
     await f.page.getByText('EAT 组织仓库', { exact: true }).waitFor();
-    await f.page.getByRole('button', { name: /demo.*组织演示应用/ }).click();
+    await f.page.getByRole('link', { name: /demo.*组织演示应用/ }).click();
+    await f.page.getByRole('tab', { name: '成员', exact: true }).click();
     await f.page.getByRole('heading', { name: '成员的 GitHub 仓库权限' }).waitFor();
-    await f.page.getByRole('button', { name: '授予 Write／重试', exact: true }).last().click();
-    assert(f.writes.some(w => w.path.endsWith(`/members/${memberId}/retry`)));
-    await f.page.getByLabel('选择 应用成员 的仓库角色').selectOption('admin');
-    await f.page.getByRole('button', { name: '修改角色', exact: true }).last().click();
-    await f.page.getByRole('alertdialog').getByRole('button', { name: '修改角色', exact: true }).click();
+    const owner = f.page.getByRole('region', { name: '应用管理员 的仓库权限', exact: true });
+    const member = f.page.getByRole('region', { name: '应用成员 的仓库权限', exact: true });
+    assert.equal(await owner.getByText('应用所有者', { exact: true }).count(), 1);
+    assert.equal(await owner.locator('select').count(), 0);
+    assert.equal(await f.page.getByRole('button', { name: '授予 Write／重试', exact: true }).count(), 0);
+    await member.scrollIntoViewIfNeeded();
+    await shot(f.page, `members-before-${width}`);
+    await owner.getByRole('button', { name: '修改角色', exact: true }).click();
+    assert.equal(await f.page.locator('#github-member-role').inputValue(), 'maintain');
+    assert(await f.page.getByRole('button', { name: '保存角色', exact: true }).isDisabled());
+    await shot(f.page, `member-edit-${width}`);
+    await f.page.getByRole('button', { name: '取消', exact: true }).click();
+    await member.getByRole('button', { name: '添加到仓库', exact: true }).click();
+    assert.equal(await f.page.locator('#github-member-role').inputValue(), 'write');
+    await shot(f.page, `member-add-${width}`);
+    await f.page.getByRole('dialog', { name: '添加到仓库', exact: true }).getByRole('button', { name: '添加到仓库', exact: true }).click();
+    await member.getByText('Write', { exact: true }).waitFor();
+    assert(f.writes.some(w => w.path.endsWith(`/members/${memberId}/add`) && w.body.role === 'write'));
+    await member.getByRole('button', { name: '修改角色', exact: true }).click();
+    assert.equal(await f.page.locator('#github-member-role').inputValue(), 'write');
+    await f.page.locator('#github-member-role').selectOption('admin');
+    await f.page.getByRole('button', { name: '保存角色', exact: true }).click();
+    await member.getByText('Admin', { exact: true }).waitFor();
     assert(f.writes.some(w => w.path.endsWith(`/members/${memberId}/role`) && w.body.role === 'admin'));
-    await f.page.getByRole('alertdialog').waitFor({ state: 'hidden' });
     await shot(f.page, `members-${width}`);
+    // A server rejection stays in the editor and never changes the displayed role.
+    await f.page.route(`**/api/apps/demo/github/members/${memberId}/role`, route => route.fulfill({ status: 403,
+      contentType: 'application/json', body: JSON.stringify({ message: '仓库管理权限已变化' }) }));
+    await member.getByRole('button', { name: '修改角色', exact: true }).click();
+    await f.page.locator('#github-member-role').selectOption('read');
+    await f.page.getByRole('button', { name: '保存角色', exact: true }).click();
+    await f.page.getByRole('alert').filter({ hasText: '仓库管理权限已变化' }).waitFor();
+    assert.equal(f.githubApp.members[1].role, 'admin');
+    await f.page.getByRole('button', { name: '取消', exact: true }).click();
+    const refresh = async () => { await f.page.getByRole('button', { name: '刷新 GitHub 状态', exact: true }).click(); };
+    Object.assign(f.githubApp.members[1], { role: 'none', state: 'pending', operation: 'grant' });
+    await refresh(); await member.getByRole('button', { name: '添加中…', exact: true }).waitFor();
+    assert(await member.getByRole('button').isDisabled());
+    Object.assign(f.githubApp.members[1], { login: null, state: 'unlinked', role: 'unknown' });
+    await refresh(); await member.getByText('未关联 GitHub', { exact: true }).waitFor();
+    assert.equal(await member.getByRole('button').count(), 0);
+    Object.assign(f.githubApp.members[1], { login: 'demo-member', role: 'write', state: 'succeeded', roleError: 'GitHub 暂不可用' });
+    await refresh(); await member.getByText(/显示上次核验角色，待更新/).waitFor();
+    assert(await member.getByRole('button', { name: '修改角色', exact: true }).isDisabled());
+    await shot(f.page, `member-stale-${width}`);
+    Object.assign(f.githubApp.members[1], { role: 'none', roleError: '', state: 'not_requested', canChangeRole: false });
+    await refresh(); await member.getByRole('button', { name: '添加到仓库', exact: true }).click();
+    assert.deepEqual(await f.page.locator('#github-member-role option').evaluateAll(options => options.map(o => o.value)), ['write']);
+    await f.page.getByRole('button', { name: '取消', exact: true }).click();
+    Object.assign(f.githubApp.members[1], { canGrant: false });
+    await refresh(); await member.getByText('仅可查看', { exact: true }).waitFor();
     await f.page.goto(`${base}/settings?section=github`);
     await f.page.getByText('高级设置：手动配置已有 GitHub App', { exact: true }).click();
     await f.page.locator('#github-organization').waitFor();

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { createPrivateKey } from 'node:crypto';
 import type { GithubRole } from '@eat/shared';
 import { decryptSecret } from '../common/crypto';
@@ -12,16 +12,46 @@ export class GithubError extends Error {
 export class GithubWaiting extends Error {}
 export const roleRank = (role: string) => ['none', 'read', 'triage', 'write', 'maintain', 'admin'].indexOf(role);
 export const apiRole = (role: string) => ({ read: 'pull', write: 'push' }[role] ?? role);
-export function normalizeRole(role: string): GithubRole | 'none' {
-  const mapped = ({ pull: 'read', push: 'write' } as Record<string, string>)[role] ?? role;
+const missingRoleName = (value: unknown) => value == null || (typeof value === 'string' && !value.trim());
+function roleDiagnostic(value: unknown) {
+  if (value === undefined) return { type: 'missing' };
+  if (value === null) return { type: 'null' };
+  if (typeof value !== 'string') return { type: typeof value };
+  // Role names are the only response values logged. Never serialize objects or provider errors.
+  return { type: 'string', value: value.length <= 80 && !/(?:gh[pousr]_|github_pat_|bearer\s|token|secret|private.key)/i.test(value)
+    ? value : '[redacted]', length: value.length };
+}
+export function normalizeRole(role: unknown): GithubRole | 'none' {
+  if (typeof role !== 'string' || !role.trim())
+    throw new GithubError('GitHub 未返回有效的仓库角色，请刷新状态后重试');
+  const normalized = role.trim().toLowerCase();
+  const mapped = ({ pull: 'read', push: 'write' } as Record<string, string>)[normalized] ?? normalized;
   if (!['none', 'read', 'triage', 'write', 'maintain', 'admin'].includes(mapped))
-    throw new GithubError('GitHub 返回未知仓库角色，请在 GitHub 检查权限');
+    throw new GithubError('GitHub 返回的仓库角色暂不受 EAT 支持，请在 GitHub 核对角色');
   return mapped as GithubRole | 'none';
 }
 // Server is CommonJS; Octokit is ESM. Keep a native dynamic import at this boundary.
 const octokitModule = new Function('return import("octokit")') as () => Promise<any>;
 @Injectable()
 export class GithubClient {
+  private readonly logger = new Logger(GithubClient.name);
+  private diagnostic(event: string, c: GithubConfig, route: string, params: Record<string, unknown>, response: any,
+    extra: Record<string, unknown> = {}) {
+    const requestId = response?.headers?.['x-github-request-id'];
+    this.logger.warn(JSON.stringify({ event, appId: c.appId, installationId: c.installationId, route,
+      repository: params.owner && params.repo ? `${params.owner}/${params.repo}` : undefined,
+      githubLogin: params.username, httpStatus: typeof response?.status === 'number' ? response.status : null,
+      githubRequestId: typeof requestId === 'string' && /^[a-z0-9:-]{1,100}$/i.test(requestId) ? requestId : null, ...extra }));
+  }
+  private responseRole(c: GithubConfig, route: string, params: Record<string, unknown>, response: any, data: any) {
+    try { return normalizeRole(missingRoleName(data?.role_name) ? data?.permission : data.role_name); }
+    catch (e) {
+      this.diagnostic('github.role_parse_failed', c, route, params, response, {
+        roleName: roleDiagnostic(data?.role_name), permission: roleDiagnostic(data?.permission),
+      });
+      throw e;
+    }
+  }
   private transport: typeof fetch = (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(15000) });
   private sdk() { return octokitModule(); }
   private cached?: { fingerprint: string; app: any };
@@ -36,13 +66,18 @@ export class GithubClient {
     return this.cached.app;
   }
   private async request(c: GithubConfig, route: string, params: Record<string, unknown> = {}, token?: string): Promise<any> {
+    let stage = token ? 'user_client' : 'installation_token';
     try {
       const octokit = token ? new (await this.sdk()).Octokit({ auth: token, retry: { enabled: false },
         throttle: { enabled: false }, request: { fetch: this.transport } })
         : await (await this.app(c)).getInstallationOctokit(Number(c.installationId));
+      stage = 'github_api';
       return await octokit.request(route, { ...params, headers: { 'X-GitHub-Api-Version': '2022-11-28' } });
     } catch (e: any) {
       if (e?.status === 404) return { status: 404, data: null };
+      this.diagnostic('github.request_failed', c, route, params, e?.response ?? { status: e?.status }, {
+        stage, authMode: token ? 'user' : 'installation',
+      });
       const headers = e?.response?.headers ?? {};
       const retryAt = Number(headers['retry-after']) * 1000 ||
         (headers['x-ratelimit-remaining'] === '0' ? Math.max(1000, Number(headers['x-ratelimit-reset']) * 1000 - Date.now()) : 0);
@@ -143,8 +178,12 @@ export class GithubClient {
   }
   async permission(c: GithubConfig, fullName: string, login: string) {
     const [owner, repo] = fullName.split('/');
-    const r = await this.request(c, 'GET /repos/{owner}/{repo}/collaborators/{username}/permission', { owner, repo, username: login });
-    return normalizeRole(r.data?.role_name ?? r.data?.permission ?? 'none');
+    const route = 'GET /repos/{owner}/{repo}/collaborators/{username}/permission', params = { owner, repo, username: login };
+    const r = await this.request(c, route, params);
+    if (r.status === 404) return 'none';
+    // An empty role_name is not a custom role. Only fall back when it is absent;
+    // preserve Maintain/Triage and reject unknown named roles instead of silently changing them.
+    return this.responseRole(c, route, params, r, r.data);
   }
   async directRole(c: GithubConfig, fullName: string, login: string): Promise<string | null> {
     const [owner, repo] = fullName.split('/');
@@ -152,7 +191,13 @@ export class GithubClient {
       const r = await this.request(c, 'GET /repos/{owner}/{repo}/collaborators', { owner, repo, affiliation: 'direct', per_page: 100, page });
       if (!Array.isArray(r.data)) throw new GithubError('无法确认仓库直接授权');
       const match = r.data.find((u: any) => u.login.toLowerCase() === login.toLowerCase());
-      if (match) return normalizeRole(match.role_name ?? 'none');
+      if (match) {
+        const role = missingRoleName(match.role_name)
+          ? await this.permission(c, fullName, login)
+          : this.responseRole(c, 'GET /repos/{owner}/{repo}/collaborators', { owner, repo, username: login }, r, match);
+        if (role === 'none') throw new GithubError('GitHub 仓库成员与角色信息不一致，请刷新状态后重试');
+        return role;
+      }
       if (r.data.length < 100) return null;
       if (page >= 100) throw new GithubError('仓库成员过多，请在 GitHub 手动处理');
     }

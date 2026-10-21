@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Patch, Post, Put } from '@nestjs/common'
 import {
   updateAccountSchema, changePasswordSchema, sendWebhookCodeSchema, verifyWebhookSchema, notificationPreferencesSchema,
   type UpdateAccountRequest, type NotificationPreferences,
+  patchNotificationPreferencesSchema, type PatchNotificationPreferencesRequest,
 } from '@eat/shared';
 import { AllowIncompleteProfile, CurrentUser, type AuthUser } from './auth.decorators';
 import { ZodValidationPipe } from '../common/zod.pipe';
@@ -45,6 +46,12 @@ export class AccountController {
   @Put('notification/preferences')
   preferences(@CurrentUser() user: AuthUser,
     @Body(new ZodValidationPipe(notificationPreferencesSchema)) dto: NotificationPreferences) {
+    return this.notifications.preferences(user.id, dto);
+  }
+
+  @Patch('notification/preferences')
+  patchPreferences(@CurrentUser() user: AuthUser,
+    @Body(new ZodValidationPipe(patchNotificationPreferencesSchema)) dto: PatchNotificationPreferencesRequest) {
     return this.notifications.preferences(user.id, dto);
   }
 

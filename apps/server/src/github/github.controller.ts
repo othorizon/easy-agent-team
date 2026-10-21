@@ -60,7 +60,8 @@ export class GithubController {
     let result = 'failed';
     try { await this.setup.finishCreate(state, this.setupBrowser(request), code); result = 'created'; } catch { /* No provider secrets in responses. */ }
     this.setupCookie(reply);
-    return reply.redirect(`${loadConfig().publicUrl.replace(/\/$/, '')}/settings?section=github&github_setup=${result}`);
+    // Nest sets 200 before this handler; Fastify otherwise reuses it instead of redirecting.
+    return reply.redirect(`${loadConfig().publicUrl.replace(/\/$/, '')}/settings?section=github&github_setup=${result}`, 302);
   }
   @Get('github/setup/installation') @Public()
   async installationCallback(@Query('state') state: string, @Query('installation_id') installationId: string,
@@ -68,7 +69,7 @@ export class GithubController {
     let result = 'failed';
     try { result = await this.setup.finishInstall(state, this.setupBrowser(request), installationId, action); this.github.wake(); } catch { /* No provider secrets in responses. */ }
     this.setupCookie(reply);
-    return reply.redirect(`${loadConfig().publicUrl.replace(/\/$/, '')}/settings?section=github&github_setup=${result}`);
+    return reply.redirect(`${loadConfig().publicUrl.replace(/\/$/, '')}/settings?section=github&github_setup=${result}`, 302);
   }
   @Get('account/github') @AllowIncompleteProfile()
   account(@CurrentUser() user: AuthUser) { return this.github.accountInfo(user.id); }
@@ -86,7 +87,7 @@ export class GithubController {
     let success = false;
     try { await this.github.callback(state, browser, code); success = true; } catch { /* Never put provider errors or tokens into the redirect. */ }
     reply.header('Set-Cookie', 'eat_github_browser=; Path=/api/github/callback; HttpOnly; SameSite=Lax; Max-Age=0');
-    return reply.redirect(`${loadConfig().publicUrl.replace(/\/$/, '')}/account?github=${success ? 'linked' : 'failed'}`);
+    return reply.redirect(`${loadConfig().publicUrl.replace(/\/$/, '')}/account?github=${success ? 'linked' : 'failed'}`, 302);
   }
   @Delete('account/github') @AllowIncompleteProfile()
   unlink(@CurrentUser() user: AuthUser) { return this.github.unlink(user.id); }
@@ -107,6 +108,12 @@ export class GithubController {
   @Post('apps/:slug/github/members/:id/retry')
   retry(@Param('slug') slug: string, @Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.run(() => this.github.grant(slug, this.userId(id), user));
+  }
+  @Post('apps/:slug/github/members/:id/add')
+  add(@Param('slug') slug: string, @Param('id') id: string,
+    @Body(new ZodValidationPipe(roleBody)) body: { role: GithubRole }, @CurrentUser() user: AuthUser) {
+    // An explicit add is a new intent, never a retry of an older requested role.
+    return this.run(() => this.github.grant(slug, this.userId(id), user, body.role === 'write' ? undefined : body.role, false));
   }
   @Put('apps/:slug/github/members/:id/role')
   role(@Param('slug') slug: string, @Param('id') id: string, @Body(new ZodValidationPipe(roleBody)) body: { role: GithubRole }, @CurrentUser() user: AuthUser) {

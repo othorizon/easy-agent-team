@@ -17,6 +17,8 @@ import * as bcrypt from 'bcryptjs';
 import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import {
   updateBioSchema,
+  updateUserProfileSchema,
+  type UpdateUserProfileRequest,
   createUserRequestSchema,
   resetUserPasswordRequestSchema,
   updateUserRequestSchema,
@@ -114,7 +116,19 @@ export class UsersController {
     return { ...row, llmGatewaySyncPending, ossSyncPending };
   }
 
-  /** 管理员可修改任意用户的简介，包含本人；角色/状态保护保持独立。 */
+  /** 管理员可修改任意用户的姓名和简介，包含本人；角色/状态保护保持独立。 */
+  @Patch(':id/profile')
+  @Roles('admin')
+  async updateProfile(@Param('id') id: string,
+    @Body(new ZodValidationPipe(updateUserProfileSchema)) body: UpdateUserProfileRequest, @CurrentUser() actor: AuthUser) {
+    const [row] = await this.db.update(users).set(body).where(eq(users.id, id))
+      .returning({ id: users.id, name: users.name, bio: users.bio });
+    if (!row) throw new NotFoundException({ error: 'NOT_FOUND', message: '用户不存在' });
+    await this.audit.record({ actorId: actor.id, action: 'user.profile_updated', targetType: 'user', targetId: id });
+    return row;
+  }
+
+  /** 保留旧版简介接口。 */
   @Patch(':id/bio')
   @Roles('admin')
   async updateBio(@Param('id') id: string,

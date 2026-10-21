@@ -406,7 +406,8 @@ sequenceDiagram
   - **成员自助创建**（Web / CLI `eat app create` / MCP `create_app`）：填 Git 地址（必填）、分支、构建方式，平台在 Dokploy 上依次 `application.create` → `saveGitProvider`（绑 Git 源与 SSH key）→ `saveBuildType`，任一步失败即删掉刚建的 application 回滚，不留孤儿；创建者即 Owner；
   - **管理员挂载既有 application**（`POST /api/apps/mount`，可从 Dokploy 搜索选择，决策 27）：平台只记 id，Git 源与构建配置归 Dokploy 侧维护，删除时只解绑；
 - 构建方式只开放两种：`dockerfile`（可指定 Dockerfile 路径与构建上下文）与 `static`（静态托管：Dokploy 把发布目录原样交给 nginx、**不跑任何构建命令**，仓库里需直接有产物；可开 SPA 模式）。创建时必选，之后可通过 `eat app update` / `update_app` / 控制台改，平台托管的应用会同步写回 Dokploy，下次部署生效；
-- 控制台应用详情弹窗里，Git 仓库地址若是 GitHub 的（scp 式 SSH / `ssh://` / https / 直接贴的网页地址都认），地址后面带一个「GitHub」链接、新页签打开仓库页面；其他 Git 服务的地址原样显示、不出链接（决策 46）；
+- 控制台应用详情页面里，Git 仓库地址若是 GitHub 的（scp 式 SSH / `ssh://` / https / 直接贴的网页地址都认），地址后面带一个「GitHub」链接、新页签打开仓库页面；其他 Git 服务的地址原样显示、不出链接（决策 46）；
+- 控制台应用使用独立详情页 `/apps/:slug`，概览、成员、环境变量、部署记录通过 `tab` 查询参数定位；编辑配置、添加成员、修改 GitHub 角色、编辑环境变量与查看日志使用弹窗。添加成员先搜索和选择用户，再确认添加；移除成员、撤销授权、删除应用需确认。沿用现有权限与 GitHub 异步处理规则。
 - 应用 env：运行时 env 与构建时 Build Args 两块，直接读写 Dokploy 上的配置（`eat app env pull|push [--build]`、MCP `get_app_env` / `set_app_env`、控制台详情页）。推送是整体覆盖目标区块（另一块与 buildSecrets 原样保留），只回 key 级差异不回值；值可能是密钥，仅应用成员可读写且落审计；pull 落盘时按决策 63 的规则保护同名文件，push 前剥掉 eat 写的标记行；
 - **部署授权**：成员自建的应用 `deployApproved=false`，首次部署（任何入口）被拒并回 `DEPLOY_NOT_APPROVED`、记下「有人试过」，管理员在控制台授权一次后永久有效（可撤销）；管理员自己建的与挂载的应用创建即视为已授权；
 - 部署操作：触发部署（CLI `eat deploy` / MCP `trigger_deploy` / 控制台「部署」按钮，三个入口门禁一致——成员资格 + 管理员部署授权；记录里的 `source` 只说明从哪触发：`cli` / `console` / `remote`）、查看部署状态与日志（映射 Dokploy API 能力）；
@@ -829,3 +830,5 @@ easy-agent-team/
 | 76 | 平台指南按主题渐进加载 | 保留 eat-platform-guide 名称，将入口与 9 个主题参考文件维护为真实 Skill 目录，并提供 agents/openai.yaml。shared 在构建时嵌入文本，SyncSkill 的既有 content/files 协议分发完整目录；远程 get_platform_guide 默认只返回入口与路径清单，传 path 按需读取一个主题。触发描述统一取入口 frontmatter，所有文件共用指南版本 37；同步落点、授权规则与多文件链接完整性有回归覆盖。详见 docs/platform-guide.md。 |
 | 77 | 系统设置按任务分类 | 将平台 AI、LLM API 网关、部署接入、Folio 基础发布与 CDN 加速归入三个分组；桌面为分类导航与当前表单，窄屏为分组分类选择器，表单下拉、复选框与开关统一使用 shadcn/ui 风格组件。分类使用 URL 参数，兼容旧 Folio 锚点，保留本页切换草稿并暂停隐藏分类轮询。统一字段、说明、加载重试、保存及连接反馈；权限、凭证保留规则、Folio 与 CDN 的异步启用流程沿用原有行为。界面及本地浏览器回归说明见 docs/settings.md。 |
 | 78 | OSS 存储空间与用户级 RAM 凭证 | 管理员在系统设置配置 OSS Bucket 与加密管理 AK/SK，实际检查 OSS/RAM 权限后启用；成员申请空间需管理员批准。每位用户一个 RAM 用户及共享 AK/SK，多空间按固定 UUID 路径授权。空间默认不公开，可切换整个目录的 EAT 公开读授权；对象 ACL 自由设置，不代管 CDN 访问或缓存。多选已绑定自定义域名、手动标记 CDN，始终返回官方域名。控制台、CLI 和两种 MCP 提供用户能力；回收只撤权并保留文件，用户停用同步停 Key。持久化云操作恢复与审计，CLI 0.11.0、平台指南 38；详见 docs/oss-storage.md。 |
+
+| 79 | 应用详情改为独立页面 | `/apps/:slug` 提供可直达、刷新和分享的应用详情，页签通过 URL 定位。概览展示配置、GitHub 仓库状态及部署授权；成员页分开呈现 EAT 成员与 GitHub 仓库角色。添加成员改为搜索选择后确认的弹窗，配置、角色、环境变量、日志采用弹窗；移除成员、撤销授权和删除应用增加确认。沿用既有后端接口、权限及非阻塞 GitHub 流程，不新增 CLI 命令。 |

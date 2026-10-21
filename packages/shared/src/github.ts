@@ -39,6 +39,11 @@ export interface GithubMemberInfo {
   userId: string; name: string; login: string | null; orgState: GithubOrgState;
   role: GithubRole | 'none' | 'unknown'; state: string; error: string;
   notification: string; canGrant: boolean; canChangeRole: boolean;
+  isOwner?: boolean; needsAuthorization?: boolean;
+  roleError?: string; roleCheckedAt?: string | null;
+  operation?: 'grant' | 'role';
+  /** Cached identity generation; never used as an authorization credential. */
+  bindingVersion?: string;
 }
 export interface GithubAppInfo {
   enabled: boolean; organization: string; repository: string | null; repositoryId: string | null;

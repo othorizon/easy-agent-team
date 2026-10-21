@@ -109,9 +109,20 @@ describe('administrator GitHub App setup and recovery', () => {
     return { state: new URL(r.body.url).searchParams.get('state'), cookie: String(r.headers['set-cookie']).split(';')[0], response: r };
   }
   async function finish(flow: Awaited<ReturnType<typeof start>>, kind = 'manifest', extra = 'code=manifest-code') {
-    return app.inject({ url: `/api/github/setup/${kind}?state=${flow.state}&${extra}`, headers: { cookie: flow.cookie } });
+    const response = await app.inject({ url: `/api/github/setup/${kind}?state=${flow.state}&${extra}`, headers: { cookie: flow.cookie } });
+    expect(response.statusCode).toBe(302);
+    return response;
   }
   const settings = async () => (await db.select().from(s.githubSettings))[0];
+  it.each([
+    ['setup/manifest', '/settings?section=github&github_setup=failed'],
+    ['setup/installation', '/settings?section=github&github_setup=failed'],
+    ['callback', '/account?github=failed'],
+  ])('returns an actual browser redirect for invalid or missing callback state: %s', async (path, target) => {
+    const response = await app.inject({ url: `/api/github/${path}` });
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toContain(target);
+  });
   it('requires an EAT admin for every setup action', async () => {
     for (const endpoint of ['initialize', 'install', 'enabled']) {
       expect((await api('POST', `/api/settings/github/${endpoint}`, 'member', { enabled: true, organization: 'eat-org', name: 'EAT' })).status).toBe(403);
@@ -258,10 +269,16 @@ describe('GitHub binding and organization membership', () => {
     const { state, cookie } = await link('member');
     expect(cookie).toContain('eat_github_browser=');
     expect(state).not.toContain(tokens.member);
-    const url = `/api/github/callback?code=102&state=${state}`;
+    const url = `/api/github/callback?code=102&iss=https%3A%2F%2Fgithub.com%2Flogin%2Foauth&state=${state}`;
     const forged = await app.inject({ url }); expect(forged.headers.location).toContain('failed');
     const good = await app.inject({ url, headers: { cookie } }); expect(good.headers.location).toContain('linked');
     const replay = await app.inject({ url, headers: { cookie } }); expect(replay.headers.location).toContain('failed');
+    for (const response of [forged, good, replay]) {
+      expect(response.statusCode).toBe(302);
+      const destination = new URL(response.headers.location!);
+      expect(destination.pathname).toBe('/account');
+      expect(destination.search).toBe(`?github=${response === good ? 'linked' : 'failed'}`);
+    }
     await service.tick();
     expect(client.invite).toHaveBeenCalledTimes(1); expect(client.accept).toHaveBeenCalledTimes(1);
     expect((await service.accountInfo(ids.member)).orgState).toBe('active');
@@ -441,6 +458,96 @@ describe('durability, revocation and notification', () => {
 
 
 describe('recovery edge cases and read-only views', () => {
+  it('identifies a pre-write role read failure and does not send an authorization write', async () => {
+    client.permission.mockRejectedValueOnce(new GithubError('角色解析失败'));
+    await share('admin'); await service.tick();
+    expect((await task()).error).toBe('读取目标当前仓库角色：角色解析失败');
+    expect(client.setRole).not.toHaveBeenCalled();
+  });
+  it('distinguishes a failed post-write verification from a failure to grant access', async () => {
+    client.permission.mockResolvedValueOnce('none').mockRejectedValueOnce(new GithubError('角色解析失败'));
+    await share('admin'); await service.tick();
+    expect((await task()).error).toBe('授权后核验（已提交角色变更）：角色解析失败');
+    expect(direct.get('eat-org/demo:member')).toBe('write');
+    expect(client.setRole).toHaveBeenCalledTimes(1);
+  });
+  it('lists the application owner once, distinguishes no access from unlinked, and exposes viewer capabilities', async () => {
+    await db.insert(s.appMembers).values([{ appId, userId: ids.owner }, { appId, userId: ids.member }, { appId, userId: ids.outsider }]);
+    await service.unlink(ids.outsider);
+    await api('POST', '/api/apps/demo/github/refresh'); await service.tick();
+    const r = await api('GET', '/api/apps/demo/github', 'owner');
+    expect(r.body.members.filter((m: any) => m.userId === ids.owner)).toHaveLength(1);
+    expect(r.body.members[0]).toMatchObject({ userId: ids.owner, isOwner: true, role: 'maintain', canGrant: true, canChangeRole: false });
+    expect(r.body.members.find((m: any) => m.userId === ids.member)).toMatchObject({ role: 'none', login: 'member', isOwner: false });
+    expect(r.body.members.find((m: any) => m.userId === ids.outsider)).toMatchObject({ role: 'unknown', login: null, state: 'unlinked' });
+  });
+  it('keeps the last observed role on query failure without calling it current or absent', async () => {
+    await api('POST', '/api/apps/demo/github/refresh'); await service.tick();
+    client.permission.mockRejectedValueOnce(new GithubError('角色查询失败'));
+    await api('POST', '/api/apps/demo/github/refresh'); await service.tick();
+    let r = await api('GET', '/api/apps/demo/github');
+    expect(r.body.members[0]).toMatchObject({ role: 'maintain', roleError: '角色查询失败' });
+    expect(r.body.members[0].roleCheckedAt).toBeTruthy();
+    expect(r.body.ownerRole).toBe('maintain');
+    const repository = client.repository.getMockImplementation()!;
+    client.repository.mockRejectedValue(new GithubError('仓库查询失败', true));
+    try {
+      await api('POST', '/api/apps/demo/github/refresh'); await service.tick();
+      r = await api('GET', '/api/apps/demo/github');
+      expect(r.body.scope).toBe('unknown');
+      expect(r.body.members[0]).toMatchObject({ role: 'maintain', canGrant: false, canChangeRole: false });
+      expect(r.body.error).toBe('仓库查询失败');
+    } finally { client.repository.mockImplementation(repository); }
+  });
+  it('drops cached roles and task errors after unlink and requires rechecking even a same-login rebind', async () => {
+    await share('admin'); await service.tick(); await service.tick();
+    await service.unlink(ids.member);
+    let member = (await api('GET', '/api/apps/demo/github')).body.members.find((m: any) => m.userId === ids.member);
+    expect(member).toMatchObject({ login: null, role: 'unknown', state: 'unlinked', error: '', roleCheckedAt: null });
+    expect(direct.get('eat-org/demo:member')).toBe('write');
+    expect(await db.select().from(s.appMembers).where(eq(s.appMembers.userId, ids.member))).toHaveLength(1);
+    const flow = await link('member');
+    await app.inject({ url: `/api/github/callback?code=102&state=${flow.state}`, headers: { cookie: flow.cookie } });
+    member = (await api('GET', '/api/apps/demo/github')).body.members.find((m: any) => m.userId === ids.member);
+    expect(member).toMatchObject({ login: 'member', role: 'unknown', error: '' });
+    await service.tick(); await service.tick();
+    member = (await api('GET', '/api/apps/demo/github')).body.members.find((m: any) => m.userId === ids.member);
+    expect(member.role).toBe('write');
+  });
+  it('reports a failed connection check while retaining the previous role for display', async () => {
+    await api('POST', '/api/apps/demo/github/refresh'); await service.tick();
+    client.check.mockRejectedValueOnce(new GithubError('安装连接暂不可用'));
+    await api('POST', '/api/apps/demo/github/refresh'); await service.tick();
+    const r = await api('GET', '/api/apps/demo/github');
+    expect(r.body.members[0]).toMatchObject({ role: 'maintain', roleError: '安装连接暂不可用' });
+  });
+  it('rechecks a shared repository after a role operation in another app without inventing the new role', async () => {
+    await db.insert(s.appMembers).values({ appId, userId: ids.member });
+    await db.insert(s.apps).values({ slug: 'shared-repo', name: 'shared', ownerId: ids.member, repoUrl: 'https://github.com/eat-org/demo',
+      dokployApplicationId: 'shared-dok', deployApproved: true, approvedRepoVersion: 1 });
+    await api('POST', '/api/apps/demo/github/refresh');
+    await api('POST', '/api/apps/shared-repo/github/refresh'); await service.tick();
+    await api('PUT', `/api/apps/demo/github/members/${ids.member}/role`, 'admin', { role: 'write' }); await service.tick();
+    let r = await api('GET', '/api/apps/shared-repo/github');
+    expect(r.body.members[0]).toMatchObject({ role: 'none', state: 'verifying' });
+    await service.tick();
+    r = await api('GET', '/api/apps/shared-repo/github');
+    expect(r.body.members[0]).toMatchObject({ role: 'write', state: 'succeeded' });
+  });
+  it('explicit add selects Write for Maintain without retrying an earlier failed Admin request', async () => {
+    await db.insert(s.appMembers).values({ appId, userId: ids.member });
+    client.setRole.mockRejectedValueOnce(new GithubError('暂时不可用'));
+    await api('PUT', `/api/apps/demo/github/members/${ids.member}/role`, 'admin', { role: 'admin' });
+    await service.tick(); expect((await task()).state).toBe('failed');
+    expect((await api('POST', `/api/apps/demo/github/members/${ids.member}/add`, 'owner', { role: 'write' })).status).toBe(201);
+    expect((await task()).kind).toBe('grant'); expect((await task()).payload.role).toBeUndefined();
+    await service.tick(); expect(direct.get('eat-org/demo:member')).toBe('write');
+    expect((await api('POST', `/api/apps/demo/github/members/${ids.member}/add`, 'owner', { role: 'admin' })).status).toBe(403);
+    expect((await api('POST', `/api/apps/demo/github/members/${ids.member}/add`, 'member', { role: 'write' })).status).toBe(403);
+    expect((await api('POST', `/api/apps/demo/github/members/${ids.member}/add`, 'admin', { role: 'invalid' })).status).toBe(400);
+    expect((await api('POST', `/api/apps/demo/github/members/${ids.member}/add`, 'admin', { role: 'read' })).status).toBe(201);
+    await service.tick(); expect(direct.get('eat-org/demo:member')).toBe('read');
+  });
   it('shows repository and owner roles to reviewers without changing provider permissions', async () => {
     await api('GET', '/api/apps/demo/github'); await service.tick();
     const r = await api('GET', '/api/apps/demo/github');

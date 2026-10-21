@@ -33,7 +33,7 @@ export class UserNotificationsService {
     };
   }
 
-  async preferences(userId: string, dto: NotificationPreferences) {
+  async preferences(userId: string, dto: Partial<NotificationPreferences>) {
     await this.db.insert(userNotifications).values({ userId, ...dto })
       .onConflictDoUpdate({ target: userNotifications.userId, set: dto });
     return this.settings(userId);

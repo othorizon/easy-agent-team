@@ -24,6 +24,8 @@ export function Combobox({
   searchPlaceholder = '搜索…',
   emptyText = '没有匹配项',
   className,
+  optionLayout = 'inline',
+  disabled = false,
 }: {
   groups: ComboboxGroup[];
   value: string | null;
@@ -32,6 +34,8 @@ export function Combobox({
   searchPlaceholder?: string;
   emptyText?: string;
   className?: string;
+  optionLayout?: 'inline' | 'stacked';
+  disabled?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   const all = groups.flatMap((g) => g.options);
@@ -43,9 +47,12 @@ export function Combobox({
           type="button"
           role="combobox"
           aria-expanded={open}
+          aria-label={placeholder}
+          disabled={disabled}
           className={cn(
             'flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-card px-3 py-2 text-sm shadow-xs outline-none transition-colors cursor-pointer',
             'focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25',
+            'disabled:cursor-not-allowed disabled:opacity-50',
             !selected && 'text-muted-foreground/70',
             className,
           )}
@@ -54,10 +61,10 @@ export function Combobox({
           <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0">
+      <PopoverContent className="w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-2rem)] p-0">
         <Command>
           <CommandInput placeholder={searchPlaceholder} />
-          <CommandList>
+          <CommandList className="max-h-[min(16rem,calc(var(--radix-popover-content-available-height)-3rem))]">
             <CommandEmpty>{emptyText}</CommandEmpty>
             {groups.map((g, gi) => (
               <CommandGroup key={gi} heading={g.label}>
@@ -70,10 +77,19 @@ export function Combobox({
                       setOpen(false);
                     }}
                     data-checked={opt.value === value}
-                    className="data-[checked=true]:bg-accent/70"
+                    className={cn('data-[checked=true]:bg-accent/70', optionLayout === 'stacked' && 'items-start py-2.5')}
                   >
-                    <span className="truncate">{opt.label}</span>
-                    {opt.hint && <span className="ml-auto truncate text-xs text-muted-foreground">{opt.hint}</span>}
+                    {optionLayout === 'stacked' ? (
+                      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                        <span className="font-medium leading-5 [overflow-wrap:anywhere]">{opt.label}</span>
+                        {opt.hint && <span className="text-xs leading-4 text-muted-foreground [overflow-wrap:anywhere]">{opt.hint}</span>}
+                      </span>
+                    ) : (
+                      <>
+                        <span className="truncate">{opt.label}</span>
+                        {opt.hint && <span className="ml-auto truncate text-xs text-muted-foreground">{opt.hint}</span>}
+                      </>
+                    )}
                   </CommandItem>
                 ))}
               </CommandGroup>

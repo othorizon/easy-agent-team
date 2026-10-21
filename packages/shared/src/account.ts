@@ -8,6 +8,9 @@ export const updateAccountSchema = z.object({
   allowHelp: z.boolean().optional(),
 });
 export type UpdateAccountRequest = z.infer<typeof updateAccountSchema>;
+export const updateUserProfileSchema = updateAccountSchema.pick({ name: true, bio: true }).strict()
+  .refine((value) => Object.keys(value).length > 0, '请提供姓名或个人简介');
+export type UpdateUserProfileRequest = z.infer<typeof updateUserProfileSchema>;
 export const changePasswordSchema = z.object({
   oldPassword: z.string().min(1),
   password: z.string().min(8, '密码至少 8 位').max(72, '密码最多 72 字符')
@@ -32,6 +35,9 @@ export const notificationPreferencesSchema = z.object({
   notifyMention: z.boolean(),
 });
 export type NotificationPreferences = z.infer<typeof notificationPreferencesSchema>;
+export const patchNotificationPreferencesSchema = notificationPreferencesSchema.partial().strict()
+  .refine((value) => Object.keys(value).length > 0, '请提供通知偏好');
+export type PatchNotificationPreferencesRequest = z.infer<typeof patchNotificationPreferencesSchema>;
 export interface OnboardingStatus {
   requireBio: boolean;
   requireNotification: boolean;

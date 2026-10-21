@@ -1,37 +1,28 @@
-import { GithubAppSummary, GithubMembers } from '../components/github';
+import { GithubAppSummary } from '../components/github';
 import type {
   AppBuildType,
-  AppEnv,
-  AppEnvChange,
-  AppEnvTarget,
   AppInfo,
-  BuildLogsResult,
   CreateAppRequest,
-  DeploymentInfo,
   DokployApplication,
   MountAppRequest,
-  RunLogsResult,
   UpdateAppRequest,
 } from '@eat/shared';
 import {
   APP_BUILD_TYPE_LABEL,
-  APP_ENV_TARGET_LABEL,
   DEFAULT_BRANCH,
   DEFAULT_CONTAINER_PORT,
   DEFAULT_DOCKERFILE,
   DEFAULT_PUBLISH_DIRECTORY,
   STATIC_CONTAINER_PORT,
-  githubRepoWebUrl,
 } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ExternalLink, Link2, Pencil, Plus, RefreshCw, Rocket, Search, ShieldCheck, ShieldOff, Trash2, X } from 'lucide-react';
+import { Link2, Plus, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
 import { InlineCode } from '../components/code';
-import { Combobox } from '../components/combobox';
-import { Confirm } from '../components/confirm';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { DokployAppPicker } from '../components/dokploy-app-picker';
 import { Empty } from '../components/empty';
 import { Field, rules } from '../components/form';
@@ -46,65 +37,26 @@ import { Input, Textarea } from '../components/ui/input';
 import { TableSkeleton } from '../components/ui/skeleton';
 import { Switch } from '../components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { formatDateTime } from '../lib/format';
 import { useQueryParams } from '../lib/use-query-params';
-
-/** 部署状态（决策 30：queued/archived 是平台补的，其余直接是 Dokploy 构建记录的取值） */
-const STATUS_BADGE: Record<string, JSX.Element> = {
-  queued: <Badge>排队中</Badge>,
-  running: <Badge>构建中</Badge>,
-  done: <Badge variant="success">成功</Badge>,
-  error: <Badge variant="destructive">失败</Badge>,
-  cancelled: <Badge variant="outline">已取消</Badge>,
-  archived: <Badge variant="outline">已归档</Badge>,
-};
-
-/** Dokploy 构建记录自己的状态取值 */
-const BUILD_STATUS: Record<string, string> = { running: '构建中', done: '成功', error: '失败', cancelled: '已取消' };
 
 const BUILD_TYPE_OPTIONS: Array<{ label: string; value: AppBuildType }> = [
   { label: APP_BUILD_TYPE_LABEL.dockerfile, value: 'dockerfile' },
   { label: APP_BUILD_TYPE_LABEL.static, value: 'static' },
 ];
 
-/**
- * 一次部署是谁、从哪发起的（决策 30 / 31）。platform 为 null 就是「有人绕过平台、直接在 Dokploy 侧触发」，
- * 没过平台的成员与授权门禁，要显眼地标出来；source=console / remote 只是入口不同，门禁与 CLI 一致（决策 64）。
- */
-function OriginCell({ d }: { d: DeploymentInfo }) {
-  if (!d.platform) {
-    return <Badge variant="destructive">Dokploy 侧</Badge>;
-  }
-  return (
-    <span className="flex flex-wrap items-center gap-1 text-muted-foreground" title={d.platform.claim === 'inferred' ? '归属按触发时间推断，未必准确' : undefined}>
-      {d.platform.triggeredByName}
-      {d.platform.source === 'console' && <Badge variant="outline">控制台</Badge>}
-      {d.platform.source === 'remote' && <Badge variant="outline">远程 MCP</Badge>}
-      {d.platform.claim === 'inferred' && ' ⚠'}
-    </span>
-  );
-}
-
-function ApprovalBadge({ a }: { a: AppInfo }) {
-  if (a.deployApproved) return <Badge variant="success">已授权</Badge>;
-  return <Badge variant="warning">{a.approvalRequestedAt ? '待授权 · 有人尝试部署' : '待授权'}</Badge>;
-}
-
-interface UserRow {
-  id: string;
-  name: string;
-  email: string;
+export function ApprovalBadge({ a }: { a: AppInfo }) {
+  if (a.deployApproved) return <Badge variant="success">已授权部署</Badge>;
+  return <Badge variant="warning">{a.approvalRequestedAt ? '待授权 · 有部署请求' : '待授权部署'}</Badge>;
 }
 
 export function AppsPage() {
   const queryClient = useQueryClient();
+  const location = useLocation();
+  const navigate = useNavigate();
   const me = getStoredUser();
   const isAdmin = me?.role === 'admin';
   const [creating, setCreating] = useState(false);
   const [mounting, setMounting] = useState(false);
-  const [editingSlug, setEditingSlug] = useState<string | null>(null);
-  const [viewingSlug, setViewingSlug] = useState<string | null>(null);
   const [params, setParams] = useQueryParams({ q: '', filter: 'all', page: '1', pageSize: '20' });
   const filter = isAdmin && params.filter === 'pending' ? 'pending' : 'all';
   const requestedPage = Number(params.page);
@@ -113,10 +65,6 @@ export function AppsPage() {
   const apps = useQuery({ queryKey: ['apps'], queryFn: () => api<AppInfo[]>('GET', '/api/apps') });
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['apps'] });
 
-  // 弹窗数据从最新列表里取，成员 / 授权变更后自动刷新
-  const viewing = viewingSlug ? (apps.data ?? []).find((p) => p.slug === viewingSlug) ?? null : null;
-  const editing = editingSlug ? (apps.data ?? []).find((p) => p.slug === editingSlug) ?? null : null;
-
   const create = useMutation({
     mutationFn: (v: CreateAppRequest) => api<AppInfo>('POST', '/api/apps', v),
     onSuccess: (a) => {
@@ -124,6 +72,7 @@ export function AppsPage() {
       toast.success(a.deployApproved ? `应用已创建${domain}` : `应用已创建${domain}；首次部署前需管理员授权一次`);
       setCreating(false);
       invalidate();
+      navigate(`/apps/${encodeURIComponent(a.slug)}`);
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '创建失败'),
   });
@@ -136,26 +85,6 @@ export function AppsPage() {
       invalidate();
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '挂载失败'),
-  });
-
-  const update = useMutation({
-    mutationFn: (v: { slug: string; body: UpdateAppRequest }) => api('PATCH', `/api/apps/${v.slug}`, v.body),
-    onSuccess: () => {
-      toast.success('已更新，下次部署生效');
-      setEditingSlug(null);
-      invalidate();
-    },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : '更新失败'),
-  });
-
-  const remove = useMutation({
-    mutationFn: (slug: string) => api<{ dokployDeleted: boolean }>('DELETE', `/api/apps/${slug}`),
-    onSuccess: (r) => {
-      toast.success(r.dokployDeleted ? '已删除（含 Dokploy 上的应用）' : '已解绑');
-      setViewingSlug(null);
-      invalidate();
-    },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : '删除失败'),
   });
 
   const keyword = params.q.trim().toLowerCase();
@@ -177,12 +106,7 @@ export function AppsPage() {
     <div className="space-y-5">
       <PageHeader
         title="应用"
-        description={
-          <>
-            应用对应 Dokploy 上的 application：填 Git 地址与构建方式即可自助创建，平台自动在 Dokploy 上建好应用并绑定 SSH key。
-            当前仓库需管理员授权后才能部署；更换仓库需重新审批，更换分支无需重审。命令行 <InlineCode>eat deploy &lt;slug&gt;</InlineCode> 与详情里的「部署」按钮均按绑定的 Git 分支构建。
-          </>
-        }
+        description="从代码仓库部署应用，管理成员协作、环境变量与部署记录。"
         actions={
           <div className="flex flex-wrap gap-2">
             {isAdmin && (
@@ -239,7 +163,7 @@ export function AppsPage() {
                 <TableRow>
                   <TableHead>应用</TableHead>
                   <TableHead className="hidden md:table-cell">Git</TableHead>
-                  <TableHead className="hidden w-24 sm:table-cell">Owner</TableHead>
+                  <TableHead className="hidden w-24 sm:table-cell">所有者</TableHead>
                   <TableHead className="hidden lg:table-cell">成员</TableHead>
                   <TableHead className="w-28">部署授权</TableHead>
                   <TableHead className="w-20">我可部署</TableHead>
@@ -249,15 +173,15 @@ export function AppsPage() {
                 {rows.map((a) => (
                   <TableRow key={a.id}>
                     <TableCell>
-                      <button
-                        type="button"
-                        className="group inline-flex cursor-pointer flex-wrap items-center gap-x-2 gap-y-0.5 text-left"
-                        onClick={() => setViewingSlug(a.slug)}
+                      <Link
+                        className="group inline-flex flex-wrap items-center gap-x-2 gap-y-0.5 text-left rounded-sm focus-visible:outline-2 focus-visible:outline-ring"
+                        to={`/apps/${encodeURIComponent(a.slug)}`}
+                        state={{ from: location.pathname + location.search }}
                       >
                         <InlineCode className="text-primary group-hover:underline">{a.slug}</InlineCode>
                         <span className="font-medium">{a.name}</span>
                         <Badge variant="outline">{a.buildType ? APP_BUILD_TYPE_LABEL[a.buildType] : '挂载'}</Badge>
-                      </button>
+                      </Link>
                       <GithubAppSummary slug={a.slug} compact />
                       {a.url && (
                         <a href={a.url} target="_blank" rel="noreferrer" className="mt-0.5 block truncate font-mono text-xs text-muted-foreground hover:underline">
@@ -298,495 +222,7 @@ export function AppsPage() {
 
       {creating && <CreateAppDialog pending={create.isPending} onClose={() => setCreating(false)} onSubmit={(v) => create.mutate(v)} />}
       {mounting && <MountAppDialog pending={mount.isPending} onClose={() => setMounting(false)} onSubmit={(v) => mount.mutate(v)} />}
-      {editing && (
-        <EditAppDialog app={editing} pending={update.isPending} onClose={() => setEditingSlug(null)} onSubmit={(v) => update.mutate({ slug: editing.slug, body: v })} />
-      )}
-      {viewing && (
-        <AppDetailDialog
-          app={viewing}
-          isAdmin={isAdmin}
-          canManage={isAdmin || viewing.ownerId === me?.id}
-          onClose={() => setViewingSlug(null)}
-          onEdit={() => setEditingSlug(viewing.slug)}
-          onRemove={() => remove.mutate(viewing.slug)}
-          onChanged={invalidate}
-        />
-      )}
     </div>
-  );
-}
-
-// ---------- 详情弹窗：概览 / 环境变量 / 部署记录 ----------
-
-function AppDetailDialog({
-  app,
-  isAdmin,
-  canManage,
-  onClose,
-  onEdit,
-  onRemove,
-  onChanged,
-}: {
-  app: AppInfo;
-  isAdmin: boolean;
-  canManage: boolean;
-  onClose: () => void;
-  onEdit: () => void;
-  onRemove: () => void;
-  onChanged: () => void;
-}) {
-  const [tab, setTab] = useState('overview');
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle className="flex flex-wrap items-center gap-2">
-            应用 <InlineCode>{app.slug}</InlineCode> {app.name}
-            <ApprovalBadge a={app} />
-          </DialogTitle>
-        </DialogHeader>
-        <Tabs value={tab} onValueChange={setTab}>
-          <TabsList>
-            <TabsTrigger value="overview">概览</TabsTrigger>
-            <TabsTrigger value="env">环境变量</TabsTrigger>
-            <TabsTrigger value="deployments">部署记录</TabsTrigger>
-          </TabsList>
-          <TabsContent value="overview" className="mt-4">
-            <Overview app={app} isAdmin={isAdmin} canManage={canManage} onEdit={onEdit} onRemove={onRemove} onChanged={onChanged} onDeployed={() => setTab('deployments')} />
-          </TabsContent>
-          <TabsContent value="env" className="mt-4">
-            {app.isMember ? <EnvEditor app={app} /> : <Empty text="仅应用成员可查看与修改环境变量" className="py-6" />}
-          </TabsContent>
-          <TabsContent value="deployments" className="mt-4">
-            <Deployments app={app} />
-          </TabsContent>
-        </Tabs>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function Overview({
-  app,
-  isAdmin,
-  canManage,
-  onEdit,
-  onRemove,
-  onChanged,
-  onDeployed,
-}: {
-  app: AppInfo;
-  isAdmin: boolean;
-  canManage: boolean;
-  onEdit: () => void;
-  onRemove: () => void;
-  onChanged: () => void;
-  onDeployed: () => void;
-}) {
-  const queryClient = useQueryClient();
-  const users = useQuery({ queryKey: ['users'], queryFn: () => api<UserRow[]>('GET', '/api/users'), enabled: canManage });
-
-  const deploy = useMutation({
-    mutationFn: () => api<DeploymentInfo>('POST', `/api/apps/${app.slug}/deploy`, { source: 'console' }),
-    onSuccess: () => {
-      toast.success('已触发部署，排队中');
-      void queryClient.invalidateQueries({ queryKey: ['deployments', app.slug] });
-      onChanged();
-      onDeployed();
-    },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : '触发失败'),
-  });
-  const approve = useMutation({
-    mutationFn: (on: boolean) => api(on ? 'POST' : 'DELETE', `/api/apps/${app.slug}/approve`),
-    onSuccess: (_r, on) => {
-      toast.success(on ? '已授权，该应用之后可直接部署' : '已撤销授权');
-      onChanged();
-    },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : '操作失败'),
-  });
-  const addMember = useMutation({
-    mutationFn: (userId: string) => api('POST', `/api/apps/${app.slug}/members`, { userId }),
-    onSuccess: () => {
-      toast.success('EAT 成员已添加，GitHub 授权状态请查看下方列表');
-      void queryClient.invalidateQueries({ queryKey: ['github-app', app.slug] });
-      onChanged();
-    },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : '添加失败'),
-  });
-  const removeMember = useMutation({
-    mutationFn: (userId: string) => api('DELETE', `/api/apps/${app.slug}/members/${userId}`),
-    onSuccess: () => {
-      toast.success('已移除');
-      void queryClient.invalidateQueries({ queryKey: ['github-app', app.slug] });
-      onChanged();
-    },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : '移除失败'),
-  });
-
-  const deployHint = !app.isMember ? '仅应用成员可部署' : !app.deployApproved ? '待管理员授权后才能部署' : undefined;
-  const githubUrl = githubRepoWebUrl(app.repoUrl);
-  const rows: Array<[string, React.ReactNode]> = [
-    [
-      'Git 仓库',
-      app.repoUrl ? (
-        <span className="break-all">
-          {app.repoUrl}
-          {githubUrl && (
-            <a
-              href={githubUrl}
-              target="_blank"
-              rel="noreferrer"
-              title={`在 GitHub 打开 ${githubUrl}`}
-              className="ml-2 inline-flex items-center gap-0.5 whitespace-nowrap align-baseline text-xs text-primary hover:underline"
-            >
-              <ExternalLink className="size-3" aria-hidden="true" />
-              GitHub
-            </a>
-          )}
-        </span>
-      ) : (
-        '—'
-      ),
-    ],
-    ...(app.managed ? ([['分支', app.branch]] as Array<[string, React.ReactNode]>) : []),
-    [
-      '构建方式',
-      app.managed && app.buildType ? (
-        <>
-          {APP_BUILD_TYPE_LABEL[app.buildType]}
-          <span className="ml-2 text-xs text-muted-foreground">
-            {app.buildType === 'dockerfile'
-              ? `Dockerfile ${app.dockerfile}，上下文 ${app.dockerContextPath || '仓库根'}，容器端口 ${app.port}`
-              : `发布目录 ${app.publishDirectory}，SPA 模式${app.staticSpa ? '开' : '关'}`}
-          </span>
-        </>
-      ) : (
-        <span className="text-muted-foreground">管理员挂载的既有应用，构建配置在 Dokploy 侧维护</span>
-      ),
-    ],
-    [
-      '域名',
-      app.url ? (
-        <a key="url" href={app.url} target="_blank" rel="noreferrer" className="break-all font-mono text-primary hover:underline">
-          {app.url}
-        </a>
-      ) : (
-        <span className="text-muted-foreground">{app.managed ? '未分配（管理员未在「系统设置 → Dokploy」配置自动域名后缀）' : '—'}</span>
-      ),
-    ],
-    ['Dokploy application', <InlineCode key="id">{app.dokployApplicationId}</InlineCode>],
-    ['Owner', app.ownerName],
-    ...(app.description ? ([['说明', app.description]] as Array<[string, React.ReactNode]>) : []),
-  ];
-
-  return (
-    <div className="flex flex-col gap-5">
-      <div className="flex flex-wrap items-center gap-2">
-        {app.isMember && (
-          <Confirm
-            title={`部署 ${app.slug}？`}
-            description="Dokploy 将按当前分支重新构建并上线，这次部署会在记录里标注「控制台」。"
-            confirmText="部署"
-            destructive={false}
-            onConfirm={() => deploy.mutate()}
-          >
-            <Button size="sm" disabled={!app.canDeploy || deploy.isPending} title={deployHint}>
-              <Rocket />
-              部署
-            </Button>
-          </Confirm>
-        )}
-        {canManage && (
-          <>
-            <Button variant="outline" size="sm" onClick={onEdit}>
-              <Pencil />
-              编辑配置
-            </Button>
-            <Confirm
-              title={`删除应用 ${app.slug}？`}
-              description={
-                app.managed
-                  ? '平台托管的应用会连同 Dokploy 上的 application 一起删除，容器与构建记录不可恢复。'
-                  : '只从平台解绑，不影响 Dokploy 上的应用本身。'
-              }
-              confirmText={app.managed ? '连 Dokploy 一起删除' : '解绑'}
-              onConfirm={onRemove}
-            >
-              <Button variant="outline-destructive" size="sm">
-                <Trash2 />
-                {app.managed ? '删除应用' : '解绑'}
-              </Button>
-            </Confirm>
-          </>
-        )}
-      </div>
-
-      <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[8rem_1fr]">
-        {rows.map(([k, v]) => (
-          <div key={k} className="contents">
-            <dt className="text-muted-foreground">{k}</dt>
-            <dd className="min-w-0">{v}</dd>
-          </div>
-        ))}
-      </dl>
-
-      <GithubAppSummary slug={app.slug} />
-      <div className="rounded-md border px-3 py-2.5 text-sm">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <span className="font-medium">部署授权</span>
-            <span className="ml-2 text-muted-foreground">
-              {app.deployApproved
-                ? `已由 ${app.approvedByName ?? '-'} 于 ${app.approvedAt ? formatDateTime(app.approvedAt) : '-'} 授权当前仓库；更换仓库需重新审批`
-                : app.approvalRequestedAt
-                  ? `待管理员授权；${formatDateTime(app.approvalRequestedAt)} 有成员尝试部署被拒`
-                  : '待管理员授权（首次部署前需放行一次）'}
-            </span>
-          </div>
-          {isAdmin &&
-            (app.deployApproved ? (
-              <Button variant="outline" size="sm" onClick={() => approve.mutate(false)} loading={approve.isPending}>
-                <ShieldOff />
-                撤销授权
-              </Button>
-            ) : (
-              <Button size="sm" onClick={() => approve.mutate(true)} loading={approve.isPending}>
-                <ShieldCheck />
-                授权部署
-              </Button>
-            ))}
-        </div>
-      </div>
-
-      {canManage && (
-        <div>
-          <h3 className="mb-2 text-sm font-semibold">成员管理</h3>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {app.members.map((m) => (
-              <Badge key={m.userId} variant="secondary" className="gap-1 pr-1">
-                {m.name}
-                <button
-                  type="button"
-                  aria-label={`移除 ${m.name}`}
-                  className="rounded-full p-0.5 transition-colors hover:bg-foreground/10 cursor-pointer"
-                  onClick={() => removeMember.mutate(m.userId)}
-                >
-                  <X className="size-3" />
-                </button>
-              </Badge>
-            ))}
-            {app.deployApproved ? <div className="w-52">
-              <Combobox
-                groups={[
-                  {
-                    options: (users.data ?? [])
-                      .filter((u) => u.id !== app.ownerId && !app.members.some((m) => m.userId === u.id))
-                      .map((u) => ({ value: u.id, label: u.name, hint: u.email })),
-                  },
-                ]}
-                value={null}
-                onChange={(userId) => addMember.mutate(userId)}
-                placeholder="添加成员…"
-                searchPlaceholder="搜索姓名或邮箱…"
-                className="h-7 text-xs"
-              />
-            </div> : <p className="text-xs text-muted-foreground">当前仓库获部署批准后可添加成员。</p>}
-          </div>
-        </div>
-      )}
-      <GithubMembers slug={app.slug} />
-    </div>
-  );
-}
-
-/** 应用 env（决策 31）：运行时 / 构建时两块，直接读写 Dokploy；保存是整体覆盖，结果只报 key 级变化 */
-function EnvEditor({ app }: { app: AppInfo }) {
-  const queryClient = useQueryClient();
-  const [target, setTarget] = useState<AppEnvTarget>('runtime');
-  const [draft, setDraft] = useState<Record<AppEnvTarget, string | null>>({ runtime: null, build: null });
-  const env = useQuery({ queryKey: ['app-env', app.slug], queryFn: () => api<AppEnv>('GET', `/api/apps/${app.slug}/env`), retry: false });
-  const current = draft[target] ?? (env.data ? env.data[target] : '');
-  const dirty = env.data !== undefined && draft[target] !== null && draft[target] !== env.data[target];
-
-  const save = useMutation({
-    mutationFn: () => api<AppEnvChange>('PUT', `/api/apps/${app.slug}/env`, { target, content: current }),
-    onSuccess: (r) => {
-      const parts = [
-        r.added.length && `新增 ${r.added.join(', ')}`,
-        r.changed.length && `修改 ${r.changed.join(', ')}`,
-        r.removed.length && `删除 ${r.removed.join(', ')}`,
-      ].filter(Boolean);
-      toast.success(parts.length ? `已保存：${parts.join('；')}` : '已保存，没有变化');
-      setDraft((d) => ({ ...d, [target]: null }));
-      void queryClient.invalidateQueries({ queryKey: ['app-env', app.slug] });
-    },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : '保存失败'),
-  });
-
-  if (env.isError) {
-    return <div className="text-sm text-destructive">{env.error instanceof ApiError ? env.error.message : '读取失败'}</div>;
-  }
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <Segmented
-          value={target}
-          onChange={setTarget}
-          options={[
-            { label: APP_ENV_TARGET_LABEL.runtime, value: 'runtime' },
-            { label: APP_ENV_TARGET_LABEL.build, value: 'build' },
-          ]}
-        />
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => void env.refetch()} disabled={env.isFetching}>
-            <RefreshCw className={env.isFetching ? 'animate-spin' : ''} />
-            刷新
-          </Button>
-          <Button size="sm" onClick={() => save.mutate()} disabled={!dirty} loading={save.isPending}>
-            保存
-          </Button>
-        </div>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        {target === 'runtime' ? '容器运行时的环境变量（Dokploy 的 Environment）。' : '构建时变量（Dokploy 的 Build Args），Dockerfile 里以 ARG 取用。'}
-        保存是整体覆盖，下次部署生效；值可能是密钥，读取与修改都会记入审计。命令行等价：
-        <InlineCode>eat app env pull / push {app.slug}{target === 'build' ? ' --build' : ''}</InlineCode>
-      </p>
-      {env.isLoading ? (
-        <TableSkeleton rows={3} />
-      ) : (
-        <Textarea
-          rows={12}
-          className="font-mono text-xs"
-          spellCheck={false}
-          placeholder={'KEY=value\n# 一行一条'}
-          value={current}
-          onChange={(e) => setDraft((d) => ({ ...d, [target]: e.target.value }))}
-        />
-      )}
-    </div>
-  );
-}
-
-type LogKind = 'build' | 'run';
-
-function Deployments({ app }: { app: AppInfo }) {
-  const [logsOf, setLogsOf] = useState<LogKind | null>(null);
-  /** 默认只看 Dokploy 上还留着的（每个应用最近 10 次），打开看平台侧完整历史（决策 30） */
-  const [allHistory, setAllHistory] = useState(false);
-  const deployments = useQuery({
-    queryKey: ['deployments', app.slug, allHistory],
-    queryFn: () => api<DeploymentInfo[]>('GET', `/api/apps/${app.slug}/deployments${allHistory ? '?all=1' : ''}`),
-    refetchInterval: 10_000,
-  });
-  return (
-    <div>
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold">部署历史</h3>
-        <div className="flex gap-2">
-          <Button variant={allHistory ? 'default' : 'outline'} size="sm" onClick={() => setAllHistory((v) => !v)}>
-            {allHistory ? '只看 Dokploy 现存' : '显示全部历史'}
-          </Button>
-          {/* 日志可能带出构建期注入的密钥，与部署同权限（服务端也这么校验） */}
-          {app.isMember && (
-            <>
-              <Button variant="outline" size="sm" onClick={() => setLogsOf('build')}>
-                构建日志
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setLogsOf('run')}>
-                运行日志
-              </Button>
-            </>
-          )}
-        </div>
-      </div>
-      {deployments.isLoading ? (
-        <TableSkeleton rows={2} />
-      ) : (deployments.data ?? []).length === 0 ? (
-        <Empty text={`暂无部署。概览里点「部署」，或运行 eat deploy ${app.slug}。`} className="py-6" />
-      ) : (
-        <Table className="min-w-[560px]">
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-36">时间</TableHead>
-              <TableHead className="w-20">状态</TableHead>
-              <TableHead className="w-32">来源</TableHead>
-              <TableHead>备注</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {(deployments.data ?? []).map((d) => (
-              <TableRow key={d.deploymentId ?? d.platform?.id}>
-                <TableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(d.createdAt)}</TableCell>
-                <TableCell>{STATUS_BADGE[d.status]}</TableCell>
-                <TableCell>
-                  <OriginCell d={d} />
-                </TableCell>
-                <TableCell className="max-w-80 truncate text-muted-foreground" title={d.error ?? undefined}>
-                  {d.error ?? '—'}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      )}
-      <p className="mt-2 text-xs text-muted-foreground">
-        {allHistory
-          ? '「已归档」= Dokploy 那边的构建记录已被清理，只剩平台侧元数据（谁触发的、从哪触发的）。'
-          : 'Dokploy 每个应用只保留最近 10 次构建；更早的部署点「显示全部历史」查看。'}
-      </p>
-      {logsOf && <LogsDialog slug={app.slug} kind={logsOf} onClose={() => setLogsOf(null)} />}
-    </div>
-  );
-}
-
-/**
- * 构建日志 / 运行日志（决策 28）。两者形状不同但用法一致：都是「取最近 N 行」的一次性读取，
- * 不做实时流——Dokploy 那边虽然是流式接口，平台侧统一收敛成一次读完。
- */
-function LogsDialog({ slug, kind, onClose }: { slug: string; kind: LogKind; onClose: () => void }) {
-  const [tail, setTail] = useState(200);
-  const query = useQuery({
-    queryKey: ['logs', kind, slug, tail],
-    queryFn: () => api<BuildLogsResult | RunLogsResult>('GET', `/api/apps/${slug}/${kind === 'build' ? 'build-logs' : 'run-logs'}?tail=${tail}`),
-    retry: false,
-  });
-  const data = query.data;
-  const subject =
-    data && 'deployment' in data
-      ? data.deployment && `构建 ${data.deployment.deploymentId}（${BUILD_STATUS[data.deployment.status] ?? data.deployment.status}）`
-      : data && data.container && `容器 ${data.container.name}（${data.container.state}）`;
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>
-            {kind === 'build' ? '构建日志' : '运行日志'} · {slug}
-          </DialogTitle>
-        </DialogHeader>
-        <div className="flex flex-wrap items-center gap-2">
-          {[100, 200, 1000].map((n) => (
-            <Button key={n} variant={n === tail ? 'default' : 'outline'} size="sm" onClick={() => setTail(n)}>
-              最近 {n} 行
-            </Button>
-          ))}
-          <Button variant="outline" size="sm" onClick={() => void query.refetch()} disabled={query.isFetching}>
-            <RefreshCw className={query.isFetching ? 'animate-spin' : ''} />
-            刷新
-          </Button>
-          {subject && <span className="text-xs text-muted-foreground">{subject}</span>}
-        </div>
-        {query.isError ? (
-          <div className="text-sm text-destructive">{query.error instanceof ApiError ? query.error.message : '读取失败'}</div>
-        ) : query.isLoading ? (
-          <TableSkeleton rows={4} />
-        ) : (
-          <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs leading-relaxed whitespace-pre-wrap">
-            {data?.logs.trimEnd() || (kind === 'build' ? '（还没有构建记录）' : '（当前没有运行中的容器）')}
-          </pre>
-        )}
-      </DialogContent>
-    </Dialog>
   );
 }
 
@@ -927,7 +363,7 @@ function CreateAppDialog({ pending, onClose, onSubmit }: { pending: boolean; onC
 
 type EditFormValues = BuildFormValues & { name: string; description: string; repoUrl: string; branch: string; dokployApplicationId: string };
 
-function EditAppDialog({ app, pending, onClose, onSubmit }: { app: AppInfo; pending: boolean; onClose: () => void; onSubmit: (v: UpdateAppRequest) => void }) {
+export function EditAppDialog({ app, pending, onClose, onSubmit }: { app: AppInfo; pending: boolean; onClose: () => void; onSubmit: (v: UpdateAppRequest) => void }) {
   const form = useForm<EditFormValues>({
     defaultValues: {
       name: app.name,
@@ -979,7 +415,7 @@ function EditAppDialog({ app, pending, onClose, onSubmit }: { app: AppInfo; pend
           {app.managed ? (
             <>
               <div className="grid gap-4 sm:grid-cols-[1fr_9rem]">
-                <Field label="Git 仓库地址" htmlFor="app-edit-repo" required error={errors.repoUrl?.message}>
+                <Field label="Git 仓库地址" htmlFor="app-edit-repo" required error={errors.repoUrl?.message} hint="更换仓库后需重新审批，更换分支无需重审。">
                   <Input id="app-edit-repo" className="font-mono" aria-invalid={!!errors.repoUrl} {...register('repoUrl', { required: '平台托管的应用必须有 Git 仓库地址' })} />
                 </Field>
                 <Field label="分支" htmlFor="app-edit-branch">
@@ -1016,9 +452,10 @@ function EditAppDialog({ app, pending, onClose, onSubmit }: { app: AppInfo; pend
           <Field label="说明" htmlFor="app-edit-desc">
             <Textarea id="app-edit-desc" rows={2} {...register('description')} />
           </Field>
-          <Button type="submit" loading={pending} className="w-full">
-            保存
-          </Button>
+          <div className="flex justify-end gap-2 border-t pt-4">
+            <Button type="button" variant="outline" disabled={pending} onClick={onClose}>取消</Button>
+            <Button type="submit" loading={pending}>保存</Button>
+          </div>
         </form>
       </DialogContent>
     </Dialog>

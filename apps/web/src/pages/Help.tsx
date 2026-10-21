@@ -1,11 +1,11 @@
-import type { HelperInfo, HelpListResult, HelpTargets } from '@eat/shared';
+import type { AccountInfo, HelperInfo, HelpListResult, HelpTargets, NotificationSettings } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, UserCog } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
-import { api, ApiError } from '../api';
+import { api, ApiError, getToken } from '../api';
 import { InlineCode } from '../components/code';
 import { Combobox } from '../components/combobox';
 import { Empty } from '../components/empty';
@@ -19,6 +19,7 @@ import { Card, CardContent } from '../components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { TableSkeleton } from '../components/ui/skeleton';
+import { Switch } from '../components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { formatDateTime } from '../lib/format';
@@ -42,6 +43,7 @@ const PENDING_HINT = '还等着某一方回应的求助：等待回复 + 已回�
 export function HelpPage() {
   const queryClient = useQueryClient();
   const [asking, setAsking] = useState(false);
+  const [configuring, setConfiguring] = useState(false);
   // 方向、进展与分页同步到 URL；等于默认值的不写进去。
   const [params, setParams] = useQueryParams({ tab: 'inbox', status: 'pending', page: '1', pageSize: '20' });
   const tab = params.tab === 'mine' ? 'mine' : 'inbox';
@@ -159,7 +161,7 @@ export function HelpPage() {
         description="遇到 AI 解决不了的问题时向擅长的同事求助；完善用户中心的个人简介，让 AI 找到擅长的同事。"
         actions={
           <>
-            <Button variant="outline" asChild><Link to="/account"><UserCog />用户中心</Link></Button>
+            <Button variant="outline" onClick={() => setConfiguring(true)}><UserCog />求助设置</Button>
             <Button onClick={() => setAsking(true)}>
               <Plus />
               发起求助
@@ -216,7 +218,7 @@ export function HelpPage() {
                 data={inbox.data}
                 dir="in"
                 loading={inbox.isLoading}
-                emptyText="暂无找你的求助。在用户中心完善个人简介并允许被求助，同事的 AI 就能找到你。"
+                emptyText="暂无找你的求助。完善个人简介，并在求助设置中开启「接受他人求助」，同事的 AI 就能找到你。"
               />
               {tab === 'inbox' && !inbox.isLoading && !inbox.isError && inbox.data && (
                 <Pagination
@@ -253,6 +255,7 @@ export function HelpPage() {
         </TabsContent>
       </Tabs>
 
+      {configuring && <HelpSettingsDialog onClose={() => setConfiguring(false)} />}
       {asking && (
         <AskDialog
           targets={targets.data}
@@ -263,6 +266,59 @@ export function HelpPage() {
       )}
     </div>
   );
+}
+
+function HelpSettingsDialog({ onClose }: { onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const queryKey = ['account', getToken()];
+  const account = useQuery({ queryKey, queryFn: () => api<AccountInfo>('GET', '/api/account'), refetchOnMount: 'always' });
+  const onError = (err: unknown) => toast.error(err instanceof ApiError ? err.message : '保存失败，请重试');
+  const help = useMutation({
+    mutationFn: (allowHelp: boolean) => api<AccountInfo>('PATCH', '/api/account', { allowHelp }),
+    onSuccess: async (data) => {
+      queryClient.setQueryData(queryKey, data);
+      toast.success('求助偏好已保存');
+      await queryClient.invalidateQueries({ queryKey: ['help-targets'] });
+    },
+    onError,
+  });
+  const reply = useMutation({
+    mutationFn: (notifyReply: boolean) => api<NotificationSettings>('PATCH', '/api/account/notification/preferences', { notifyReply }),
+    onSuccess: (notification) => {
+      queryClient.setQueryData<AccountInfo>(queryKey, (data) => data ? { ...data, notification } : data);
+      toast.success('回复通知偏好已保存');
+    },
+    onError,
+  });
+  const busy = help.isPending || reply.isPending || account.isFetching;
+  return <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>求助设置</DialogTitle>
+        <DialogDescription>设置是否接受他人求助，以及是否接收回复通知。修改后立即保存。</DialogDescription>
+      </DialogHeader>
+      {account.isError ? <Empty text="求助设置加载失败" action={<Button onClick={() => void account.refetch()}>重试</Button>} />
+        : !account.data ? <p role="status" className="text-sm text-muted-foreground">正在加载求助设置…</p>
+        : <div className="space-y-5">
+          <div className="flex items-center justify-between gap-4">
+            <div className="space-y-1">
+              <label htmlFor="help-allow" className="text-sm font-medium">接受他人求助</label>
+              <p className="text-xs text-muted-foreground">关闭后进入勿扰状态，不再接收新的求助；已有求助仍可继续处理。</p>
+            </div>
+            <Switch id="help-allow" checked={account.data.allowHelp} disabled={busy} onCheckedChange={(value) => help.mutate(value)} />
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <div className="space-y-1">
+              <label htmlFor="help-reply" className="text-sm font-medium">接收回复通知</label>
+              <p className="text-xs text-muted-foreground">求助有新回复时，通过已验证的飞书通知渠道提醒你。</p>
+            </div>
+            <Switch id="help-reply" checked={account.data.notification.notifyReply} disabled={busy} onCheckedChange={(value) => reply.mutate(value)} />
+          </div>
+          {!account.data.notification.verified && <p className="text-sm text-muted-foreground">尚未验证飞书通知渠道，可以先保存偏好；完成用户中心的通知验证后才能收到提醒。</p>}
+          <Button variant="outline" disabled={busy} onClick={onClose}>完成</Button>
+        </div>}
+    </DialogContent>
+  </Dialog>;
 }
 
 function AskDialog({

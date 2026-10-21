@@ -15,7 +15,7 @@ import { Badge } from '../components/ui/badge';
 import { Confirm } from '../components/confirm';
 
 const BIO_HINT = '此内容会用于 AI 查询用户、了解擅长领域并匹配求助对象，请写清楚你的职责与擅长领域。';
-const FEISHU_DOC = 'https://www.feishu.cn/hc/zh-CN/articles/360024984973-%E5%9C%A8%E7%BE%A4%E7%BB%84%E4%B8%AD%E4%BD%BF%E7%94%A8%E6%9C%BA%E5%99%A8%E4%BA%BA';
+const FEISHU_DOC = 'https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot';
 const onError = (error: Error) => toast.error(error.message);
 
 export function AccountPage({ completion = false }: { completion?: boolean }) {
@@ -160,10 +160,16 @@ function NotificationForm({ settings, completion, onSaved }: {
     </CardTitle></CardHeader>
     <CardContent className="space-y-5">
       <div className="rounded-lg bg-muted/50 p-4 text-sm leading-6 text-muted-foreground">
-        在飞书群中打开「设置 → 群机器人 → 添加机器人」，选择「自定义机器人」，创建后复制 Webhook 地址。
-        如启用了签名校验，请同时填写加签密钥；使用关键词校验时，请允许关键词「EAT」。
-        验证码会发送到该群，请回到此处填写。
-        <a className="ml-1 text-primary underline underline-offset-4" href={FEISHU_DOC} target="_blank" rel="noreferrer">查看飞书官方说明</a>
+        <p className="mb-2 font-medium text-foreground">创建一个只有自己的飞书群，用来接收 EAT 通知：</p>
+        <ol className="list-decimal space-y-2 pl-5">
+          <li>点击飞书左上角的「+」，选择「创建群组」，无需添加其他人，直接点击「创建」。</li>
+          <li>
+            在群内打开「设置 → 群机器人 → 添加机器人」，选择「自定义机器人」，创建后复制 Webhook 地址。
+            具体操作见<a className="text-primary underline underline-offset-4" href={FEISHU_DOC} target="_blank" rel="noreferrer">飞书官方文档：添加自定义机器人</a>。
+          </li>
+          <li>将 Webhook 地址粘贴到下方，点击「发送验证码」，再从飞书群中获取验证码，回到此处填写并完成验证。</li>
+        </ol>
+        <p className="mt-3">如启用了签名校验，请同时填写加签密钥；使用关键词校验时，请允许关键词「EAT」。</p>
       </div>
       <p className="text-sm text-muted-foreground">此配置用于整个平台的个人通知，包括求助、回复和 Folio 评论提及。</p>
       <form className="space-y-4" onSubmit={(e) => {

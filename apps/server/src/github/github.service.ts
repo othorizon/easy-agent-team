@@ -194,7 +194,7 @@ export class GithubService implements OnModuleInit, OnApplicationShutdown {
     return app;
   }
   private async memberIds(app: typeof apps.$inferSelect) {
-    return [app.ownerId, ...(await this.db.select().from(appMembers).where(eq(appMembers.appId, app.id))).map(m => m.userId)];
+    return [...new Set([app.ownerId, ...(await this.db.select().from(appMembers).where(eq(appMembers.appId, app.id))).map(m => m.userId)])];
   }
   private blankApp(c: GithubConfig | undefined): GithubAppInfo {
     return { enabled: c?.enabled ?? false, organization: c?.organization ?? '', repository: null, repositoryId: null,
@@ -208,10 +208,12 @@ export class GithubService implements OnModuleInit, OnApplicationShutdown {
     const ids = await this.memberIds(app), members = await this.db.select().from(users).where(inArray(users.id, ids));
     const accounts = await this.db.select().from(githubAccounts).where(inArray(githubAccounts.userId, [...ids, viewer.id]));
     const tasks = await this.db.select().from(githubTasks).where(sql`${githubTasks.payload}->>'appId' = ${app.id} OR (${data.repositoryId}::text IS NOT NULL AND ${githubTasks.payload}->>'repositoryId' = ${data.repositoryId})`);
+    const repositoryTask = tasks.find(t => t.key === `repo:${app.id}` && t.payload.version === app.repoVersion);
+    if (repositoryTask?.error && ['pending', 'failed'].includes(repositoryTask.state)) data.error ||= repositoryTask.error;
     const viewerAccount = accounts.find(a => a.userId === viewer.id);
     const viewerTask = tasks.find(t => t.key === `viewer:${app.id}:${viewer.id}`);
     const viewerRole = viewerTask?.state === 'succeeded' && viewerTask.payload.version === app.repoVersion && viewerTask.payload.bindingVersion === viewerAccount?.version
-      ? viewerTask.payload.observedRole : data.members.find(m => m.userId === viewer.id && m.login === viewerAccount?.login)?.role;
+      ? viewerTask.payload.observedRole : data.members.find(m => m.userId === viewer.id && m.login === viewerAccount?.login && m.bindingVersion === viewerAccount?.version)?.role;
     if (c?.enabled && viewerAccount && !ids.includes(viewer.id) && (!viewerTask || (viewerTask.state !== 'pending' && Date.now() - viewerTask.updatedAt.getTime() > 300000))) {
       await this.store.enqueue(this.db, `viewer:${app.id}:${viewer.id}`, 'viewer', { appId: app.id, actorId: viewer.id,
         version: app.repoVersion, bindingVersion: viewerAccount.version }); this.wake();
@@ -219,18 +221,29 @@ export class GithubService implements OnModuleInit, OnApplicationShutdown {
     const cleanupGrants = data.repositoryId ? await this.db.select().from(githubGrants).where(eq(githubGrants.repositoryId, data.repositoryId)) : [];
     const owner = accounts.find(a => a.userId === app.ownerId);
     if (!owner || owner.login !== data.ownerLogin) { data.ownerLogin = owner?.login ?? null; data.ownerRole = 'unknown'; data.ownerIsOrgOwner = false; }
+    const identitiesChanged = accounts.some(a => ids.includes(a.userId) && !data.members.some(m => m.userId === a.userId && m.bindingVersion === a.version));
     data.members = members.map(u => {
-      const a = accounts.find(a => a.userId === u.id), previous = data.members.find(m => m.userId === u.id && m.login === a?.login);
-      const task = tasks.filter(t => t.payload.userId === u.id && ['grant', 'role'].includes(t.kind)).sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
+      const a = accounts.find(a => a.userId === u.id), previous = a ? data.members.find(m => m.userId === u.id && m.login === a.login && m.bindingVersion === a.version) : undefined;
+      const task = a ? tasks.filter(t => t.payload.userId === u.id && ['grant', 'role'].includes(t.kind) && t.state !== 'cancelled' &&
+        (!t.payload.bindingVersion || t.payload.bindingVersion === a.version) &&
+        (t.payload.appId !== app.id || t.payload.version === app.repoVersion))
+        .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0] : undefined;
       const privileged = viewer.role === 'admin' || viewerRole === 'admin';
       const maintain = viewerRole === 'maintain';
+      const verifying = task?.state === 'succeeded' && !data.error && !previous?.roleError &&
+        (!previous?.roleCheckedAt || new Date(previous.roleCheckedAt) < task.updatedAt);
       return { userId: u.id, name: u.name, login: a?.login ?? null, orgState: a?.orgState ?? 'unknown',
-        role: previous?.role ?? 'unknown', state: task?.state ?? (a ? 'not_requested' : 'unlinked'),
-        error: task?.error || cleanupGrants.find(g => g.userId === u.id)?.error || previous?.error || '', notification: task?.notification ?? '',
+        isOwner: u.id === app.ownerId, needsAuthorization: a?.needsAuthorization ?? false,
+        role: previous?.role ?? 'unknown', state: verifying ? 'verifying' : task?.state ?? (a ? 'not_requested' : 'unlinked'),
+        roleError: previous?.roleError || previous?.error || data.error || '', roleCheckedAt: previous?.roleCheckedAt ?? null,
+        operation: task?.kind as 'grant' | 'role' | undefined,
+        error: a ? task?.error || cleanupGrants.find(g => g.userId === u.id)?.error || '' : '', notification: task?.notification ?? '',
         canGrant: !!c?.enabled && data.scope === 'organization' && app.deployApproved && app.approvedRepoVersion === app.repoVersion && (privileged || maintain),
         canChangeRole: !!c?.enabled && data.scope === 'organization' && app.deployApproved && app.approvedRepoVersion === app.repoVersion && privileged };
-    });
-    if (c?.enabled && (!cached || cached.version !== app.repoVersion || Date.now() - cached.checkedAt.getTime() > 300000)) {
+    }).sort((a, b) => Number(b.isOwner) - Number(a.isOwner));
+    data.ownerRole = data.members.find(m => m.isOwner)?.role ?? 'unknown';
+    data.ownerIsOrgOwner = !!owner && owner.orgState === 'active' && owner.orgRole === 'admin';
+    if (c?.enabled && (identitiesChanged || data.members.some(m => m.state === 'verifying') || !cached || cached.version !== app.repoVersion || Date.now() - cached.checkedAt.getTime() > 300000)) {
       await this.queueRefresh(app.id, app.repoVersion); this.wake();
     }
     return data;
@@ -245,13 +258,13 @@ export class GithubService implements OnModuleInit, OnApplicationShutdown {
     const app = await this.bySlug(slug); await this.store.config();
     await this.queueRefresh(app.id, app.repoVersion, true); this.wake(); return { ok: true };
   }
-  async grant(slug: string, userId: string, actor: AuthUser, role?: GithubRole) {
+  async grant(slug: string, userId: string, actor: AuthUser, role?: GithubRole, retryPreviousRole = true) {
     const app = await this.bySlug(slug); const c = await this.store.config();
     if (!app.deployApproved || app.approvedRepoVersion !== app.repoVersion) throw new ForbiddenException('应用尚未获得当前仓库的部署批准');
     if (!(await this.memberIds(app)).includes(userId)) throw new BadRequestException('目标用户不是应用成员');
     const key = `grant:${app.id}:${userId}`;
     const [old] = await this.db.select().from(githubTasks).where(eq(githubTasks.key, key));
-    if (!role && old?.kind === 'role' && ['failed', 'waiting', 'pending'].includes(old.state)) role = old.payload.role;
+    if (retryPreviousRole && !role && old?.kind === 'role' && ['failed', 'waiting', 'pending'].includes(old.state)) role = old.payload.role;
     // Check before replacing a queued operation; an unauthorized caller must not cancel someone else's task.
     const targetAccount = await this.account(userId), actorAccount = await this.account(actor.id);
     if (actor.role !== 'admin') {
@@ -278,6 +291,8 @@ export class GithubService implements OnModuleInit, OnApplicationShutdown {
     const [app] = await this.db.select().from(apps).where(eq(apps.id, task.payload.appId!));
     if (!app || app.repoVersion !== task.payload.version) return;
     const data = this.blankApp(c), fullName = githubFullName(app.repoUrl);
+    const [cached] = await this.db.select().from(githubRepositories).where(eq(githubRepositories.appId, app.id));
+    const old = cached?.version === app.repoVersion ? cached.data : undefined;
     data.checkedAt = new Date().toISOString();
     data.repository = fullName;
     const owner = await this.account(app.ownerId);
@@ -289,22 +304,33 @@ export class GithubService implements OnModuleInit, OnApplicationShutdown {
         data.scope = 'organization'; data.repositoryId = String(repo.id); data.repository = repo.full_name;
         for (const id of await this.memberIds(app)) {
           const a = await this.account(id), [u] = await this.db.select().from(users).where(eq(users.id, id));
+          const previous = a ? old?.members.find(m => m.userId === id && m.bindingVersion === a.version && m.login === a.login) : undefined;
           let role: GithubAppInfo['ownerRole'] = 'unknown', error = '';
+          let roleCheckedAt: string | null = null;
           if (a) {
             try {
               const m = await this.updateMembership(c, a);
               role = await this.client.permission(c, repo.full_name, m.login);
+              roleCheckedAt = new Date().toISOString();
               if (id === app.ownerId) {
                 data.ownerLogin = m.login; data.ownerRole = role;
                 data.ownerIsOrgOwner = (await this.account(id))?.orgRole === 'admin';
               }
-            } catch (e) { error = e instanceof GithubError ? e.message : 'GitHub 状态暂不可用'; }
+            } catch (e) {
+              error = e instanceof GithubError ? e.message : 'GitHub 状态暂不可用';
+              role = previous?.role ?? 'unknown'; roleCheckedAt = previous?.roleCheckedAt ?? null;
+            }
           }
           const fresh = await this.account(id);
           data.members.push({ userId: id, name: u?.name ?? '', login: fresh?.login ?? null, orgState: fresh?.orgState ?? 'unknown',
-            role, state: 'not_requested', error, notification: '', canGrant: false, canChangeRole: false });
+            bindingVersion: a?.version, role, roleCheckedAt, roleError: error,
+            state: 'not_requested', error: '', notification: '', canGrant: false, canChangeRole: false });
         }
-      } catch (e) { data.error = e instanceof GithubError ? e.message : 'GitHub 状态暂不可用'; }
+      } catch (e) {
+        data.error = e instanceof GithubError ? e.message : 'GitHub 状态暂不可用';
+        // Preserve only observations for the same repository version. appInfo filters account generations.
+        data.members = old?.members ?? [];
+      }
     }
     const [current] = await this.db.select().from(apps).where(eq(apps.id, app.id));
     if (!current || current.repoVersion !== app.repoVersion) return;
@@ -329,6 +355,13 @@ export class GithubService implements OnModuleInit, OnApplicationShutdown {
     const [current] = await this.db.select().from(githubTasks).where(eq(githubTasks.key, task.key));
     if (!current || current.generation !== task.generation || current.state === 'cancelled') throw new GithubError('操作已被更新或取消');
   }
+  private async grantStep<T>(stage: string, run: () => Promise<T>): Promise<T> {
+    try { return await run(); }
+    catch (e) {
+      if (e instanceof GithubError) throw new GithubError(`${stage}：${e.message}`, e.retryable, e.retryAfter, e.connectionState);
+      throw e;
+    }
+  }
   private async grantTask(c: GithubConfig, task: TaskRow, guard: () => void) {
     const app = await this.app(task.payload.appId!);
     if (app.repoVersion !== task.payload.version || !app.deployApproved || app.approvedRepoVersion !== app.repoVersion)
@@ -340,14 +373,14 @@ export class GithubService implements OnModuleInit, OnApplicationShutdown {
     if ((task.payload.bindingVersion && task.payload.bindingVersion !== account.version) ||
       (task.payload.actorBindingVersion && task.payload.actorBindingVersion !== actorAccount?.version))
       throw new GithubError('GitHub 绑定已变化，请重新发起操作');
-    const repo = await this.verifiedRepo(c, app);
+    const repo = await this.grantStep('核验组织仓库', () => this.verifiedRepo(c, app));
     if (actor.role !== 'admin') {
       if (!actorAccount) throw new GithubError('操作者需要关联 GitHub，或由 EAT 管理员处理');
       const identity = await this.client.identity(c, undefined, actorAccount.githubId);
-      const permission = await this.client.permission(c, repo.full_name, identity.login);
+      const permission = await this.grantStep('核验操作者仓库角色', () => this.client.permission(c, repo.full_name, identity.login));
       if (roleRank(permission) < (task.kind === 'role' ? 5 : 4)) throw new GithubError('操作者的仓库权限不足');
     }
-    const m = await this.updateMembership(c, account);
+    const m = await this.grantStep('核验目标组织身份', () => this.updateMembership(c, account));
     if (m.state !== 'active') throw new GithubWaiting('等待成员加入组织');
     await this.db.update(githubTasks).set({ payload: { ...task.payload, repositoryId: String(repo.id) } })
       .where(and(eq(githubTasks.key, task.key), eq(githubTasks.generation, task.generation)));
@@ -355,17 +388,17 @@ export class GithubService implements OnModuleInit, OnApplicationShutdown {
     let [grant] = await this.db.select().from(githubGrants).where(eq(githubGrants.key, key));
     if (grant?.roleChangedAt && task.kind === 'grant' && grant.roleChangedAt > new Date(task.payload.intentAt ?? task.updatedAt)) return;
     const role = task.payload.role ?? 'write';
-    const effective = await this.client.permission(c, repo.full_name, m.login);
+    const effective = await this.grantStep('读取目标当前仓库角色', () => this.client.permission(c, repo.full_name, m.login));
     if (task.kind === 'grant' && roleRank(effective) >= roleRank('write')) {
       if (grant?.prepared) {
-        const observed = await this.client.directRole(c, repo.full_name, m.login);
+        const observed = await this.grantStep('读取目标直接授权', () => this.client.directRole(c, repo.full_name, m.login));
         if (observed === grant.appliedRole)
           await this.db.update(githubGrants).set({ prepared: false, error: '' }).where(eq(githubGrants.key, key));
         await this.store.enqueue(this.db, 'cleanup', 'cleanup', {});
       }
       return;
     }
-    const direct = await this.client.directRole(c, repo.full_name, m.login);
+    const direct = await this.grantStep('读取目标直接授权', () => this.client.directRole(c, repo.full_name, m.login));
     if (grant?.prepared && direct === grant.appliedRole && grant.appliedRole === role) {
       await this.db.update(githubGrants).set({ prepared: false, error: '' }).where(eq(githubGrants.key, key));
       await this.store.enqueue(this.db, 'cleanup', 'cleanup', {});
@@ -390,13 +423,13 @@ export class GithubService implements OnModuleInit, OnApplicationShutdown {
     if (latest.repoVersion !== app.repoVersion || !latest.deployApproved || latest.approvedRepoVersion !== latest.repoVersion ||
       !(await this.memberIds(latest)).includes(target.id) || latestAccount?.version !== account.version ||
       (actor.role !== 'admin' && latestActorAccount?.version !== actorAccount?.version)) throw new GithubError('成员或账户状态已变化');
-    await this.client.setRole(c, repo.full_name, m.login, role);
+    await this.grantStep('写入 GitHub 仓库角色（结果未确认）', () => this.client.setRole(c, repo.full_name, m.login, role));
     guard();
     await this.db.update(githubGrants).set({ prepared: false, error: '' }).where(eq(githubGrants.key, key));
     await this.db.update(githubRepositories).set({ checkedAt: new Date(0) }).where(eq(githubRepositories.repositoryId, String(repo.id)));
     // Always reconcile after a provider mutation, including an EAT change while the request was in flight.
     await this.store.enqueue(this.db, 'cleanup', 'cleanup', {});
-    const actual = await this.client.permission(c, repo.full_name, m.login);
+    const actual = await this.grantStep('授权后核验（已提交角色变更）', () => this.client.permission(c, repo.full_name, m.login));
     if (actual !== role && task.kind === 'role') throw new GithubError(`已设置直接角色，但实际角色仍为 ${actual}；请检查团队或组织继承权限`);
   }
   private async cleanupTask(c: GithubConfig, guard: () => void) {

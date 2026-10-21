@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { chromium } from 'playwright-core';
-import { updateAccountSchema, notificationPreferencesSchema, registrationSettingsSchema, updateBioSchema, sendWebhookCodeSchema } from '../packages/shared/dist/index.js';
+import { updateAccountSchema, notificationPreferencesSchema, patchNotificationPreferencesSchema, registrationSettingsSchema, updateUserProfileSchema, sendWebhookCodeSchema } from '../packages/shared/dist/index.js';
 
 const dist = resolve('apps/web/dist');
 const shots = join(tmpdir(), 'eat-account-ui');
@@ -53,13 +53,13 @@ async function fixture({ requireBio = false, requireNotification = false, role =
       if (body.code !== '123456') { status = 400; result = { error: 'VERIFICATION_FAILED', message: '验证码不正确' }; }
       else { notification.webhookUrl = sentUrl; notification.verified = true; result = notification; }
     } else if (path === '/api/account/notification/preferences') {
-      Object.assign(notification, notificationPreferencesSchema.parse(body)); result = notification;
+      Object.assign(notification, (method === 'PATCH' ? patchNotificationPreferencesSchema : notificationPreferencesSchema).parse(body)); result = notification;
     } else if (path === '/api/admin/registration-settings') {
       if (method === 'PUT') Object.assign(settings, registrationSettingsSchema.parse(body));
       result = settings;
     } else if (path === '/api/account/github' || /^\/api\/users\/[^/]+\/github$/.test(path)) result = { enabled: false, organization: '', linked: false, login: null, needsAuthorization: false, orgState: 'unknown', orgRole: null, checkedAt: null, error: '', task: null };
     else if (path === '/api/users') result = [{ ...user, status: 'active' }];
-    else if (path.endsWith('/bio')) { user.bio = updateBioSchema.parse(body).bio; result = { id: user.id, bio: user.bio }; }
+    else if (path.endsWith('/profile')) { Object.assign(user, updateUserProfileSchema.parse(body)); result = { id: user.id, name: user.name, bio: user.bio }; }
     else if (path === '/api/helpers') result = { helpers: [], skillAuthors: [] };
     else if (path.includes('/help-requests/') && path.endsWith('/page')) result = { items: [], total: 0, page: 1, pageSize: 20, counts: { all: 0, pending: 0, attention: 0 } };
     else if (path === '/api/auth/registration') result = settings;
@@ -73,7 +73,7 @@ async function fixture({ requireBio = false, requireNotification = false, role =
 }
 const screenshot = async (page, name) => {
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${name} 不应出现横向溢出`);
-  await page.screenshot({ path: join(shots, `${name}.png`), fullPage: true });
+  await page.screenshot({ path: join(shots, `${name}.png`), fullPage: true, animations: 'disabled' });
 };
 async function verify(page) {
   await page.locator('#notification-url').fill('https://open.feishu.cn/open-apis/bot/v2/hook/ui-test');
@@ -127,6 +127,40 @@ try {
     assert.equal(await f.page.getByText('可求助登记', { exact: true }).count(), 0);
     await f.context.close();
   }
+  for (const width of [1280, 390]) {
+    const f = await fixture({ width, bio: '负责数据分析' });
+    f.notification.notifyMention = false;
+    f.notification.notifyHelp = false;
+    await f.page.goto(`${base}/help?tab=mine&status=all`);
+    await f.page.getByRole('button', { name: '求助设置', exact: true }).click();
+    const allow = f.page.getByRole('switch', { name: '接受他人求助', exact: true });
+    const reply = f.page.getByRole('switch', { name: '接收回复通知', exact: true });
+    await allow.click();
+    await f.page.getByText('求助偏好已保存', { exact: true }).waitFor();
+    await reply.click();
+    await f.page.getByText('回复通知偏好已保存', { exact: true }).waitFor();
+    assert.equal(f.user.allowHelp, false);
+    assert.equal(f.user.bio, '负责数据分析');
+    assert.equal(f.notification.notifyReply, false);
+    assert.equal(f.notification.notifyMention, false);
+    assert.equal(f.notification.notifyHelp, false);
+    assert.equal(f.page.url(), `${base}/help?tab=mine&status=all`);
+    await f.page.locator('#help-allow[aria-checked="false"]').waitFor();
+    await f.page.locator('#help-reply[aria-checked="false"]').waitFor();
+    await screenshot(f.page, `help-settings-${width}`);
+    await f.page.getByRole('button', { name: '完成', exact: true }).click();
+    await f.page.getByRole('button', { name: '求助设置', exact: true }).click();
+    assert.equal(await allow.getAttribute('aria-checked'), 'false');
+    assert.equal(await reply.getAttribute('aria-checked'), 'false');
+    // 请求失败时保持已保存值，不把失败的切换显示成成功。
+    await f.page.route('**/api/account/notification/preferences', (route) => route.fulfill({
+      status: 500, contentType: 'application/json', body: JSON.stringify({ message: '测试保存失败' }),
+    }));
+    await reply.click();
+    await f.page.getByText('测试保存失败', { exact: true }).waitFor();
+    assert.equal(await reply.getAttribute('aria-checked'), 'false');
+    await f.context.close();
+  }
   const admin = await fixture({ role: 'admin', requireBio: true, requireNotification: true });
   await admin.page.goto(`${base}/settings?section=registration`);
   await admin.page.getByRole('switch', { name: '强制填写个人简介', exact: true }).waitFor();
@@ -137,12 +171,16 @@ try {
   assert.equal(admin.settings.requireBio, false); assert.equal(admin.settings.requireNotification, true);
   await screenshot(admin.page, 'registration-desktop');
   await admin.page.goto(`${base}/users`);
-  await admin.page.getByRole('button', { name: '编辑简介' }).click();
+  await admin.page.getByRole('button', { name: '编辑资料' }).click();
+  await admin.page.locator('#admin-user-name').fill('管理员修改姓名');
   await admin.page.locator('#admin-user-bio').fill('管理员可编辑本人简介');
-  await admin.page.getByRole('button', { name: '保存简介' }).click();
-  await admin.page.getByText('个人简介已更新', { exact: true }).waitFor();
+  await screenshot(admin.page, 'admin-edit-profile');
+  await admin.page.getByRole('button', { name: '保存资料' }).click();
+  await admin.page.getByText('用户资料已更新', { exact: true }).waitFor();
+  assert.equal(admin.user.name, '管理员修改姓名');
   assert.equal(admin.user.bio, '管理员可编辑本人简介');
+  assert.equal(await admin.page.evaluate(() => JSON.parse(localStorage.getItem('eat.user')).name), '管理员修改姓名');
   await admin.context.close();
   assert.deepEqual(errors, []);
-  console.log(`用户中心、三个强制补全组合、管理员豁免及编辑、表单校验和桌面/移动布局检查通过。截图：${shots}`);
+  console.log(`用户中心、三个强制补全组合、管理员姓名与简介编辑、求助设置保存及失败恢复、表单校验和桌面/移动布局检查通过。截图：${shots}`);
 } finally { await browser.close(); await new Promise((r) => server.close(r)); }
