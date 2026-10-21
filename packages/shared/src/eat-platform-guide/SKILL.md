@@ -13,8 +13,7 @@ EAT（easy-agent-team）统一管理团队资源、权限与审计。终端可�
 
 | 当前任务 | 先读取 | 操作要点 |
 |---|---|---|
-| 登录失败、确认身份或区分凭证 | [身份与登录](references/access.md) | 非阻塞登录；区分 EAT、HTTP MCP、模型 Key |
-| 查询审批进度、驳回理由或历次申请 | [统一申请](references/access.md) | 用 `eat requests` / `list_requests` 查询，按驳回原因修改后再提交 |
+| 登录、区分凭证，或查询审批进度与驳回理由 | [身份、登录与申请](references/access.md) | 区分 EAT、HTTP MCP、模型 Key；用 `eat requests` / `list_requests` 查看历次申请，按驳回原因修改后再提交 |
 | 获取配置、密钥、连接串或申请权限 | [环境变量](references/environment.md) | 先查清单，按需取值；无权限走申请 |
 | 为自己的应用申请数据库 | [数据库](references/databases.md) | 先看已有分配，再按需申请独立账号 |
 | 申请文件存储、读取 OSS 凭证或修改公开读 | [OSS 对象存储](references/oss.md) | 先审批；用户共用 AK/SK；区分目录公开读与 CDN |

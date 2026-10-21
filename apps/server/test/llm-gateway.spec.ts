@@ -37,6 +37,7 @@ let lastLogQuery: URLSearchParams | undefined;
 let holdTokenRead: { started: () => void; release: Promise<void> } | undefined;
 const access = 'dedicated-ordinary-user-access-token';
 const saved: Record<string, any> = {};
+let keyRateLimited = false;
 async function api(method: any, path: string, token: string, body?: unknown) {
   const r = await app.inject({
     method,
@@ -71,6 +72,11 @@ beforeAll(async () => {
   await pool.end();
   backend = createServer(async (req, res) => {
     const url = new URL(req.url!, 'http://localhost');
+    if (keyRateLimited && /^\/api\/token\/\d+\/key$/.test(url.pathname)) {
+      res.writeHead(429, { 'Retry-After': '45' });
+      res.end();
+      return;
+    }
     let text = '';
     for await (const c of req) text += c;
     const body = text ? JSON.parse(text) : {};
@@ -315,6 +321,18 @@ describe('LLM API 网关公共账户与个人 Key', () => {
     expect(audit.some((r) => r.actorId === memberId)).toBe(true);
     const all = await api('GET', '/api/admin/llm-gateway/users', admin);
     expect(JSON.stringify(all.body)).not.toContain(raw(key.upstreamId!));
+  });
+  it('导出遇到上游 429 空响应时透传明确限流提示，等待后可重新导出', async () => {
+    keyRateLimited = true;
+    try {
+      const result = await api('POST', '/api/llm-gateway/key/reveal', member, {});
+      expect(result.status).toBe(502);
+      expect(result.body).toMatchObject({ error: 'NEWAPI_ERROR', message: 'New API 请求过于频繁，已触发限流（HTTP 429），请在 45 秒后重试。' });
+      expect(result.body).not.toHaveProperty('key');
+    } finally {
+      keyRateLimited = false;
+    }
+    expect((await api('POST', '/api/llm-gateway/key/reveal', member, {})).status).toBe(200);
   });
   it('消费权威来自上游；仅返回个人日志必要字段，不泄露公共账户数据', async () => {
     const [key] = await keyOf(memberId);

@@ -31,6 +31,11 @@ export function printLlmStatus(info: LlmGatewayInfo): void {
 export async function llmStatus() {
   printLlmStatus(await Api.fromSaved().request<LlmGatewayInfo>('GET', ROOT));
 }
+export async function llmKeyShow(opts: { reveal?: boolean }) {
+  if (!opts.reveal) return llmStatus();
+  const value = await Api.fromSaved().request<{ key: string }>('POST', ROOT + '/key/reveal', {});
+  console.log(value.key);
+}
 export async function llmModels() {
   const models = await Api.fromSaved().request<LlmModelInfo[]>('GET', ROOT + '/models');
   for (const m of models) console.log(m.id);
@@ -101,7 +106,11 @@ export function registerLlmCommands(program: Command) {
     .description('重试自己尚未完成的网关操作')
     .action(() => llmAction('retry'));
   const key = llm.command('key').description('管理自己的模型 API Key（最多一把有效 Key）');
-  key.command('show').description('查看 Key 元数据与掩码，不输出密钥明文').action(llmStatus);
+  key
+    .command('show')
+    .description('查看 Key 状态与掩码；使用 --reveal 输出完整 Key')
+    .option('--reveal', '仅输出完整 Key（明文），便于脚本读取')
+    .action(llmKeyShow);
   key
     .command('history')
     .description('查看历史 Key ID 与消耗，供 usage --key 使用')

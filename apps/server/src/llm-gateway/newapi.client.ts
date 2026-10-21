@@ -56,6 +56,18 @@ export class NewApiClient {
     } catch {
       throw new NewApiError('无法连接 New API 或请求超时，请检查地址和连接状态', method !== 'GET');
     }
+    // New API's rate limiter may return an empty body. Inspect HTTP status before parsing JSON.
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('retry-after')?.trim();
+      const seconds = retryAfter && /^\d+$/.test(retryAfter)
+        ? Number(retryAfter)
+        : retryAfter ? Math.ceil((Date.parse(retryAfter) - Date.now()) / 1000) : NaN;
+      const retryHint = Number.isSafeInteger(seconds) && seconds > 0
+        ? `请在 ${seconds} 秒后重试。`
+        : '请稍后重试，避免连续操作。';
+      await response.body?.cancel().catch(() => undefined);
+      throw new NewApiError(`New API 请求过于频繁，已触发限流（HTTP 429），${retryHint}`);
+    }
     let json: any;
     try {
       json = await response.json();

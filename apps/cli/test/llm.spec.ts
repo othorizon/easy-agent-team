@@ -29,6 +29,35 @@ describe('LLM 网关 CLI', () => {
     expect(llm.commands.find((c) => c.name() === 'key')?.commands.map((c) => c.name())).toContain('export');
     expect(llm.commands.map((c) => c.name())).not.toContain('quota');
   });
+  it('show 默认只读取状态并显示掩码，不请求明文接口', async () => {
+    vi.spyOn(Api, 'fromSaved').mockReturnValue({ request } as any);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    request.mockResolvedValue({ configured: true, key: { status: 'active', maskedKey: 'sk-ab****cd' },
+      totalQuota: 100, usedQuota: 20, remainingQuota: 80, giftClaimed: true,
+      currency: { quotaPerUnit: 1000, currency: 'USD', exchangeRate: 1 }, apiBaseUrl: 'https://model.test/v1' });
+    const program = new Command();
+    registerLlmCommands(program);
+    await program.parseAsync(['llm', 'key', 'show'], { from: 'user' });
+    expect(request).toHaveBeenCalledExactlyOnceWith('GET', '/api/llm-gateway');
+    expect(JSON.stringify(log.mock.calls)).toContain('sk-ab****cd');
+  });
+  it('show --reveal 只输出完整 Key，失败时不输出任何值', async () => {
+    vi.spyOn(Api, 'fromSaved').mockReturnValue({ request } as any);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const run = () => {
+      const program = new Command();
+      registerLlmCommands(program);
+      return program.parseAsync(['llm', 'key', 'show', '--reveal'], { from: 'user' });
+    };
+    request.mockResolvedValue({ key: 'sk-example-complete-key', apiBaseUrl: 'https://model.test/v1' });
+    await run();
+    expect(request).toHaveBeenCalledExactlyOnceWith('POST', '/api/llm-gateway/key/reveal', {});
+    expect(log.mock.calls).toEqual([['sk-example-complete-key']]);
+    log.mockClear();
+    request.mockRejectedValue(new Error('New API 请求过于频繁，已触发限流（HTTP 429），请在 45 秒后重试。'));
+    await expect(run()).rejects.toThrow('请在 45 秒后重试');
+    expect(log).not.toHaveBeenCalled();
+  });
   it('导出密钥到新建 0600 文件，不回显明文，也不覆盖已有文件', async () => {
     vi.spyOn(Api, 'fromSaved').mockReturnValue({ request } as any);
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
