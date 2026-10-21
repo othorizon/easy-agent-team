@@ -4,6 +4,7 @@ import { GithubStore } from './github.store';
 import { GithubService } from './github.service';
 import { GithubController } from './github.controller';
 import { GithubSetupService } from './github-setup.service';
+import { GithubCollaboratorsService } from './github-collaborators.service';
 @Global()
-@Module({ controllers: [GithubController], providers: [GithubClient, GithubStore, GithubSetupService, GithubService], exports: [GithubStore, GithubService] })
+@Module({ controllers: [GithubController], providers: [GithubClient, GithubStore, GithubSetupService, GithubService, GithubCollaboratorsService], exports: [GithubStore, GithubService] })
 export class GithubModule {}

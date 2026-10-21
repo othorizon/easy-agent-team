@@ -9,7 +9,8 @@ import { api, ApiError, getStoredUser } from '../api';
 import { InlineCode } from '../components/code';
 import { Confirm } from '../components/confirm';
 import { Empty } from '../components/empty';
-import { GithubAppSummary, GithubMembers } from '../components/github';
+import { GithubAppSummary, useGithubApp } from '../components/github';
+import { ApplicationMemberAdd, ApplicationMemberGithub, GithubRepositoryMembers, observedMember, useRepositoryCollaborators } from '../components/github-repository-members';
 import { PageHeader } from '../components/page-header';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -62,6 +63,7 @@ function AppDetail({ slug }: { slug: string }) {
   const invalidate = () => {
     void cache.invalidateQueries({ queryKey: ['apps'] });
     void cache.invalidateQueries({ queryKey: ['github-app', slug] });
+    void cache.invalidateQueries({ queryKey: ['github-collaborators', slug] });
   };
   const update = useMutation({
     mutationFn: (body: UpdateAppRequest) => api('PATCH', `/api/apps/${slug}`, body),
@@ -166,6 +168,8 @@ function DeploymentApproval({ app, isAdmin, onChanged }: { app: AppInfo; isAdmin
 
 function AppMembers({ app, canManage, onChanged }: { app: AppInfo; canManage: boolean; onChanged: () => void }) {
   const [adding, setAdding] = useState(false);
+  const github = useGithubApp(app.slug);
+  const repository = useRepositoryCollaborators(app.slug, !!github.data?.enabled && github.data.scope === 'organization');
   const remove = useMutation({
     mutationFn: (id: string) => api('DELETE', `/api/apps/${app.slug}/members/${id}`),
     onSuccess: () => { toast.success('已移除应用成员'); onChanged(); },
@@ -177,14 +181,20 @@ function AppMembers({ app, canManage, onChanged }: { app: AppInfo; canManage: bo
       {canManage && <Button disabled={!app.deployApproved} onClick={() => setAdding(true)}><Plus />添加成员</Button>}
     </CardHeader><CardContent>
       {!app.deployApproved && canManage && <p className="mb-4 text-sm text-muted-foreground">当前仓库获部署授权后可添加成员；已有成员仍可移除。</p>}
-      <div className="divide-y">{members.map(m => <div key={m.userId} className="flex items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+      <div className="divide-y">{members.map(m => {
+        const status = observedMember(github.data?.members.find(g => g.userId === m.userId), repository.isError ? undefined : repository.data);
+        return <section key={m.userId} aria-label={`${m.name} 的应用成员信息`} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 py-3 first:pt-0 last:pb-0 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_12rem]">
         <div className="flex min-w-0 items-center gap-3"><span aria-hidden className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium">{m.name.slice(0, 1)}</span><div className="min-w-0"><p className="break-words text-sm font-medium">{m.name}</p><p className="mt-0.5 text-xs text-muted-foreground">{m.userId === app.ownerId ? '应用所有者' : '应用成员'}</p></div></div>
+        <div data-member-status className="col-start-1 min-w-0 pl-12 lg:col-auto lg:pl-0"><ApplicationMemberGithub member={status} enabled={github.data?.enabled} /></div>
+        <div className="col-start-2 row-start-1 row-end-3 flex flex-col items-end gap-2 lg:col-auto lg:row-auto lg:flex-row lg:justify-end">
+        <ApplicationMemberAdd member={status} slug={app.slug} repository={github.data?.repository ?? null} />
         {canManage && m.userId !== app.ownerId && <Confirm title={`移除 ${m.name}？`} description="移除后，该用户将失去此应用的部署、日志和环境变量权限。相关 GitHub 授权按现有回收规则处理，不会退出组织。" confirmText="移除成员" onConfirm={() => remove.mutate(m.userId)}>
-          <Button variant="ghost" size="sm" disabled={remove.isPending} aria-label={`移除 ${m.name}`}>移除</Button>
+          <Button variant="ghost" size="sm" disabled={remove.isPending} aria-label={`移除 ${m.name}`}>移除成员</Button>
         </Confirm>}
-      </div>)}</div>
+        </div>
+      </section>; })}</div>
     </CardContent></Card>
-    <Card><CardContent><GithubMembers slug={app.slug} /></CardContent></Card>
+    <Card><CardContent><GithubRepositoryMembers slug={app.slug} appInfo={github.data} /></CardContent></Card>
     {adding && canManage && app.deployApproved && <AddMemberDialog app={app} onClose={() => setAdding(false)} onAdded={onChanged} />}
   </div>;
 }

@@ -202,6 +202,36 @@ export class GithubClient {
       if (page >= 100) throw new GithubError('仓库成员过多，请在 GitHub 手动处理');
     }
   }
+  private async collaboratorPages(c: GithubConfig, fullName: string, affiliation: 'all' | 'direct') {
+    const [owner, repo] = fullName.split('/');
+    const result = new Map<string, any>();
+    for (let page = 1; page <= 100; page++) {
+      const r = await this.request(c, 'GET /repos/{owner}/{repo}/collaborators', { owner, repo, affiliation, per_page: 100, page });
+      if (!Array.isArray(r.data)) throw new GithubError('无法读取完整仓库用户列表，请刷新后重试');
+      for (const user of r.data) {
+        if (!/^\d+$/.test(String(user.id)) || typeof user.login !== 'string' || !user.login)
+          throw new GithubError('GitHub 返回的仓库用户身份不完整');
+        result.set(String(user.id), user);
+      }
+      if (r.data.length < 100) return result;
+    }
+    throw new GithubError('仓库用户过多，暂无法展示完整名单，请在 GitHub 查看');
+  }
+  async collaborators(c: GithubConfig, fullName: string) {
+    const [all, direct] = await Promise.all([this.collaboratorPages(c, fullName, 'all'), this.collaboratorPages(c, fullName, 'direct')]);
+    if ([...direct.keys()].some(id => !all.has(id))) throw new GithubError('仓库成员在查询期间发生变化，请刷新后重试');
+    const result: Array<{ githubId: string; login: string; direct: boolean; role: GithubRole | 'unknown'; roleError: string }> = [];
+    for (const [githubId, user] of all) {
+      let role: GithubRole | 'unknown' = 'unknown', roleError = '';
+      try {
+        const observed = missingRoleName(user.role_name) ? await this.permission(c, fullName, user.login) : normalizeRole(user.role_name);
+        if (observed === 'none') throw new GithubError('仓库用户权限已变化，请刷新后重试');
+        role = observed;
+      } catch (e) { roleError = e instanceof GithubError ? e.message : '仓库角色暂不可用'; }
+      result.push({ githubId, login: user.login, direct: direct.has(githubId), role, roleError });
+    }
+    return result;
+  }
   async setRole(c: GithubConfig, fullName: string, login: string, role: string | null) {
     const [owner, repo] = fullName.split('/');
     const r = await this.request(c, role ? 'PUT /repos/{owner}/{repo}/collaborators/{username}' :

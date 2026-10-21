@@ -51,3 +51,19 @@ export interface GithubAppInfo {
   ownerLogin: string | null; ownerRole: GithubRole | 'none' | 'unknown'; ownerIsOrgOwner: boolean;
   members: GithubMemberInfo[];
 }
+
+export interface GithubCollaborator {
+  githubId: string; login: string; role: GithubRole | 'unknown'; roleError: string; direct: boolean;
+  userId: string | null; name: string | null; relation: 'owner' | 'member' | 'eat' | 'external';
+}
+export interface GithubCollaboratorsInfo {
+  repository: string; repositoryId: string; repoVersion: number; checkedAt: string;
+  canManage: boolean; collaborators: GithubCollaborator[];
+}
+export const githubCollaboratorChangeSchema = z.object({
+  repositoryId: z.string().regex(/^\d+$/), repoVersion: z.number().int().positive(),
+  expectedRole: githubRoleSchema,
+  // null explicitly removes direct access; it is never treated as an invitation or an EAT member removal.
+  role: githubRoleSchema.nullable(),
+});
+export type GithubCollaboratorChange = z.infer<typeof githubCollaboratorChangeSchema>;

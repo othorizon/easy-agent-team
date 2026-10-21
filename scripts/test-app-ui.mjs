@@ -37,6 +37,10 @@ async function fixture(width, role = 'admin') {
     else if (path === '/api/apps/demo/github') result = { enabled: state.enabled, organization: 'eat-org', repository: 'eat-org/team-knowledge', repositoryId: '100', scope: 'organization', checkedAt: '2026-10-21T08:00:00Z', error: '', ownerLogin: 'xiaoman', ownerRole: 'admin', ownerIsOrgOwner: false,
       members: [{ userId: 'owner', name: app.ownerName, login: 'xiaoman', isOwner: true, orgState: 'active', role: 'admin', state: 'succeeded', error: '', notification: '', canGrant: role === 'admin', canChangeRole: role === 'admin' },
       ...app.members.map(m => ({ ...m, login: m.userId === 'member' ? 'yuchen' : null, orgState: m.userId === 'member' ? 'active' : 'unknown', role: m.userId === 'member' ? 'write' : 'unknown', state: m.userId === 'member' ? 'succeeded' : 'unlinked', error: '', notification: '', canGrant: role === 'admin', canChangeRole: role === 'admin' }))] };
+    else if (path === '/api/apps/demo/github/collaborators') result = { repository: 'eat-org/team-knowledge', repositoryId: '100', repoVersion: 1, checkedAt: new Date().toISOString(), canManage: role === 'admin', collaborators: [
+      { githubId: '101', login: 'xiaoman', role: 'admin', roleError: '', direct: true, userId: 'owner', name: app.ownerName, relation: 'owner' },
+      { githubId: '102', login: 'yuchen', role: 'write', roleError: '', direct: true, userId: 'member', name: '陈予安', relation: app.members.some(m => m.userId === 'member') ? 'member' : 'eat' },
+    ] };
     else if (path === '/api/apps/demo/members' && method === 'POST') {
       if (state.addError) { status = 403; result = { message: '当前仓库尚未批准，请刷新后重试' }; }
       else { const u = candidates.find(u => u.id === body.userId); app.members.push({ userId: u.id, name: u.name }); }
@@ -172,7 +176,7 @@ try {
     await p.getByRole('tab', { name: '概览', exact: true, selected: true }).waitFor();
     await p.goForward();
     await p.getByRole('tab', { name: '成员', exact: true, selected: true }).waitFor();
-    await p.getByRole('region', { name: '陈予安 的仓库权限' }).waitFor();
+    await p.getByRole('region', { name: '@yuchen 的仓库权限' }).waitFor();
     await shot(p, `members-${width}`);
     await p.getByRole('button', { name: '添加成员', exact: true }).click();
     const dialog = p.getByRole('dialog', { name: '添加应用成员' });
@@ -247,7 +251,7 @@ try {
     await f.context.close();
     const reader = await fixture(width, 'member');
     await reader.page.goto(`${base}/apps/demo?tab=members`);
-    await reader.page.getByRole('region', { name: '陈予安 的仓库权限' }).waitFor();
+    await reader.page.getByRole('region', { name: '@yuchen 的仓库权限' }).waitFor();
     assert.equal(await reader.page.getByRole('button', { name: '添加成员', exact: true }).count(), 0);
     assert.equal(await reader.page.getByRole('button', { name: '编辑配置' }).count(), 0);
     assert.equal(await reader.page.getByRole('button', { name: /移除/ }).count(), 0);

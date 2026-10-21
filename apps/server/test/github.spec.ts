@@ -42,6 +42,7 @@ const client = {
   removeOrganization: vi.fn(async (_c: any, login: string) => { memberships.delete(login); }),
   repository: vi.fn(async (_c: any, name: string) => ({ id: name.endsWith('/second') ? 901 : 9001, full_name: name, owner: { id: 900, login: 'eat-org', type: 'Organization' } })),
   permission: vi.fn(async (_c: any, repo: string, login: string) => roles.get(`${repo}:${login}`) ?? direct.get(`${repo}:${login}`) ?? 'none'),
+  collaborators: vi.fn(async (_c: any, repo: string) => [...new Set([...roles.keys(), ...direct.keys()].filter(k => k.startsWith(`${repo}:`)).map(k => k.slice(repo.length + 1)))].map(login => ({ githubId: gh[login], login, role: roles.get(`${repo}:${login}`) ?? direct.get(`${repo}:${login}`), direct: direct.has(`${repo}:${login}`), roleError: '' }))),
   directRole: vi.fn(async (_c: any, repo: string, login: string) => direct.get(`${repo}:${login}`) ?? null),
   setRole: vi.fn(async (_c: any, repo: string, login: string, role: string | null) => { if (role) direct.set(`${repo}:${login}`, role); else direct.delete(`${repo}:${login}`); }),
 };
@@ -616,5 +617,120 @@ describe('recovery edge cases and read-only views', () => {
     client.oauth.mockRejectedValueOnce(new GithubError('expired'));
     await api('POST', '/api/account/github/accept', 'member'); await service.tick();
     expect((await service.accountInfo(ids.member)).needsAuthorization).toBe(true);
+  });
+});
+
+describe('complete repository user list and direct access changes', () => {
+  const endpoint = '/api/apps/demo/github/collaborators';
+  const change = (who = 'admin', githubId = gh.member, role: string | null = null, extra = {}) =>
+    api('PUT', `${endpoint}/${githubId}`, who, { repositoryId: '9001', repoVersion: 1, expectedRole: 'write', role, ...extra });
+  it('includes application members, other EAT users and unlinked GitHub users, matched by immutable id', async () => {
+    await db.insert(s.appMembers).values({ appId, userId: ids.member });
+    direct.set('eat-org/demo:member', 'write'); direct.set('eat-org/demo:outsider', 'read');
+    await db.update(s.githubAccounts).set({ login: 'old-member-name' }).where(eq(s.githubAccounts.userId, ids.member));
+    await db.delete(s.githubAccounts).where(eq(s.githubAccounts.userId, ids.outsider));
+    const r = await api('GET', endpoint);
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ repositoryId: '9001', repoVersion: 1, canManage: true });
+    expect(r.body.collaborators).toEqual(expect.arrayContaining([
+      expect.objectContaining({ githubId: gh.owner, relation: 'owner' }),
+      expect.objectContaining({ githubId: gh.member, userId: ids.member, relation: 'member', direct: true }),
+      expect.objectContaining({ githubId: gh.admin, relation: 'eat' }),
+      expect.objectContaining({ githubId: gh.outsider, userId: null, relation: 'external' }),
+    ]));
+  });
+  it('keeps a removed EAT member with remaining direct access in the normal repository list', async () => {
+    await share(); direct.set('eat-org/demo:member', 'write');
+    await api('DELETE', `/api/apps/demo/members/${ids.member}`);
+    const r = await api('GET', endpoint);
+    expect(r.body.collaborators.find((m: any) => m.githubId === gh.member)).toMatchObject({ relation: 'eat', role: 'write', direct: true });
+    expect(r.body.collaborators.find((m: any) => m.githubId === gh.member)).not.toHaveProperty('state');
+  });
+  it('allows an unlinked EAT admin to remove direct access while preserving app membership and inherited access', async () => {
+    await share(); direct.set('eat-org/demo:member', 'write'); roles.set('eat-org/demo:member', 'write');
+    await db.delete(s.githubAccounts).where(eq(s.githubAccounts.userId, ids.admin));
+    const r = await change();
+    expect(r.status).toBe(200); expect(r.body).toMatchObject({ direct: false, role: 'write' });
+    expect((await db.select().from(s.appMembers).where(eq(s.appMembers.userId, ids.member)))).toHaveLength(1);
+    expect((await task()).state).toBe('cancelled');
+    await due(); await service.tick();
+    expect(direct.has('eat-org/demo:member')).toBe(false);
+  });
+  it('edits a direct collaborator without an EAT account', async () => {
+    await db.delete(s.githubAccounts).where(eq(s.githubAccounts.userId, ids.outsider));
+    direct.set('eat-org/demo:outsider', 'write');
+    const r = await change('admin', gh.outsider, 'maintain');
+    expect(r.status).toBe(200); expect(direct.get('eat-org/demo:outsider')).toBe('maintain');
+  });
+  it('does not let an application owner with Maintain modify or remove repository users', async () => {
+    direct.set('eat-org/demo:member', 'write');
+    expect((await change('owner')).status).toBe(403);
+    expect((await change('owner', gh.member, 'admin')).status).toBe(403);
+    expect(client.setRole).not.toHaveBeenCalled();
+  });
+  it('allows a linked GitHub Admin even when they are not an application member', async () => {
+    roles.set('eat-org/demo:outsider', 'admin'); direct.set('eat-org/demo:member', 'write');
+    expect((await change('outsider')).status).toBe(200);
+  });
+  it.each([
+    { repositoryId: '999' }, { repoVersion: 2 }, { expectedRole: 'admin' },
+  ])('rejects a stale confirmation before writing: %j', async extra => {
+    direct.set('eat-org/demo:member', 'write');
+    expect((await change('admin', gh.member, null, extra)).status).toBe(409);
+    expect(client.setRole).not.toHaveBeenCalled();
+  });
+  it('rejects inherited-only users and organization owners', async () => {
+    roles.set('eat-org/demo:member', 'write');
+    expect((await change()).status).toBe(409);
+    direct.set('eat-org/demo:member', 'write'); memberships.set('member', { state: 'active', role: 'admin' });
+    expect((await change()).status).toBe(403); expect(client.setRole).not.toHaveBeenCalled();
+  });
+  it('keeps actual access visible after a failed provider write and permits a fresh manual retry', async () => {
+    direct.set('eat-org/demo:member', 'write');
+    client.setRole.mockRejectedValueOnce(new GithubError('GitHub 请求失败'));
+    expect((await change()).status).toBe(400);
+    expect((await api('GET', endpoint)).body.collaborators.find((m: any) => m.githubId === gh.member)).toMatchObject({ direct: true, role: 'write' });
+    expect((await change()).status).toBe(200);
+    expect(direct.has('eat-org/demo:member')).toBe(false);
+  });
+  it('rejects a concurrent repo change and a demoted admin after provider reads', async () => {
+    direct.set('eat-org/demo:member', 'write');
+    client.directRole.mockImplementationOnce(async () => { await db.update(s.apps).set({ repoVersion: 2 }).where(eq(s.apps.id, appId)); return 'write'; });
+    expect((await change()).status).toBe(409);
+    await db.update(s.apps).set({ repoVersion: 1 }).where(eq(s.apps.id, appId));
+    client.directRole.mockImplementationOnce(async () => { await db.update(s.users).set({ role: 'member' }).where(eq(s.users.id, ids.admin)); roles.set('eat-org/demo:admin', 'read'); return 'write'; });
+    expect((await change()).status).toBe(403); expect(client.setRole).not.toHaveBeenCalled();
+  });
+  it('does not let stale automatic cleanup override a newly chosen role for a former member', async () => {
+    direct.set('eat-org/demo:member', 'write');
+    await db.insert(s.githubGrants).values({ key: '9001:102', repositoryId: '9001', fullName: 'eat-org/demo', githubId: gh.member, login: 'member', userId: ids.member, previousRole: null, baselineSafe: true, appliedRole: 'write', managed: true, prepared: false });
+    expect((await change('admin', gh.member, 'read')).status).toBe(200);
+    expect((await db.select().from(s.githubGrants))[0]).toMatchObject({ managed: false, appliedRole: 'read' });
+    await store.enqueue(db, 'cleanup', 'cleanup', {}); await service.tick();
+    expect(direct.get('eat-org/demo:member')).toBe('read');
+  });
+  it('continues automatic cleanup for a current member after a manual role change', async () => {
+    await share(); await service.tick();
+    expect((await change('admin', gh.member, 'read')).status).toBe(200);
+    expect((await db.select().from(s.githubGrants))[0]).toMatchObject({ managed: true, appliedRole: 'read' });
+    await api('DELETE', `/api/apps/demo/members/${ids.member}`); await due(); await service.tick();
+    expect(direct.has('eat-org/demo:member')).toBe(false);
+  });
+  it('returns a conflict instead of reporting success when the worker holds the mutation lock', async () => {
+    direct.set('eat-org/demo:member', 'write');
+    const connection = await pool.connect();
+    try {
+      await connection.query('select pg_advisory_lock(1950536522)');
+      expect((await change()).status).toBe(409); expect(client.setRole).not.toHaveBeenCalled();
+    } finally { await connection.query('select pg_advisory_unlock(1950536522)'); connection.release(); }
+  });
+  it('invalidates all apps sharing the repository and cancels queued grants before manual removal', async () => {
+    const [other] = await db.insert(s.apps).values({ slug: 'shared-repo', name: 'shared', ownerId: ids.owner, repoUrl: 'https://github.com/eat-org/demo', dokployApplicationId: 'shared', deployApproved: true, approvedRepoVersion: 1 }).returning();
+    await share(); await db.insert(s.appMembers).values({ appId: other.id, userId: ids.member });
+    await store.enqueue(db, `grant:${other.id}:${ids.member}`, 'grant', { appId: other.id, userId: ids.member, actorId: ids.admin, version: 1 });
+    direct.set('eat-org/demo:member', 'write');
+    expect((await change()).status).toBe(200);
+    expect((await task(`grant:${other.id}:${ids.member}`)).state).toBe('cancelled');
+    expect((await task(`repo:${other.id}`)).state).toBe('pending');
   });
 });

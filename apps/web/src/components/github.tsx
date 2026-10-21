@@ -54,7 +54,7 @@ export function GithubAccountPanel({ userId }: { userId?: string }) {
   })();
   return userId ? content : <Card><CardHeader><CardTitle>GitHub 账户</CardTitle></CardHeader><CardContent>{content}</CardContent></Card>;
 }
-function useGithubApp(slug: string) {
+export function useGithubApp(slug: string) {
   return useQuery({ queryKey: ['github-app', slug, getToken()], queryFn: () => api<GithubAppInfo>('GET', `/api/apps/${slug}/github`), refetchInterval: 10000 });
 }
 /** 列表只显示仓库归属；使用独立缓存查询，不阻塞应用列表或推断查询失败的结果。 */
@@ -94,12 +94,12 @@ function hasRole(m: GithubMemberInfo): m is GithubMemberInfo & { role: GithubRol
   return m.role !== 'none' && m.role !== 'unknown';
 }
 const processing = (m: GithubMemberInfo) => m.state === 'pending' || m.state === 'verifying';
-function roleText(m: GithubMemberInfo) {
+export function roleText(m: GithubMemberInfo) {
   if (!m.login) return '未关联 GitHub';
   if (hasRole(m)) return roleLabels[m.role];
   return m.role === 'none' && !m.roleError ? '未添加到仓库' : '暂未核验';
 }
-function memberHint(m: GithubMemberInfo) {
+export function memberHint(m: GithubMemberInfo) {
   if (!m.login) return '关联账户后才能核验；原 GitHub 仓库权限不会因解绑而自动撤销。';
   if (m.needsAuthorization) return '请本人在用户中心重新授权 GitHub。';
   if (m.state === 'verifying') return '操作已执行，正在核验实际角色。';
@@ -127,6 +127,7 @@ function MemberRoleDialog({ member: m, slug, repository, onClose }: { member: Gi
       toast.success('GitHub 操作已提交，核验后更新角色');
       onClose();
       await cache.invalidateQueries({ queryKey: ['github-app'] });
+      await cache.invalidateQueries({ queryKey: ['github-collaborators'] });
     },
     onError: (e: Error) => setError(e.message),
   });
@@ -145,7 +146,7 @@ function MemberRoleDialog({ member: m, slug, repository, onClose }: { member: Gi
     </DialogContent>
   </Dialog>;
 }
-function MemberActions({ member: m, slug, repository }: { member: GithubMemberInfo; slug: string; repository: string | null }) {
+export function MemberActions({ member: m, slug, repository }: { member: GithubMemberInfo; slug: string; repository: string | null }) {
   const [editing, setEditing] = useState(false);
   const canEdit = hasRole(m) ? m.canChangeRole : m.role === 'none' && m.canGrant;
   const waiting = !m.login ? '等待本人关联' : m.needsAuthorization ? '等待本人授权' : '等待核验';
@@ -156,31 +157,4 @@ function MemberActions({ member: m, slug, repository }: { member: GithubMemberIn
       </Button> : <span className="text-xs text-muted-foreground">仅可查看</span>}
     {editing && <MemberRoleDialog member={m} slug={slug} repository={repository} onClose={() => setEditing(false)} />}
   </>;
-}
-export function GithubMembers({ slug }: { slug: string }) {
-  const query = useGithubApp(slug);
-  const cache = useQueryClient();
-  const refresh = useMutation({ mutationFn: () => api('POST', `/api/apps/${slug}/github/refresh`),
-    onSuccess: () => void cache.invalidateQueries({ queryKey: ['github-app', slug] }), onError });
-  if (query.isError) return <div className="space-y-3"><p className="text-sm text-muted-foreground">GitHub 权限状态加载失败，EAT 成员权限不受影响。</p><Button variant="outline" size="sm" onClick={() => void query.refetch()}>重试</Button></div>;
-  if (!query.data) return <p className="text-sm text-muted-foreground">正在加载 GitHub 仓库权限…</p>;
-  if (!query.data.enabled) return <p className="text-sm text-muted-foreground">GitHub 集成未启用，EAT 应用成员权限独立生效。</p>;
-  return <div className="space-y-3"><div className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-sm font-semibold">成员的 GitHub 仓库权限 <span className="ml-1 text-xs font-normal text-muted-foreground">{query.data.members.length}</span></h3><Button size="sm" variant="outline" loading={refresh.isPending} onClick={() => refresh.mutate()}>刷新 GitHub 状态</Button></div>
-    <p className="text-xs text-muted-foreground">展示实际仓库角色；EAT 应用成员权限独立生效。</p>
-    {query.data.scope !== 'organization' && <p className="text-xs text-muted-foreground">{query.data.scope === 'outside' ? '非指定组织仓库，不自动管理仓库权限。' : '仓库归属待核验，暂不可设置仓库权限。'}</p>}
-    <div className="overflow-hidden rounded-lg border">
-      <div aria-hidden className="hidden grid-cols-[1.1fr_1fr_1.4fr_auto] gap-4 bg-muted/30 px-4 py-3 text-xs text-muted-foreground md:grid"><span>EAT 用户</span><span>GitHub 账户</span><span>仓库角色 / 状态</span><span className="w-24 text-right">操作</span></div>
-      {query.data.members.map(m => <section aria-label={`${m.name} 的仓库权限`} key={m.userId} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 border-t px-4 py-4 first:border-t-0 md:grid-cols-[1.1fr_1fr_1.4fr_auto]">
-        <div className="min-w-0 space-y-1"><p className="break-words text-sm font-medium">{m.name}</p>{m.isOwner && <Badge variant="secondary">应用所有者</Badge>}</div>
-        <p className="col-start-1 break-all text-xs text-muted-foreground md:col-auto">{m.login ? `@${m.login}` : '—'}</p>
-        <div className="col-start-1 min-w-0 space-y-1 md:col-auto"><p className="text-sm font-medium">{m.login && hasRole(m) && <span aria-hidden className="mr-1.5 inline-block size-1.5 rounded-full bg-success" />}{roleText(m)}</p>
-          {memberHint(m) && <p className={`break-words text-xs ${m.state === 'failed' && m.login ? 'text-destructive' : 'text-muted-foreground'}`}>{memberHint(m)}</p>}
-          {m.roleCheckedAt && m.roleError && <p className="text-xs text-muted-foreground">上次核验：{new Date(m.roleCheckedAt).toLocaleString()}</p>}
-          {m.notification && m.login && m.state === 'failed' && <p className="text-xs text-muted-foreground">{m.notification}</p>}
-        </div>
-        <div className="col-start-2 row-start-1 row-end-4 text-right md:col-auto md:row-auto"><MemberActions slug={slug} repository={query.data.repository} member={m} /></div>
-      </section>)}
-    </div>
-    <p className="text-xs leading-relaxed text-muted-foreground">仅列出本应用的所有者和成员，不代表仓库的完整协作者名单。解除 GitHub 账户关联不会自动撤销仓库权限。</p>
-  </div>;
 }

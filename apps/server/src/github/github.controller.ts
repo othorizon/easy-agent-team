@@ -1,19 +1,21 @@
 import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Put, Query, Req, Res } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { githubRoleSchema, githubSettingsSchema, githubSetupSchema, type GithubSetupRequest, type UpdateGithubSettings, type GithubRole } from '@eat/shared';
+import { githubCollaboratorChangeSchema, type GithubCollaboratorChange, githubRoleSchema, githubSettingsSchema, githubSetupSchema, type GithubSetupRequest, type UpdateGithubSettings, type GithubRole } from '@eat/shared';
 import { AllowIncompleteProfile, CurrentUser, Public, Roles, type AuthUser } from '../auth/auth.decorators';
 import { ZodValidationPipe } from '../common/zod.pipe';
 import { loadConfig } from '../config';
 import { GithubService } from './github.service';
 import { GithubError } from './github.client';
 import { GithubSetupService } from './github-setup.service';
+import { GithubCollaboratorsService } from './github-collaborators.service';
 
 const roleBody = z.object({ role: githubRoleSchema });
 const actionBody = z.object({ action: z.enum(['refresh', 'join', 'accept', 'remove-org']) });
 @Controller('api')
 export class GithubController {
-  constructor(private readonly github: GithubService, private readonly setup: GithubSetupService) {}
+  constructor(private readonly github: GithubService, private readonly setup: GithubSetupService,
+    private readonly collaborators: GithubCollaboratorsService) {}
   private userId(value: string) {
     const result = z.uuid().safeParse(value);
     if (!result.success) throw new BadRequestException('用户 ID 无效');
@@ -103,6 +105,19 @@ export class GithubController {
   }
   @Get('apps/:slug/github')
   app(@Param('slug') slug: string, @CurrentUser() user: AuthUser) { return this.github.appInfo(slug, user); }
+  @Get('apps/:slug/github/collaborators')
+  repositoryMembers(@Param('slug') slug: string, @CurrentUser() user: AuthUser) {
+    return this.run(() => this.collaborators.list(slug, user));
+  }
+  @Put('apps/:slug/github/collaborators/:githubId')
+  changeCollaborator(@Param('slug') slug: string, @Param('githubId') githubId: string,
+    @Body(new ZodValidationPipe(githubCollaboratorChangeSchema)) body: GithubCollaboratorChange, @CurrentUser() user: AuthUser) {
+    if (!/^\d+$/.test(githubId)) throw new BadRequestException('GitHub 用户 ID 无效');
+    return this.run(async () => {
+      try { return await this.collaborators.change(slug, githubId, body, user); }
+      finally { this.github.wake(); }
+    });
+  }
   @Post('apps/:slug/github/refresh')
   refreshApp(@Param('slug') slug: string) { return this.run(() => this.github.refreshApp(slug)); }
   @Post('apps/:slug/github/members/:id/retry')

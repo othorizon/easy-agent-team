@@ -152,3 +152,39 @@ describe('real Octokit transport and redacted errors', () => {
     expect(JSON.parse(hits[0].init.body)).toMatchObject({ client_secret: 'secret-test', code: 'one-time-code' });
   });
 });
+
+describe('complete repository collaborator snapshots', () => {
+  it('paginates all users and direct grants independently using installation auth', async () => {
+    mockFetch(url => {
+      const u = new URL(url), direct = u.searchParams.get('affiliation') === 'direct';
+      if (direct) return json([{ id: 101, login: 'last', role_name: 'write' }]);
+      return json(u.searchParams.get('page') === '1'
+        ? Array.from({ length: 100 }, (_, i) => ({ id: i + 1, login: `user-${i}`, role_name: 'read' }))
+        : [{ id: 101, login: 'last', role_name: 'write' }]);
+    });
+    const rows = await new GithubClient().collaborators(config, 'eat-org/demo');
+    expect(rows).toHaveLength(101);
+    expect(rows[0]).toMatchObject({ direct: false, role: 'read' });
+    expect(rows[100]).toMatchObject({ githubId: '101', direct: true, role: 'write' });
+    for (const hit of hits.filter(h => h.url.includes('/collaborators')))
+      expect(hit.init.headers.authorization).toBe('token installation-test');
+  });
+  it('never treats a failed later page as a complete or empty list', async () => {
+    mockFetch(url => {
+      const u = new URL(url);
+      if (u.searchParams.get('affiliation') === 'direct') return json([]);
+      return u.searchParams.get('page') === '1' ? json(Array.from({ length: 100 }, (_, i) => ({ id: i + 1, login: `user-${i}`, role_name: 'read' }))) : json({}, 403);
+    });
+    await expect(new GithubClient().collaborators(config, 'eat-org/demo')).rejects.toThrow('GitHub 拒绝操作');
+  });
+  it('keeps unsupported roles visible without granting standard-role privileges', async () => {
+    mockFetch(() => json([{ id: 1, login: 'custom', role_name: 'custom-admin' }]));
+    expect(await new GithubClient().collaborators(config, 'eat-org/demo')).toEqual([
+      expect.objectContaining({ githubId: '1', role: 'unknown', direct: true, roleError: expect.any(String) }),
+    ]);
+  });
+  it('rejects inconsistent all/direct snapshots instead of hiding a directly authorized user', async () => {
+    mockFetch(url => json(new URL(url).searchParams.get('affiliation') === 'direct' ? [{ id: 1, login: 'new' }] : []));
+    await expect(new GithubClient().collaborators(config, 'eat-org/demo')).rejects.toThrow('查询期间发生变化');
+  });
+});
