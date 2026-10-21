@@ -1,3 +1,4 @@
+import { registerRequestCommands } from './commands/requests.js';
 import { registerOssCommands } from './commands/oss.js';
 import { Command } from 'commander';
 import { CLI_VERSION, LOG_TAIL_DEFAULT, SKILL_LIST_MAX_PAGE_SIZE } from '@eat/shared';
@@ -49,6 +50,7 @@ program
 program.command('logout').description('退出登录（删除本地凭证）').action(logout);
 program.command('whoami').description('查看当前登录身份').action(whoami);
 
+registerRequestCommands(program);
 registerFolioCommands(program);
 registerLlmCommands(program);
 

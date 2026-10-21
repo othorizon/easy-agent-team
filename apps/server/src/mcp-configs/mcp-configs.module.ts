@@ -9,5 +9,6 @@ import { McpSubscriptionsModule } from './mcp-subscriptions.module';
   imports: [EnvsModule, McpSubscriptionsModule, McpGatewayModule],
   controllers: [McpConfigsController],
   providers: [McpConfigsService],
+  exports: [McpConfigsService],
 })
 export class McpConfigsModule {}

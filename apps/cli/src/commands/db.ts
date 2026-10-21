@@ -5,8 +5,10 @@ import { Api } from '../client.js';
 const STATUS_LABEL: Record<string, string> = {
   pending: '待批准',
   active: '可用',
+  provisioning: '开通中',
   failed: '执行失败',
   rejected: '已驳回',
+  withdrawn: '已撤回',
   disabled: '已禁用',
   deleted: '已删除',
 };
@@ -49,6 +51,6 @@ export async function dbList(): Promise<void> {
   }
   for (const r of rows) {
     const env = r.environmentSlug ? `凭证: eat env pull ${r.environmentSlug}` : (r.error ? `错误: ${r.error}` : '');
-    console.log(`[${STATUS_LABEL[r.status] ?? r.status}] ${r.dbName} @ ${r.instanceName}（${r.dbUser}） ${env}`);
+    console.log(`[${STATUS_LABEL[r.status] ?? r.status}] ${r.dbName} @ ${r.instanceName}（${r.dbUser}） ${env}${r.rejectionReason ? `\n  驳回原因：${r.rejectionReason}` : ''}`);
   }
 }

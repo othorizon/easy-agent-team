@@ -701,6 +701,8 @@ describe('应用：更新、成员与权限', () => {
     expect((await api('POST', '/api/apps/crm-tool/members', { token: ownerToken, payload: { userId: memberId } })).status).toBe(201);
     // Approval can subsequently be revoked without deleting existing members.
     await api('DELETE', '/api/apps/crm-tool/approve', { token: adminToken });
+    const prior=(await api('GET','/api/requests?scope=mine&type=app',{token:ownerToken})).body.items.find((r:any)=>r.details.slug==='crm-tool');
+    expect((await api('POST',`/api/requests/${prior.id}/resubmit`,{token:ownerToken,payload:{reason:'修复后重新申请'}})).status).toBe(201);
 
     const find = (rows: Array<{ slug: string }>) => rows.find((a) => a.slug === 'crm-tool') as Record<string, unknown>;
     const asMember = find((await api('GET', '/api/apps', { token: memberToken })).body);
@@ -738,6 +740,8 @@ describe('部署授权门禁（决策 31）', () => {
     const revoked = await api('DELETE', '/api/apps/crm-tool/approve', { token: adminToken });
     expect(revoked.body).toMatchObject({ deployApproved: false, approvedByName: null });
     expect((await api('POST', '/api/apps/crm-tool/deploy', { token: memberToken, payload: {} })).body.error).toBe('DEPLOY_NOT_APPROVED');
+    const previous=(await api('GET','/api/requests?scope=mine&type=app',{token:ownerToken})).body.items.find((r:any)=>r.details.slug==='crm-tool');
+    expect((await api('POST',`/api/requests/${previous.id}/resubmit`,{token:ownerToken,payload:{reason:'再次申请部署'}})).status).toBe(201);
     await api('POST', '/api/apps/crm-tool/approve', { token: adminToken });
   });
 });

@@ -21,6 +21,9 @@ export class AppExceptionFilter implements ExceptionFilter {
     const reply = ctx.getResponse<FastifyReply>();
     const request = ctx.getRequest<FastifyRequest>();
 
+    const databaseError = exception as { code?: string; constraint?: string; cause?: {code?:string;constraint?:string} };
+    const duplicateRequest = [databaseError,databaseError?.cause].some(e=>e?.code==='23505' && (e.constraint?.startsWith('approval_request_') || (exception as Error)?.message?.includes('同一事项已有待审批申请')));
+    if(duplicateRequest){void reply.status(409).send({error:'CONFLICT',message:'同一事项已有待审批申请，请查看申请中心'});return;}
     const status =
       exception instanceof HttpException
         ? exception.getStatus()

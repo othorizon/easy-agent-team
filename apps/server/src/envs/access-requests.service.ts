@@ -69,6 +69,7 @@ export class AccessRequestsService {
       environmentSlug: row.environmentSlug ?? '(已删除)',
       keys: r.keys,
       reason: r.reason,
+      rejectionReason:r.rejectionReason,
       status: r.status,
       decidedBy: r.decidedBy,
       decidedByName: r.decidedBy ? (row.deciderName ?? '(已删除)') : null,
@@ -102,6 +103,10 @@ export class AccessRequestsService {
         message: `以下变量在环境 ${env.slug} 中不存在：${missing.join(', ')}`,
       });
     }
+    const existing = await this.db.select().from(accessRequests).where(and(eq(accessRequests.requesterId,user.id),eq(accessRequests.environmentId,env.id),eq(accessRequests.status,'pending')));
+    const keySet=[...new Set(dto.keys)].sort().join(',');
+    const same=existing.find(r=>[...new Set(r.keys)].sort().join(',')===keySet);
+    if(same) return this.get(user,same.id);
     const [row] = await this.db
       .insert(accessRequests)
       .values({ requesterId: user.id, environmentId: env.id, keys: dto.keys, reason: dto.reason })
@@ -140,7 +145,7 @@ export class AccessRequestsService {
    * 按审批时间倒序、分页；`counts` 在范围内按结果分别计数，`status` 筛选不参与。
    */
   async listHistory(user: AuthUser, query: AccessRequestHistoryQuery): Promise<AccessRequestHistoryResult> {
-    const scope = and(ne(accessRequests.status, 'pending'), this.approverScope(user));
+    const scope = and(inArray(accessRequests.status, ['approved', 'rejected']), this.approverScope(user));
     const grouped = await this.db
       .select({ status: accessRequests.status, n: count() })
       .from(accessRequests)
@@ -192,25 +197,30 @@ export class AccessRequestsService {
     }
 
     const grantExpiresAt = dto.grantExpiresAt ? new Date(dto.grantExpiresAt) : null;
-    if (dto.decision === 'approved') {
-      const vars = await this.db
-        .select({ id: envVariables.id, key: envVariables.key })
-        .from(envVariables)
-        .where(and(eq(envVariables.environmentId, env.id), inArray(envVariables.key, row.keys)));
-      for (const v of vars) {
-        await this.db.insert(variableGrants).values({
-          userId: row.requesterId,
-          variableId: v.id,
-          environmentId: null,
-          grantedBy: user.id,
-          expiresAt: grantExpiresAt,
-        });
+    await this.db.transaction(async (tx) => {
+      const [current] = await tx.select().from(accessRequests).where(eq(accessRequests.id, id)).for('update');
+      if (!current || current.status !== 'pending') throw new ConflictException('申请已被处理');
+      if (dto.decision === 'approved') {
+        const vars = await tx
+          .select({ id: envVariables.id, key: envVariables.key })
+          .from(envVariables)
+          .where(and(eq(envVariables.environmentId, env.id), inArray(envVariables.key, row.keys)));
+        if (vars.length !== new Set(row.keys).size) throw new ConflictException('申请的变量已变化，请重新申请');
+        for (const v of vars) {
+          await tx.insert(variableGrants).values({
+            userId: row.requesterId,
+            variableId: v.id,
+            environmentId: null,
+            grantedBy: user.id,
+            expiresAt: grantExpiresAt,
+          });
+        }
       }
-    }
-    await this.db
-      .update(accessRequests)
-      .set({ status: dto.decision, decidedBy: user.id, decidedAt: new Date(), grantExpiresAt })
-      .where(eq(accessRequests.id, id));
+      await tx
+        .update(accessRequests)
+        .set({ status: dto.decision, decidedBy: user.id, decidedAt: new Date(), grantExpiresAt })
+        .where(eq(accessRequests.id, id));
+    });
     await this.audit.record({
       actorId: user.id,
       action: 'access_request.decided',

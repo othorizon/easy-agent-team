@@ -32,6 +32,7 @@ async function fixture(width, role = 'admin') {
     if (method !== 'GET') writes.push({ path, method, body });
     let result = {}, status = 200;
     if (path === '/api/account/onboarding') result = { required: false, requireBio: false, requireNotification: false };
+    else if (path === '/api/requests') result = { items: [], total: 0, page: 1, pageSize: 20, pendingCount: 0 };
     else if (path === '/api/apps') { result = [app, ...state.extraApps]; if (state.appsError) { status = 500; result = { message: '加载失败' }; } }
     else if (path === '/api/users') { result = [user, { id: 'member', name: '陈予安', email: 'chen@example.test' }, ...candidates]; if (state.usersError) { status = 500; result = { message: '用户加载失败' }; } }
     else if (path === '/api/apps/demo/github') result = { enabled: state.enabled, organization: 'eat-org', repository: 'eat-org/team-knowledge', repositoryId: '100', scope: 'organization', checkedAt: '2026-10-21T08:00:00Z', error: '', ownerLogin: 'xiaoman', ownerRole: 'admin', ownerIsOrgOwner: false,
@@ -230,7 +231,7 @@ try {
     await p.getByRole('tab', { name: '概览', exact: true }).click();
     await p.getByRole('button', { name: '撤销授权' }).click();
     await p.getByRole('alertdialog').getByRole('button', { name: '撤销授权' }).click();
-    await p.getByRole('button', { name: '授权部署' }).waitFor();
+    await p.getByRole('link', { name: '前往审批' }).waitFor();
     assert(await p.getByRole('button', { name: '部署', exact: true }).isDisabled());
     await p.getByRole('tab', { name: '成员', exact: true }).click();
     assert(await p.getByRole('button', { name: '添加成员', exact: true }).isDisabled());

@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom';
+import { ResourceRequests } from '../components/resource-requests';
 import type {
   McpConfigInfo,
   McpGatewayCallList,
@@ -37,7 +39,6 @@ export function McpConfigsPage() {
   const [editing, setEditing] = useState<McpConfigInfo | 'new' | null>(null);
   const [requesting, setRequesting] = useState<McpConfigInfo | null>(null);
   const [managing, setManaging] = useState<McpConfigInfo | null>(null);
-  const [reviewing, setReviewing] = useState(false);
   const [accessing, setAccessing] = useState<McpConfigInfo | null>(null);
   const [viewingCalls, setViewingCalls] = useState(false);
 
@@ -114,13 +115,13 @@ export function McpConfigsPage() {
                   <Activity />
                   调用记录
                 </Button>
-                <Button variant="outline" onClick={() => setReviewing(true)}>
+                <Button variant="outline" asChild><Link to="/requests?type=mcp">
                   <ClipboardCheck />
                   订阅申请
                   {pendingCount > 0 && (
                     <span className="size-1.5 rounded-full bg-warning" title={`${pendingCount} 条待审批`} />
                   )}
-                </Button>
+                </Link></Button>
               </>
             )}
             <Button onClick={() => setEditing('new')}>
@@ -160,6 +161,7 @@ export function McpConfigsPage() {
                           <span className="font-medium">{c.name}</span>
                         </div>
                         <div className="mt-0.5 truncate text-xs text-muted-foreground md:hidden">{c.description}</div>
+                        {['pending','rejected'].includes(c.subscriptionStatus) && <ResourceRequests type="mcp" resourceId={c.id}/>}
                       </TableCell>
                       <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell">
                         {c.description}
@@ -248,7 +250,6 @@ export function McpConfigsPage() {
         />
       )}
       {managing && <SubscribersDialog config={managing} onClose={() => setManaging(null)} />}
-      {reviewing && <RequestsDialog onClose={() => setReviewing(false)} />}
       {accessing && <AccessUrlDialog config={accessing} onClose={() => setAccessing(null)} />}
       {viewingCalls && <GatewayCallsDialog onClose={() => setViewingCalls(false)} />}
     </div>
@@ -341,100 +342,6 @@ function RequestSubscribeDialog({
             提交申请
           </Button>
         </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/** 审批清单：默认只看待审批的，「全部」里能回看已处理的（照求助清单的口径） */
-function RequestsDialog({ onClose }: { onClose: () => void }) {
-  const queryClient = useQueryClient();
-  const [status, setStatus] = useState<'pending' | 'all'>('pending');
-  const requests = useQuery({
-    queryKey: [REQUESTS_KEY, status],
-    queryFn: () => api<McpSubscriptionRequest[]>('GET', `/api/mcp-configs/subscription-requests?status=${status}`),
-  });
-
-  const decide = useMutation({
-    mutationFn: (v: { id: string; decision: 'approved' | 'rejected' }) =>
-      api('POST', `/api/mcp-configs/subscription-requests/${v.id}/decision`, { decision: v.decision }),
-    onSuccess: (_res, v) => {
-      toast.success(v.decision === 'approved' ? '已批准，对方下次 eat sync 生效' : '已驳回');
-      void queryClient.invalidateQueries({ queryKey: [REQUESTS_KEY] });
-      void queryClient.invalidateQueries({ queryKey: ['mcp-configs'] });
-    },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : '操作失败'),
-  });
-
-  const rows = requests.data ?? [];
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>订阅申请</DialogTitle>
-          <DialogDescription>你 Own 的配置上的订阅申请；管理员可审批全部配置。</DialogDescription>
-        </DialogHeader>
-        <Segmented
-          value={status}
-          onChange={setStatus}
-          variant="outline"
-          ariaLabel="申请状态"
-          options={[
-            { label: '待审批', value: 'pending' },
-            { label: '全部', value: 'all' },
-          ]}
-        />
-        {requests.isPending ? (
-          <TableSkeleton rows={2} />
-        ) : rows.length === 0 ? (
-          <Empty text={status === 'pending' ? '没有待审批的申请' : '还没有订阅申请'} className="py-6" />
-        ) : (
-          <div className="flex flex-col gap-2">
-            {rows.map((r) => (
-              <div key={r.id} className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                    <span className="font-medium">{r.userName}</span>
-                    <span className="text-xs text-muted-foreground">{r.userEmail}</span>
-                    <span className="text-sm">申请订阅</span>
-                    <InlineCode>{r.configSlug}</InlineCode>
-                  </div>
-                  <div className="mt-1 text-sm text-muted-foreground">{r.reason || '（没写理由）'}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    {formatDateTime(r.createdAt)}
-                    {r.status !== 'pending' && r.decidedAt && (
-                      <>
-                        {' · '}
-                        {r.decidedByName} 于 {formatDateTime(r.decidedAt)}
-                      </>
-                    )}
-                  </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  {r.status === 'pending' ? (
-                    <>
-                      <Button size="sm" loading={decide.isPending} onClick={() => decide.mutate({ id: r.id, decision: 'approved' })}>
-                        批准
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline-destructive"
-                        loading={decide.isPending}
-                        onClick={() => decide.mutate({ id: r.id, decision: 'rejected' })}
-                      >
-                        驳回
-                      </Button>
-                    </>
-                  ) : r.status === 'approved' ? (
-                    <Badge variant="success">已批准</Badge>
-                  ) : (
-                    <Badge variant="destructive">已驳回</Badge>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
       </DialogContent>
     </Dialog>
   );

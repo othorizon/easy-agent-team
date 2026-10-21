@@ -1,3 +1,4 @@
+import { ResourceRequests } from '../components/resource-requests';
 import type { AppEnv, AppEnvChange, AppEnvTarget, AppInfo, BuildLogsResult, DeploymentInfo, RunLogsResult, UpdateAppRequest } from '@eat/shared';
 import { APP_BUILD_TYPE_LABEL, APP_ENV_TARGET_LABEL, githubRepoWebUrl } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -162,7 +163,8 @@ function DeploymentApproval({ app, isAdmin, onChanged }: { app: AppInfo; isAdmin
     {app.approvalRequestedAt && !app.deployApproved && <p className="text-xs text-muted-foreground">最近部署请求：{formatDateTime(app.approvalRequestedAt)}</p>}
     {isAdmin && (app.deployApproved ? <Confirm title="撤销部署授权？" description="撤销后，所有应用成员将无法部署或添加新成员。已有成员关系保留。" confirmText="撤销授权" onConfirm={() => approve.mutate(false)}>
       <Button variant="outline" disabled={approve.isPending}><ShieldOff />撤销授权</Button>
-    </Confirm> : <Button onClick={() => approve.mutate(true)} loading={approve.isPending}><ShieldCheck />授权部署</Button>)}
+    </Confirm> : <Button asChild><Link to={`/requests?type=app&resourceId=${app.id}`}>前往审批</Link></Button>)}
+    <ResourceRequests type="app" resourceId={app.id}/>
   </CardContent></Card>;
 }
 

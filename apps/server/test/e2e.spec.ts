@@ -214,7 +214,7 @@ describe('权限申请审批闭环', () => {
     // 重复决策报冲突
     const again = await api('POST', `/api/access-requests/${requestId}/decision`, {
       token: adminToken,
-      payload: { decision: 'rejected' },
+      payload: { decision: 'rejected', reason: '请补充用途说明' },
     });
     expect(again.status).toBe(409);
   });
@@ -253,7 +253,7 @@ describe('权限申请审批闭环', () => {
     expect(r.body.decidedByName).toBeNull();
     const rejected = await api('POST', `/api/access-requests/${r.body.id}/decision`, {
       token: adminToken,
-      payload: { decision: 'rejected' },
+      payload: { decision: 'rejected', reason: '请补充用途说明' },
     });
     expect(rejected.body).toMatchObject({ status: 'rejected', decidedByName: '管理员' });
 

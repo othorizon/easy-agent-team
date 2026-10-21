@@ -46,7 +46,8 @@ export type OssSpaceStatus =
   | 'failed'
   | 'rejected'
   | 'revoking'
-  | 'revoked';
+  | 'revoked'
+  | 'withdrawn';
 export interface OssCheck {
   name: string;
   status: 'running' | 'passed' | 'failed';

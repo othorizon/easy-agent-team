@@ -144,6 +144,7 @@ export const mcpSubscriptionRequestSchema = z.object({
   userName: z.string(),
   userEmail: z.string(),
   reason: z.string(),
+  rejectionReason: z.string().nullable().optional(),
   status: z.enum(['pending', 'approved', 'rejected']),
   decidedBy: z.string().nullable(),
   decidedByName: z.string().nullable(),
@@ -160,6 +161,7 @@ export type McpSubscriptionRequestQuery = z.infer<typeof mcpSubscriptionRequestQ
 
 export const decideMcpSubscriptionSchema = z.object({
   decision: z.enum(['approved', 'rejected']),
+  reason:z.string().trim().max(2000).optional(),
 });
 export type DecideMcpSubscriptionRequest = z.infer<typeof decideMcpSubscriptionSchema>;
 

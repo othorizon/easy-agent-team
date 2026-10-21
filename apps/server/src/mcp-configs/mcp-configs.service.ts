@@ -330,6 +330,7 @@ export class McpConfigsService {
       userName: r.requesterName,
       userEmail: r.requesterEmail,
       reason: r.sub.reason,
+      rejectionReason:r.sub.rejectionReason,
       status: r.sub.status,
       decidedBy: r.sub.decidedBy,
       decidedByName: r.sub.decidedBy ? (r.deciderName ?? '(已删除)') : null,

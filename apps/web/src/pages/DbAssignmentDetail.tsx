@@ -1,3 +1,4 @@
+import { ResourceRequests } from '../components/resource-requests';
 import type { DbAssignmentInfo } from '@eat/shared';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, ArrowRight, KeyRound } from 'lucide-react';
@@ -66,6 +67,7 @@ export function DbAssignmentDetailPage() {
         />
       </div>
 
+      <ResourceRequests type="db" sourceId={r.id}/>
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <Card>
           <CardContent>
@@ -181,10 +183,14 @@ function CredentialsCard({ r }: { r: DbAssignmentInfo }) {
     );
   } else if (r.status === 'pending') {
     body = <Note>批准后平台会在实例上建库建号，并自动生成一个凭证环境（Owner 为申请人），这里会出现拉取命令。</Note>;
+  } else if (r.status === 'provisioning') {
+    body = <Note>审批已通过，正在开通数据库与凭证。请勿重复申请；如长时间没有完成，请联系管理员核对执行情况。</Note>;
+  } else if (r.status === 'withdrawn') {
+    body = <Note>申请已撤回。需要时可在申请中心重新提交。</Note>;
   } else if (r.status === 'rejected') {
     body = <Note>申请已驳回，没有建库，也没有生成凭证。</Note>;
   } else if (r.status === 'failed') {
-    body = <Note>建库失败，未生成凭证；处理完失败原因后可删除本记录重新申请。</Note>;
+    body = <Note>审批已通过，但建库失败。请管理员处理失败原因后重试开通，无需重新申请；如实例上已有同名库或账号，先核对未完成的资源。</Note>;
   } else if (r.status === 'deleted') {
     body = <Note>记录已删除，凭证环境已一并删除；实例上的库与账号未做物理删除，需管理员到实例上手动清理。</Note>;
   } else {

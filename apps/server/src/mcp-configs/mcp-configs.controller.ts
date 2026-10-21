@@ -1,3 +1,4 @@
+import { RequestsService } from '../requests/requests.service';
 import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
 import {
   addMcpSubscriberSchema,
@@ -17,7 +18,7 @@ import { McpConfigsService } from './mcp-configs.service';
 
 @Controller('api/mcp-configs')
 export class McpConfigsController {
-  constructor(private readonly configs: McpConfigsService) {}
+  constructor(private readonly configs: McpConfigsService, private readonly approvals:RequestsService) {}
 
   @Get()
   list(@CurrentUser() user: AuthUser) {
@@ -45,7 +46,7 @@ export class McpConfigsController {
     @Body(new ZodValidationPipe(decideMcpSubscriptionSchema)) body: DecideMcpSubscriptionRequest,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.configs.decide(user, id, body);
+    return this.approvals.decideSource(user,'mcp',id,body);
   }
 
   @Post()

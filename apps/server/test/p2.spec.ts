@@ -235,7 +235,7 @@ describe('MCP 配置分发', () => {
       (
         await api('POST', `/api/mcp-configs/subscription-requests/${requestId}/decision`, {
           token: adminToken,
-          payload: { decision: 'rejected' },
+          payload: { decision: 'rejected', reason: '请补充用途说明' },
         })
       ).status,
     ).toBe(409);
@@ -261,7 +261,7 @@ describe('MCP 配置分发', () => {
     expect(inbox.body).toHaveLength(1);
     await api('POST', `/api/mcp-configs/subscription-requests/${inbox.body[0].id}/decision`, {
       token: m1Token,
-      payload: { decision: 'rejected' },
+      payload: { decision: 'rejected', reason: '请补充用途说明' },
     });
     const list = await api('GET', '/api/mcp-configs', { token: m2Token });
     expect(list.body.find((c: { slug: string }) => c.slug === 'wang-mcp').subscriptionStatus).toBe('rejected');

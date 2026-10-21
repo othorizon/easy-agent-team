@@ -118,6 +118,12 @@ export async function startMcpServer(): Promise<void> {
             }),
           );
         }
+        case 'list_requests': {
+          const q=new URLSearchParams({scope:'mine'});
+          for(const key of ['type','status','page'])if(args[key]!==undefined)q.set(key,String(args[key]));
+          return jsonResult(await api.request('GET','/api/requests?'+q));
+        }
+        case 'get_request_status': return jsonResult(await api.request('GET','/api/requests/'+encodeURIComponent(String(args.requestId))));
         case 'request_access': {
           return jsonResult(
             await api.request('POST', '/api/access-requests', {

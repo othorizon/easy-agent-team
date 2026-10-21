@@ -1,3 +1,5 @@
+import { z } from 'zod';
+import { RequestsService } from '../requests/requests.service';
 import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
 import {
   createDbAssignmentSchema,
@@ -11,7 +13,7 @@ import { DbsService } from './dbs.service';
 
 @Controller('api/db')
 export class DbsController {
-  constructor(private readonly dbs: DbsService) {}
+  constructor(private readonly dbs: DbsService,private readonly requests:RequestsService) {}
 
   /** 成员选实例发起申请也需要看到实例列表（不含凭证） */
   @Get('instances')
@@ -55,14 +57,20 @@ export class DbsController {
 
   @Post('assignments/:id/approve')
   @Roles('admin')
-  approve(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.dbs.approve(user, id);
+  async approve(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    await this.requests.decideSource(user,'db',id,{decision:'approved'});
+    return this.dbs.get(user,id);
   }
+
+  @Post('assignments/:id/retry')
+  @Roles('admin')
+  retry(@Param('id') id:string,@CurrentUser() user:AuthUser){return this.dbs.approve(user,id,true);}
 
   @Post('assignments/:id/reject')
   @Roles('admin')
-  reject(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.dbs.reject(user, id);
+  async reject(@Param('id') id: string, @CurrentUser() user: AuthUser, @Body(new ZodValidationPipe(z.object({reason:z.string().trim().min(1).max(2000)}))) body:{reason:string}) {
+    await this.requests.decideSource(user,'db',id,{decision:'rejected',reason:body.reason});
+    return this.dbs.get(user,id);
   }
 
   @Post('assignments/:id/disable')

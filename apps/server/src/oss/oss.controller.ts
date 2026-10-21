@@ -1,3 +1,4 @@
+import { RequestsService } from '../requests/requests.service';
 import {
   Body,
   Controller,
@@ -27,7 +28,7 @@ import { OssService } from './oss.service';
 
 @Controller('api/oss')
 export class OssController {
-  constructor(private readonly oss: OssService) {}
+  constructor(private readonly oss: OssService,private readonly requests:RequestsService) {}
   @Get('capability') capability() {
     return this.oss.capability();
   }
@@ -61,18 +62,20 @@ export class OssController {
   ) {
     return this.oss.publicRead(u, id, body.enabled);
   }
-  @Post('spaces/:id/approve') @Roles('admin') approve(
+  @Post('spaces/:id/approve') @Roles('admin') async approve(
     @CurrentUser() u: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.oss.decide(u, id, 'approve');
+    await this.requests.decideSource(u,'oss',id,{decision:'approved'});
+    return this.oss.get(u,id);
   }
-  @Post('spaces/:id/reject') @Roles('admin') reject(
+  @Post('spaces/:id/reject') @Roles('admin') async reject(
     @CurrentUser() u: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
     @Body(new ZodValidationPipe(ossRejectSchema)) body: { reason: string },
   ) {
-    return this.oss.decide(u, id, 'reject', body.reason);
+    await this.requests.decideSource(u,'oss',id,{decision:'rejected',reason:body.reason});
+    return this.oss.get(u,id);
   }
   @Post('spaces/:id/revoke') @Roles('admin') revoke(
     @CurrentUser() u: AuthUser,

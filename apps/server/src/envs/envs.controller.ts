@@ -1,3 +1,4 @@
+import { RequestsService } from '../requests/requests.service';
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import {
@@ -30,6 +31,7 @@ export class EnvsController {
   constructor(
     private readonly envs: EnvsService,
     private readonly accessRequests: AccessRequestsService,
+    private readonly requests: RequestsService,
   ) {}
 
   // ---------- 环境 ----------
@@ -161,11 +163,12 @@ export class EnvsController {
   }
 
   @Post('access-requests/:id/decision')
-  decide(
+  async decide(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(decideAccessRequestSchema)) body: DecideAccessRequest,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.accessRequests.decide(user, id, body);
+    await this.requests.decideSource(user, 'env', id, body);
+    return this.accessRequests.get(user,id);
   }
 }

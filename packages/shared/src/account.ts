@@ -33,6 +33,9 @@ export const notificationPreferencesSchema = z.object({
   notifyHelp: z.boolean(),
   notifyReply: z.boolean(),
   notifyMention: z.boolean(),
+  /** Optional on legacy PUT clients; omission preserves the stored preference. New users default to true. */
+  notifyApprovalRequest: z.boolean().optional(),
+  notifyApprovalResult: z.boolean().optional(),
 });
 export type NotificationPreferences = z.infer<typeof notificationPreferencesSchema>;
 export const patchNotificationPreferencesSchema = notificationPreferencesSchema.partial().strict()
@@ -46,6 +49,8 @@ export interface OnboardingStatus {
   required: boolean;
 }
 export interface NotificationSettings extends NotificationPreferences {
+  notifyApprovalRequest: boolean;
+  notifyApprovalResult: boolean;
   webhookUrl: string;
   hasWebhookSecret: boolean;
   verified: boolean;

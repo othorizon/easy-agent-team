@@ -180,7 +180,7 @@ export const createAccessRequestSchema = z.object({
 });
 export type CreateAccessRequest = z.infer<typeof createAccessRequestSchema>;
 
-export const accessRequestStatusSchema = z.enum(['pending', 'approved', 'rejected']);
+export const accessRequestStatusSchema = z.enum(['pending', 'approved', 'rejected', 'withdrawn', 'invalid']);
 
 export const accessRequestSchema = z.object({
   id: z.string(),
@@ -195,6 +195,7 @@ export const accessRequestSchema = z.object({
   decidedByName: z.string().nullable(),
   decidedAt: z.string().nullable(),
   grantExpiresAt: z.string().nullable(),
+  rejectionReason: z.string().nullable().optional(),
   createdAt: z.string(),
 });
 export type AccessRequestInfo = z.infer<typeof accessRequestSchema>;
@@ -236,6 +237,7 @@ export type AccessRequestHistoryResult = z.infer<typeof accessRequestHistoryResu
 
 export const decideAccessRequestSchema = z.object({
   decision: z.enum(['approved', 'rejected']),
+  reason:z.string().trim().max(2000).optional(),
   /** 批准时可设授权有效期，缺省永久 */
   grantExpiresAt: z.iso.datetime().optional(),
 });

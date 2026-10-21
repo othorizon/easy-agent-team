@@ -1,3 +1,4 @@
+import { RequestsService } from '../requests/requests.service';
 import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put } from '@nestjs/common';
 import {
   createAppSchema,
@@ -23,6 +24,7 @@ export class AppsController {
   constructor(
     private readonly apps: AppsService,
     private readonly dokploy: DokploySettingsService,
+    private readonly requests:RequestsService,
   ) {}
 
   // ---------- 管理员：Dokploy 侧清单（配置自助建应用的落点、挂载既有应用） ----------
@@ -99,8 +101,10 @@ export class AppsController {
   @Post('apps/:slug/approve')
   @Roles('admin')
   @HttpCode(200)
-  approve(@Param('slug') slug: string, @CurrentUser() user: AuthUser) {
-    return this.apps.approveDeploy(user, slug);
+  async approve(@Param('slug') slug: string, @CurrentUser() user: AuthUser) {
+    const app=await this.apps.getApp(slug);
+    await this.requests.decideSource(user,'app',app.id,{decision:'approved'});
+    return this.apps.toAppInfo(await this.apps.getApp(slug),user);
   }
 
   @Delete('apps/:slug/approve')

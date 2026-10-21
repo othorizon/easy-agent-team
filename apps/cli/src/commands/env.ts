@@ -104,10 +104,10 @@ export async function envRequests(): Promise<void> {
     console.log('暂无权限申请记录');
     return;
   }
-  const statusLabel: Record<string, string> = { pending: '待审批', approved: '已批准', rejected: '已驳回' };
+  const statusLabel: Record<string, string> = { pending: '待审批', approved: '已批准', rejected: '已驳回', withdrawn: '已撤回', invalid: '已失效' };
   for (const r of rows) {
     console.log(
-      `${formatDateTime(r.createdAt)}  ${statusLabel[r.status] ?? r.status}  ${r.environmentSlug}: ${r.keys.join(', ')}`,
+      `${formatDateTime(r.createdAt)}  ${statusLabel[r.status] ?? r.status}  ${r.environmentSlug}: ${r.keys.join(', ')}${r.rejectionReason ? `\n  驳回原因：${r.rejectionReason}` : ''}`,
     );
   }
 }

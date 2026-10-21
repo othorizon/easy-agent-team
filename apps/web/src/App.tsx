@@ -15,11 +15,12 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  UserRound,
   Users,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { OnboardingStatus } from '@eat/shared';
+import type { OnboardingStatus, ApprovalRequestPage } from '@eat/shared';
 import { AccountPage } from './pages/Account';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { api, clearSession, getStoredUser, getToken } from './api';
@@ -51,6 +52,7 @@ import { McpConfigsPage } from './pages/McpConfigs';
 import { AppsPage } from './pages/Apps';
 import { AppDetailPage } from './pages/AppDetail';
 import { RequestsPage } from './pages/Requests';
+import { RequestApprovePage } from './pages/RequestApprove';
 import { SettingsPage } from './pages/Settings';
 import { LlmGatewayPage } from './pages/LlmGateway';
 import { SkillDetailPage } from './pages/SkillDetail';
@@ -66,6 +68,7 @@ interface NavItem {
   icon: React.ComponentType<{ className?: string }>;
   /** 详情页路径前缀，用于高亮父级菜单 */
   match?: string[];
+  count?: number;
 }
 
 interface NavGroup {
@@ -157,6 +160,7 @@ function NavList({ groups, onNavigate }: { groups: NavGroup[]; onNavigate?: () =
                 >
                   <item.icon className={cn('size-4 shrink-0', active ? 'text-primary' : 'text-muted-foreground')} />
                   {item.label}
+                  {!!item.count && <Badge variant="secondary" className="ml-auto px-1.5 text-xs">{item.count}</Badge>}
                 </Link>
               );
             })}
@@ -203,7 +207,7 @@ function UserMenu({ compact }: { compact?: boolean }) {
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => navigate('/account')}>
-          <Users />用户中心
+          <UserRound />个人中心
         </DropdownMenuItem>
         <DropdownMenuItem
           destructive
@@ -224,7 +228,14 @@ function Shell({ children }: { children: React.ReactNode }) {
   const user = getStoredUser();
   const { pathname } = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const groups = user?.role === 'admin' ? [...NAV_GROUPS, ADMIN_GROUP] : NAV_GROUPS;
+  const approvalCount=useQuery({queryKey:['requests','nav-count'],queryFn:()=>api<ApprovalRequestPage>('GET','/api/requests?scope=inbox&pageSize=1'),refetchInterval:30000});
+  const groups: NavGroup[] = [...NAV_GROUPS.map(group=>({...group,items:group.items.map(item=>item.to==='/requests'?{...item,count:approvalCount.data?.pendingCount}:item)})), {
+    label: '管理',
+    items: [
+      { to: '/account', label: '个人中心', icon: UserRound },
+      ...(user?.role === 'admin' ? ADMIN_GROUP.items : []),
+    ],
+  }];
 
   return (
     <div className="min-h-dvh">
@@ -318,6 +329,7 @@ export function App() {
       <Route path="/folio-comments/:slug" element={<FolioCommentPanelPage />} />
       <Route path="/folio-comment-login" element={<RequireAuth><FolioCommentLoginPage /></RequireAuth>} />
       <Route path="/requests" element={<RequireAuth><RequestsPage /></RequireAuth>} />
+      <Route path="/requests/:id/approve" element={<RequireAuth><RequestApprovePage /></RequireAuth>} />
       <Route path="/help" element={<RequireAuth><HelpPage /></RequireAuth>} />
       <Route path="/help/:id" element={<RequireAuth><HelpDetailPage /></RequireAuth>} />
       <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />

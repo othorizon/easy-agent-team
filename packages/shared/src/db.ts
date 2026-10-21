@@ -40,11 +40,13 @@ export type CreateDbAssignmentRequest = z.infer<typeof createDbAssignmentSchema>
 
 export const dbAssignmentStatusSchema = z.enum([
   'pending',
+  'provisioning',
   'active',
   'failed',
   'rejected',
   'disabled',
   'deleted',
+  'withdrawn',
 ]);
 export type DbAssignmentStatus = z.infer<typeof dbAssignmentStatusSchema>;
 
@@ -68,6 +70,7 @@ export const dbAssignmentInfoSchema = z.object({
   environmentId: z.string().nullable(),
   environmentSlug: z.string().nullable(),
   error: z.string().nullable(),
+  rejectionReason:z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

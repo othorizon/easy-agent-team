@@ -1,3 +1,5 @@
+import { RequestsService } from '../requests/requests.service';
+import { requestListSchema } from '@eat/shared';
 import { OssToolsService } from '../oss/oss-tools.service';
 import { isOssTool } from '@eat/shared';
 import { BadRequestException, Injectable } from '@nestjs/common';
@@ -85,6 +87,7 @@ export class McpToolsService {
     private readonly dbs: DbsService,
     private readonly folioTools: FolioToolsService,
     private readonly ossTools: OssToolsService,
+    private readonly requests: RequestsService,
   ) {}
 
   listTools(): EatToolDef[] {
@@ -97,6 +100,8 @@ export class McpToolsService {
     if (isFolioTool(name)) return this.folioTools.call(user, name, rawArgs);
     const args = (rawArgs ?? {}) as Record<string, unknown>;
     switch (name) {
+      case 'list_requests': return this.requests.list(user,parse(requestListSchema,{...args,scope:'mine'}));
+      case 'get_request_status': return this.requests.get(user,parse(z.object({requestId:z.string().uuid()}),args).requestId);
       // ---------- 平台指南（只有远程接入有：云端客户端没有 eat sync 那条路） ----------
       case 'get_platform_guide': {
         const { path } = parse(z.object({ path: z.string().min(1).max(200).optional() }), args);

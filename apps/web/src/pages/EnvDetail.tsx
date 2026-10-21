@@ -1,3 +1,4 @@
+import { ResourceRequests } from '../components/resource-requests';
 import type {
   EnvironmentInfo,
   GrantInfo,
@@ -230,6 +231,7 @@ export function EnvDetailPage() {
         />
       </div>
 
+      {env && <ResourceRequests type="env" resourceId={env.id}/>}
       <Card>
         <CardContent>
           {variables.isLoading ? (

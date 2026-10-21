@@ -1,5 +1,6 @@
 import {
   boolean,
+  bigserial,
   bigint,
   check,
   index,
@@ -40,6 +41,8 @@ export const userNotifications = pgTable('user_notification', {
   notifyHelp: boolean('notify_help').notNull().default(true),
   notifyReply: boolean('notify_reply').notNull().default(true),
   notifyMention: boolean('notify_mention').notNull().default(true),
+  notifyApprovalRequest: boolean('notify_approval_request').notNull().default(true),
+  notifyApprovalResult: boolean('notify_approval_result').notNull().default(true),
   pendingUrl: text('pending_url'),
   pendingSecretEncrypted: text('pending_secret_encrypted'),
   challengeId: uuid('challenge_id'),
@@ -487,7 +490,8 @@ export const accessRequests = pgTable(
       .references(() => environments.id, { onDelete: 'cascade' }),
     keys: jsonb('keys').$type<string[]>().notNull(),
     reason: text('reason').notNull(),
-    status: text('status', { enum: ['pending', 'approved', 'rejected'] })
+    rejectionReason:text('rejection_reason'),
+    status: text('status', { enum: ['pending', 'approved', 'rejected', 'withdrawn', 'invalid'] })
       .notNull()
       .default('pending'),
     decidedBy: uuid('decided_by').references(() => users.id),
@@ -657,6 +661,7 @@ export const mcpSubscriptions = pgTable(
       .notNull()
       .references(() => mcpConfigs.id, { onDelete: 'cascade' }),
     source: text('source', { enum: ['manual', 'template', 'admin'] }).notNull().default('manual'),
+    rejectionReason:text('rejection_reason'),
     status: text('status', { enum: ['pending', 'approved', 'rejected'] })
       .notNull()
       .default('approved'),
@@ -772,7 +777,8 @@ export const dbAssignments = pgTable(
     dbName: text('db_name').notNull(),
     dbUser: text('db_user').notNull(),
     purpose: text('purpose').notNull(),
-    status: text('status', { enum: ['pending', 'active', 'failed', 'rejected', 'disabled', 'deleted'] })
+    rejectionReason:text('rejection_reason'),
+    status: text('status', { enum: ['pending', 'provisioning', 'active', 'failed', 'rejected', 'disabled', 'deleted', 'withdrawn'] })
       .notNull()
       .default('pending'),
     environmentId: uuid('environment_id').references(() => environments.id, { onDelete: 'set null' }),
@@ -1117,3 +1123,30 @@ export const githubTasks = pgTable('github_task', {
   retryAt: timestamp('retry_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [index('github_task_retry_idx').on(t.state, t.retryAt)]);
+
+/** Unified approval rounds. Snapshots survive resource deletion; SQL triggers keep
+ * source writes and request snapshots in one transaction (0031 migration). */
+export const approvalRequests = pgTable('approval_request', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  type:text('type').notNull(), sourceId:uuid('source_id').notNull(), resourceId:uuid('resource_id').notNull(),
+  requesterId:uuid('requester_id').notNull(),ownerId:uuid('owner_id'),groupKey:text('group_key').notNull(),
+  round:integer('round').notNull(),latest:boolean('latest').notNull().default(true),
+  targetName:text('target_name').notNull(),resourceUrl:text('resource_url').notNull(),reason:text('reason').notNull().default(''),
+  details:jsonb('details').$type<Record<string,unknown>>().notNull().default({}),status:text('status').notNull(),
+  rejectionReason:text('rejection_reason'),closedReason:text('closed_reason'),execution:text('execution'),executionError:text('execution_error'),
+  decidedBy:uuid('decided_by'),createdAt:timestamp('created_at',{withTimezone:true}).notNull().defaultNow(),decidedAt:timestamp('decided_at',{withTimezone:true}),
+  remindedAt:timestamp('reminded_at',{withTimezone:true}),notificationError:text('notification_error'),
+}, t=>[
+  uniqueIndex('approval_request_latest_idx').on(t.groupKey).where(sql`${t.latest}`),
+  uniqueIndex('approval_request_pending_idx').on(t.groupKey).where(sql`${t.status}='pending'`),
+  index('approval_request_source_idx').on(t.type,t.sourceId),
+  index('approval_request_requester_idx').on(t.requesterId,t.createdAt),
+  index('approval_request_status_idx').on(t.status,t.createdAt),
+]);
+export const approvalNotifications=pgTable('approval_notification',{
+  id:bigserial('id',{mode:'number'}).primaryKey(),
+  requestId:uuid('request_id').notNull().references(()=>approvalRequests.id,{onDelete:'cascade'}),
+  event:text('event').notNull(),state:text('state').notNull().default('pending'),attempts:integer('attempts').notNull().default(0),
+  retryAt:timestamp('retry_at',{withTimezone:true}).notNull().defaultNow(),lastError:text('last_error'),
+  sentTo:jsonb('sent_to').$type<string[]>().notNull().default([]),
+},t=>[uniqueIndex('approval_notification_request_id_event_key').on(t.requestId,t.event)]);

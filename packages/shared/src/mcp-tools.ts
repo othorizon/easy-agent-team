@@ -382,6 +382,8 @@ const platformGuideTool: EatToolDef = {
 export function buildEatTools(mode: EatToolMode): EatToolDef[] {
   return [
     ...(mode === 'remote' ? [platformGuideTool] : []),
+    { name:'list_requests',description:'查询我发起的所有类型申请，包含审批状态、驳回原因、开通状态及申请 ID。支持分页；被驳回后先阅读原因，不重复盲目申请。',inputSchema:{type:'object',properties:{type:{type:'string',enum:['env','mcp','db','oss','app']},status:{type:'string',enum:['all','ongoing','pending','approved','rejected','withdrawn','invalid']},page:{type:'integer',minimum:1}}}},
+    { name:'get_request_status',description:'按统一申请 ID 查询完整驳回理由、审批人、处理时间及历史轮次。ID 来自 list_requests。',inputSchema:{type:'object',properties:{requestId:{type:'string'}},required:['requestId']}},
     ...envTools(),
     ...helpTools(mode),
     ...dbTools(),

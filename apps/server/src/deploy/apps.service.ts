@@ -492,8 +492,9 @@ export class AppsService {
 
   // ---------- 部署授权（决策 31） ----------
 
-  async approveDeploy(admin: AuthUser, slug: string): Promise<AppInfo> {
+  async approveDeploy(admin: AuthUser, slug: string, expectedRepoVersion?: number): Promise<AppInfo> {
     const app = await this.getApp(slug);
+    if (expectedRepoVersion !== undefined && app.repoVersion !== expectedRepoVersion) throw new ConflictException('仓库已变化，请刷新后重新审批');
     const [row] = await this.db
       .update(apps)
       .set({ deployApproved: true, approvedRepoVersion: app.repoVersion, approvedBy: admin.id, approvedAt: new Date(), approvalRequestedAt: null })

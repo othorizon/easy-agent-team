@@ -14,7 +14,7 @@ const taskLabels: Record<string, string> = { pending: '等待处理', waiting: '
 const roleLabels: Record<string, string> = { unknown: '待核验', none: '无权限', read: 'Read', triage: 'Triage', write: 'Write', maintain: 'Maintain', admin: 'Admin' };
 const onError = (e: Error) => toast.error(e.message);
 
-export function GithubAccountPanel({ userId }: { userId?: string }) {
+export function GithubAccountPanel({ userId, embedded = false }: { userId?: string; embedded?: boolean }) {
   const cache = useQueryClient();
   const key = ['github-account', userId ?? 'me', getToken()];
   const base = userId ? `/api/users/${userId}/github` : '/api/account/github';
@@ -52,7 +52,7 @@ export function GithubAccountPanel({ userId }: { userId?: string }) {
       {d.checkedAt && <p className="text-xs text-muted-foreground">最近核验：{new Date(d.checkedAt).toLocaleString()}</p>}
     </div>;
   })();
-  return userId ? content : <Card><CardHeader><CardTitle>GitHub 账户</CardTitle></CardHeader><CardContent>{content}</CardContent></Card>;
+  return userId || embedded ? content : <Card><CardHeader><CardTitle>GitHub 账户</CardTitle></CardHeader><CardContent>{content}</CardContent></Card>;
 }
 export function useGithubApp(slug: string) {
   return useQuery({ queryKey: ['github-app', slug, getToken()], queryFn: () => api<GithubAppInfo>('GET', `/api/apps/${slug}/github`), refetchInterval: 10000 });

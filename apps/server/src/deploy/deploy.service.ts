@@ -119,7 +119,7 @@ export class DeployService {
       });
       throw new ForbiddenException({
         error: 'DEPLOY_NOT_APPROVED',
-        message: `应用 ${slug} 尚未获管理员授权部署：请联系管理员在控制台「应用」页点「授权部署」（只需一次，之后不再拦）`,
+        message: `应用 ${slug} 尚未获管理员授权部署：请在「权限申请」查看进度，由管理员批准当前仓库；CLI 可用 eat requests list --type app 查询原因`,
       });
     }
     const client = await this.dokploy.client();

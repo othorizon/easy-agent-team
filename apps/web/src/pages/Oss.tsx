@@ -1,6 +1,7 @@
+import { ResourceRequests } from '../components/resource-requests';
 import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useParams } from 'react-router-dom';
+import { Link, Navigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   OSS_CREDENTIAL_NOTE,
@@ -41,6 +42,7 @@ import { useQueryParams } from '../lib/use-query-params';
 
 const statuses = {
   pending: '待审批',
+  withdrawn: '已撤回',
   provisioning: '开通中',
   active: '可用',
   failed: '开通失败',
@@ -167,117 +169,35 @@ function SpaceForm({
     </Dialog>
   );
 }
-function RejectSpaceDialog({
-  space,
-  close,
-}: {
-  space: OssSpaceInfo;
-  close: () => void;
-}) {
-  const refresh = useRefresh();
-  const [reason, setReason] = useState('');
-  const reject = useMutation({
-    mutationFn: () =>
-      api('POST', `/api/oss/spaces/${space.id}/reject`, { reason: reason.trim() }),
-    onSuccess: async () => {
-      await refresh();
-      toast.success('已拒绝空间申请');
-      close();
-    },
-  });
-  return (
-    <Dialog open onOpenChange={(open) => !open && !reject.isPending && close()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>拒绝空间申请</DialogTitle>
-          <DialogDescription className="break-words">
-            拒绝「{space.name}」的申请，请填写原因，方便申请人了解。
-          </DialogDescription>
-        </DialogHeader>
-        <form
-          className="space-y-4"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (reason.trim() && !reject.isPending) reject.mutate();
-          }}
-        >
-          <label className="block space-y-2 text-sm">
-            拒绝原因
-            <Textarea
-              autoFocus
-              value={reason}
-              required
-              maxLength={2000}
-              disabled={reject.isPending}
-              onChange={(e) => setReason(e.target.value)}
-            />
-          </label>
-          {reject.error && (
-            <p role="alert" className="text-sm text-destructive">
-              {reject.error.message}
-            </p>
-          )}
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="outline" disabled={reject.isPending} onClick={close}>
-              取消
-            </Button>
-            <Button
-              type="submit"
-              variant="destructive"
-              loading={reject.isPending}
-              disabled={!reason.trim()}
-            >
-              确认拒绝
-            </Button>
-          </div>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
 export function OssPage() {
   const admin = getStoredUser()?.role === 'admin',
     cap = useCapability(),
     refresh = useRefresh();
   const [params, setParams] = useQueryParams({ tab: 'mine' });
-  const tab = admin && ['all', 'approvals'].includes(params.tab) ? params.tab : 'mine';
-  const all = tab !== 'mine',
-    approvals = tab === 'approvals';
-  const [requesting, setRequesting] = useState(false),
-    [rejecting, setRejecting] = useState<OssSpaceInfo | null>(null);
+  const tab = admin && params.tab === 'all' ? 'all' : 'mine';
+  const [requesting, setRequesting] = useState(false);
   const spaces = useQuery({
-    queryKey: ['oss', 'spaces', all],
-    queryFn: () =>
-      api<OssSpaceInfo[]>('GET', `/api/oss/spaces${all ? '?all=true' : ''}`),
+    queryKey: ['oss', 'spaces', tab === 'all'],
+    queryFn: () => api<OssSpaceInfo[]>('GET', `/api/oss/spaces${tab === 'all' ? '?all=true' : ''}`),
     refetchInterval: 5000,
   });
-  const rows = approvals
-    ? spaces.data?.filter((space) => space.status === 'pending')
-    : spaces.data;
-  const approve = useMutation({
-    mutationFn: (id: string) => api('POST', `/api/oss/spaces/${id}/approve`),
-    onSuccess: async () => {
-      await refresh();
-      toast.success('已批准，正在开通空间');
-    },
-    onError: (e) => toast.error(e.message),
-  });
+  if (params.tab === 'approvals') return <Navigate to="/requests?type=oss" replace />;
   return (
     <div className="space-y-5">
       <PageHeader
         title="OSS 对象存储"
-        description={approvals
-          ? '审核存储空间申请，批准后自动开通；拒绝时需填写原因。'
-          : '申请专属存储目录，通过 OSS SDK、CLI 或可用域名访问文件。每位成员的多个空间共用一组 AK/SK。'}
+        description="申请专属存储目录，通过 OSS SDK、CLI 或可用域名访问文件。每位成员的多个空间共用一组 AK/SK。"
         actions={
-          !approvals && (
-            <Button
-              disabled={!cap.data?.enabled}
-              onClick={() => setRequesting(true)}
-            >
+          <>
+            {admin && (
+              <Button variant="outline" asChild>
+                <Link to="/requests?type=oss">空间申请</Link>
+              </Button>
+            )}
+            <Button disabled={!cap.data?.enabled} onClick={() => setRequesting(true)}>
               申请空间
             </Button>
-          )
+          </>
         }
       />
       {cap.error ? (
@@ -285,133 +205,61 @@ export function OssPage() {
       ) : (
         <Notice enabled={!!cap.data?.enabled} />
       )}
-      <Tabs value={tab} onValueChange={(value) => setParams({ tab: value })}>
-        {admin && (
+      {admin && (
+        <Tabs value={tab} onValueChange={(v) => setParams({ tab: v })}>
           <TabsList>
             <TabsTrigger value="mine">我的空间</TabsTrigger>
             <TabsTrigger value="all">全部空间</TabsTrigger>
-            <TabsTrigger value="approvals">审批</TabsTrigger>
           </TabsList>
-        )}
-        <TabsContent value={tab} className={admin ? 'mt-4' : undefined}>
-          <Card>
-            <CardContent>
-              {spaces.isError ? (
-                <SettingsLoadError
-                  error={spaces.error}
-                  retry={() => void spaces.refetch()}
-                />
-              ) : !rows ? (
-                <SettingsLoading />
-              ) : !rows.length ? (
-                <Empty
-                  className="py-12"
-                  text={approvals ? '没有待审批的空间申请' : all ? '暂无空间' : '还没有存储空间，启用后可提交申请。'}
-                />
-              ) : (
-                <Table className="min-w-[640px]">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>空间</TableHead>
-                      {all && <TableHead>申请人</TableHead>}
-                      {approvals ? (
-                        <TableHead>申请时间</TableHead>
-                      ) : (
-                        <>
-                          <TableHead>状态</TableHead>
-                          <TableHead>公开读</TableHead>
-                        </>
-                      )}
-                      <TableHead className="w-40 text-right">操作</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {rows.map((s) => (
-                      <TableRow key={s.id}>
-                        <TableCell className="max-w-72">
-                          {approvals ? (
-                            <span className="break-words font-medium">{s.name}</span>
-                          ) : (
-                            <Link
-                              className="font-medium text-primary hover:underline"
-                              to={`/oss/${s.id}`}
-                            >
-                              {s.name}
-                            </Link>
-                          )}
-                          <p className={approvals
-                            ? 'mt-1 whitespace-pre-wrap break-words text-sm text-muted-foreground'
-                            : 'mt-1 truncate text-xs text-muted-foreground'}>
-                            {s.purpose}
-                          </p>
-                        </TableCell>
-                        {all && <TableCell>{s.ownerName}</TableCell>}
-                        {approvals ? (
-                          <TableCell className="whitespace-nowrap text-muted-foreground">
-                            {formatDateTime(s.createdAt)}
-                          </TableCell>
-                        ) : (
-                          <>
-                            <TableCell>
-                              <Badge variant={s.status === 'pending' ? 'warning' : 'default'}>
-                                {statuses[s.status]}
-                              </Badge>
-                              {s.lastError && (
-                                <p className="mt-1 text-xs text-destructive">
-                                  操作失败，可在详情重试
-                                </p>
-                              )}
-                            </TableCell>
-                            <TableCell>{s.publicRead ? '已开启' : '未开启'}</TableCell>
-                          </>
-                        )}
-                        <TableCell className="text-right">
-                          {approvals ? (
-                            <div className="flex justify-end gap-2">
-                              <Button
-                                size="sm"
-                                className="h-8 min-w-16"
-                                loading={approve.isPending && approve.variables === s.id}
-                                disabled={!cap.data?.enabled || approve.isPending || s.operationPending}
-                                onClick={() => approve.mutate(s.id)}
-                              >
-                                批准
-                              </Button>
-                              <Button
-                                variant="outline-destructive"
-                                size="sm"
-                                className="h-8 min-w-16"
-                                disabled={!cap.data?.enabled || approve.isPending || s.operationPending}
-                                onClick={() => setRejecting(s)}
-                              >
-                                拒绝
-                              </Button>
-                            </div>
-                          ) : (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-8 min-w-16"
-                              asChild
-                            >
-                              <Link to={`/oss/${s.id}`}>
-                                详情
-                              </Link>
-                            </Button>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
-      {rejecting && (
-        <RejectSpaceDialog space={rejecting} close={() => setRejecting(null)} />
+        </Tabs>
       )}
+      <Card>
+        <CardContent>
+          {spaces.isError ? (
+            <SettingsLoadError error={spaces.error} retry={() => void spaces.refetch()} />
+          ) : !spaces.data ? (
+            <SettingsLoading />
+          ) : !spaces.data.length ? (
+            <Empty text="暂无存储空间" />
+          ) : (
+            <Table className="min-w-[640px]">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>空间</TableHead>
+                  {tab === 'all' && <TableHead>申请人</TableHead>}
+                  <TableHead>状态</TableHead>
+                  <TableHead>公开读</TableHead>
+                  <TableHead>操作</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {spaces.data.map((s) => (
+                  <TableRow key={s.id}>
+                    <TableCell className="max-w-72">
+                      <Link className="font-medium text-primary hover:underline" to={`/oss/${s.id}`}>
+                        {s.name}
+                      </Link>
+                      <p className="truncate text-xs text-muted-foreground">{s.purpose}</p>
+                    </TableCell>
+                    {tab === 'all' && <TableCell>{s.ownerName}</TableCell>}
+                    <TableCell>
+                      <Badge variant={s.status === 'pending' ? 'warning' : 'secondary'}>{statuses[s.status]}</Badge>
+                      {s.lastError && <p className="mt-1 text-xs text-destructive">操作失败，可在详情重试</p>}
+                      {s.rejectionReason && <p className="mt-1 text-xs text-muted-foreground">{s.rejectionReason}</p>}
+                    </TableCell>
+                    <TableCell>{s.publicRead ? '已开启' : '未开启'}</TableCell>
+                    <TableCell>
+                      <Button size="sm" variant="outline" asChild>
+                        <Link to={`/oss/${s.id}`}>详情</Link>
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
       {requesting && (
         <SpaceForm
           title="申请存储空间"
@@ -675,6 +523,7 @@ export function OssDetailPage() {
               RAM 凭证状态同步中，失败后会自动重试。{s.credentialSyncError}
             </p>
           )}
+          <ResourceRequests type="oss" sourceId={s.id}/>
           {s.rejectionReason && (
             <p className="text-sm">拒绝原因：{s.rejectionReason}</p>
           )}
@@ -687,7 +536,7 @@ export function OssDetailPage() {
             <div className="flex flex-wrap gap-2">
               {s.status === 'pending' && (
                 <Button variant="outline" asChild>
-                  <Link to="/oss?tab=approvals">前往审批</Link>
+                  <Link to={`/requests?type=oss&sourceId=${s.id}`}>前往审批</Link>
                 </Button>
               )}
               {s.lastError && (

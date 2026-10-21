@@ -61,6 +61,7 @@ async function fixture(width) {
     else if (path === '/api/account/github') result = account;
     else if (path === '/api/account/github/accept') { account.orgState = 'active'; account.task = null; result = { ok: true }; }
     else if (path === '/api/account/github/refresh') result = { ok: true };
+    else if (path === '/api/requests') result = { items: [], total: 0, pendingCount: 0, page: 1, pageSize: 20 };
     else if (path === '/api/users') result = [user, { ...user, id: memberId, name: '应用成员', role: 'member' }];
     else if (/^\/api\/users\/[^/]+\/github$/.test(path)) result = method === 'GET' ? account : { ok: true };
     else if (path === '/api/apps') result = [appInfo];
@@ -106,7 +107,7 @@ async function shot(page, name) {
 try {
   for (const width of [1280, 390]) {
     const f = await fixture(width);
-    await f.page.goto(`${base}/account`);
+    await f.page.goto(`${base}/account?section=github`);
     await f.page.getByText('邀请待接受', { exact: true }).waitFor();
     await shot(f.page, `account-pending-${width}`);
     await f.page.getByRole('button', { name: '同意邀请', exact: true }).click();

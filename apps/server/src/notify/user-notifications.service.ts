@@ -30,6 +30,8 @@ export class UserNotificationsService {
       notifyHelp: row?.notifyHelp ?? true,
       notifyReply: row?.notifyReply ?? true,
       notifyMention: row?.notifyMention ?? true,
+      notifyApprovalRequest: row?.notifyApprovalRequest ?? true,
+      notifyApprovalResult: row?.notifyApprovalResult ?? true,
     };
   }
 

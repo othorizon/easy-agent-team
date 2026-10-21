@@ -92,3 +92,11 @@ export async function enablePostgres(conn: AdminConn, dbUser: string): Promise<v
 }
 
 // 平台不做物理删库（决策 13）：删除分配仅记录级，DROP DATABASE/ROLE 由管理员在实例上手动执行。
+
+/** Recovery never adopts or overwrites a database/role of unknown provenance. */
+export async function assertProvisionAbsent(conn: AdminConn, dbName: string, dbUser: string): Promise<void> {
+  await withAdmin(conn, 'postgres', async c => {
+    const result=await c.query('select exists(select 1 from pg_database where datname=$1) as db, exists(select 1 from pg_roles where rolname=$2) as role',[dbName,dbUser]);
+    if(result.rows[0].db || result.rows[0].role) throw new Error('实例上已存在同名库或账号。请管理员核对并处理未完成的资源后重试，平台不会覆盖已有资源。');
+  });
+}

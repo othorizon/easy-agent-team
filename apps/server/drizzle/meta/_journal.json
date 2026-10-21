@@ -218,6 +218,20 @@
       "when": 1792627200000,
       "tag": "0030_github_setup",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1792713600000,
+      "tag": "0031_unified_requests",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792800000000,
+      "tag": "0032_approval_notification_preferences",
+      "breakpoints": true
     }
   ]
 }

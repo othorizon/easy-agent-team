@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import type { DbAssignmentInfo, DbAssignmentStatus } from '@eat/shared';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -8,7 +9,9 @@ import { Button } from '../components/ui/button';
 
 /** 分配状态徽标：清单、详情页、凭证环境的来源行三处共用一套口径 */
 export const DB_STATUS_BADGE: Record<DbAssignmentStatus, JSX.Element> = {
+  withdrawn: <Badge variant="outline">已撤回</Badge>,
   pending: <Badge variant="warning">待批准</Badge>,
+  provisioning: <Badge variant="warning">开通中</Badge>,
   active: <Badge variant="success">可用</Badge>,
   failed: <Badge variant="destructive">执行失败</Badge>,
   rejected: <Badge variant="outline">已驳回</Badge>,
@@ -16,7 +19,7 @@ export const DB_STATUS_BADGE: Record<DbAssignmentStatus, JSX.Element> = {
   deleted: <Badge variant="outline">已删除</Badge>,
 };
 
-export type AssignmentAction = 'approve' | 'reject' | 'disable' | 'enable' | 'delete';
+export type AssignmentAction = 'approve' | 'reject' | 'retry' | 'disable' | 'enable' | 'delete';
 
 /** 管理员对分配记录的操作：清单页与详情页共用同一套调用、提示与缓存失效 */
 export function useAssignmentAction(onDone?: (action: AssignmentAction, result: DbAssignmentInfo) => void) {
@@ -53,16 +56,8 @@ export function AssignmentActions({
 }) {
   return (
     <>
-      {row.status === 'pending' && (
-        <>
-          <Button size={size} onClick={() => onAct('approve')} loading={pending}>
-            批准并建库
-          </Button>
-          <Button size={size} variant="outline" onClick={() => onAct('reject')} disabled={pending}>
-            驳回
-          </Button>
-        </>
-      )}
+      {row.status === 'pending' && <Button size={size} variant="outline" asChild><Link to={`/requests?type=db&sourceId=${row.id}`}>前往审批</Link></Button>}
+      {row.status === 'failed' && <Confirm title="重试数据库开通？" description="沿用已批准的申请。平台会先检查同名库和账号；如已存在，需要管理员先核对处理，不会自动覆盖。" confirmText="重试开通" onConfirm={()=>onAct('retry')}><Button size={size} variant="outline" disabled={pending}>重试开通</Button></Confirm>}
       {row.status === 'active' && (
         <Button size={size} variant="outline" onClick={() => onAct('disable')} disabled={pending}>
           禁用

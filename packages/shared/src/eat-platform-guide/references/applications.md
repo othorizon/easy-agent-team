@@ -6,7 +6,7 @@
 
 **域名**：管理员配置了自动域名后缀时，创建结果里会带 `domain` / `url`（`<slug>.<后缀>`，`eat app show` / `list_apps` 也能看到），把访问地址告诉用户；结果里 `url` 为 null 说明平台没开自动域名，要域名找管理员。dockerfile 应用用 `--port`（MCP: `port`，默认 3000）声明容器监听的端口——域名流量转发到它，填错了页面打不开；static 固定转发到 80，不用填。
 
-**首次部署需要管理员授权一次**：新建的应用 `deployApproved=false`，部署会返回 `DEPLOY_NOT_APPROVED`——告诉用户找管理员在控制台「应用」页点「授权部署」，**不要反复重试**；授权一次后永久有效。
+**首次部署需要管理员授权一次**：新建的应用 `deployApproved=false`，部署会返回 `DEPLOY_NOT_APPROVED`——创建时已自动提交审批，告诉用户由管理员在控制台「权限申请」中批准，**不要反复重试**。用 `eat requests list --type app` 查询进度和驳回原因。授权绑定当前仓库，更换仓库重新审批，更换分支无需重审；撤销后由应用 owner 显式重新申请。
 
 **应用 env**：`eat app env pull <slug>` / `eat app env push <slug> --file .env`（MCP: `get_app_env` / `set_app_env`）读写应用的运行时 env；加 `--build`（MCP: `target=build`）是构建时变量（Dockerfile 里以 ARG 取用）。**推送是整体覆盖不是合并**：先 pull 再改再 push，否则没带上的变量会被删掉。pull 遇到不是 eat 写的同名文件时会中止，按提示用 `--out` / `--print`，别无脑 `--force`；按需读取的配置与权限申请见[环境变量流程](environment.md)。值可能是密钥，只用于当前任务、不写进代码或对话。
 

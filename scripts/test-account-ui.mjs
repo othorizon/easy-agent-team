@@ -4,12 +4,11 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { tmpdir } from 'node:os';
 import { chromium } from 'playwright-core';
 import { updateAccountSchema, notificationPreferencesSchema, patchNotificationPreferencesSchema, registrationSettingsSchema, updateUserProfileSchema, sendWebhookCodeSchema } from '../packages/shared/dist/index.js';
 
 const dist = resolve('apps/web/dist');
-const shots = join(tmpdir(), 'eat-account-ui');
+const shots = process.env.EAT_UI_SHOTS || '/workspace/artifacts/eat-account-notifications';
 mkdirSync(shots, { recursive: true });
 const server = createServer((req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname;
@@ -26,7 +25,7 @@ const errors = [];
 async function fixture({ requireBio = false, requireNotification = false, role = 'member', width = 1280, bio = '' } = {}) {
   const context = await browser.newContext({ viewport: { width, height: 950 } });
   const user = { id: '00000000-0000-4000-8000-000000000001', name: '测试用户', email: 'member@test.dev', role, bio, allowHelp: true };
-  const notification = { webhookUrl: '', hasWebhookSecret: false, verified: false, notifyHelp: true, notifyReply: true, notifyMention: true };
+  const notification = { webhookUrl: '', hasWebhookSecret: false, verified: false, notifyHelp: true, notifyReply: true, notifyMention: true, notifyApprovalRequest: true, notifyApprovalResult: true };
   const settings = { enabled: true, allowedEmailSuffixes: [], requireBio, requireNotification };
   const writes = [];
   let sentUrl = '';
@@ -58,6 +57,7 @@ async function fixture({ requireBio = false, requireNotification = false, role =
       if (method === 'PUT') Object.assign(settings, registrationSettingsSchema.parse(body));
       result = settings;
     } else if (path === '/api/account/github' || /^\/api\/users\/[^/]+\/github$/.test(path)) result = { enabled: false, organization: '', linked: false, login: null, needsAuthorization: false, orgState: 'unknown', orgRole: null, checkedAt: null, error: '', task: null };
+    else if (path === '/api/requests') result = { items: [], total: 0, pendingCount: 0, page: 1, pageSize: 20 };
     else if (path === '/api/users') result = [{ ...user, status: 'active' }];
     else if (path.endsWith('/profile')) { Object.assign(user, updateUserProfileSchema.parse(body)); result = { id: user.id, name: user.name, bio: user.bio }; }
     else if (path === '/api/helpers') result = { helpers: [], skillAuthors: [] };
@@ -93,19 +93,48 @@ try {
     await f.page.getByRole('button', { name: '保存个人资料' }).click();
     await f.page.getByText('个人资料已保存', { exact: true }).waitFor();
     assert.equal(f.user.name, '新姓名');
+    await screenshot(f.page, `profile-${width}`);
+    const section = async (label, id) => {
+      if (width >= 900) await f.page.getByRole('navigation', { name: '个人中心分类' }).getByRole('link', { name: label }).click();
+      else { await f.page.locator('#account-category').click(); await f.page.getByRole('option', { name: label, exact: true }).click(); }
+      await f.page.locator(`[data-account-panel=${id}]:not([hidden])`).waitFor();
+    };
+    await f.page.locator('#account-name').fill('尚未保存的姓名');
+    await section('通知设置', 'notifications');
+    await section('个人资料', 'profile');
+    assert.equal(await f.page.locator('#account-name').inputValue(), '尚未保存的姓名');
+    await f.page.locator('#account-name').fill(f.user.name);
+    await section('通知设置', 'notifications');
+    assert.equal(await f.page.getByRole('switch', { name: '待我审批的申请', exact: true }).getAttribute('aria-checked'), 'true');
+    assert.equal(await f.page.getByRole('switch', { name: '我的申请处理结果', exact: true }).getAttribute('aria-checked'), 'true');
+    await screenshot(f.page, `notifications-unbound-${width}`);
     await verify(f.page);
-    await f.page.getByText('已验证', { exact: true }).waitFor();
-    await f.page.getByRole('switch', { name: '接收 Folio 评论 @ 通知', exact: true }).click();
+    await f.page.getByText('飞书已连接', { exact: true }).waitFor();
+    await screenshot(f.page, `notifications-default-${width}`);
+    await f.page.getByRole('switch', { name: 'Folio 评论提及', exact: true }).click();
+    await f.page.getByRole('switch', { name: '待我审批的申请', exact: true }).click();
+    await f.page.getByRole('switch', { name: '我的申请处理结果', exact: true }).click();
     await f.page.getByRole('button', { name: '保存通知偏好' }).click();
     await f.page.getByText('通知偏好已保存', { exact: true }).waitFor();
     assert.equal(f.notification.notifyMention, false);
-    await screenshot(f.page, `account-${width}`);
+    assert.equal(f.notification.notifyApprovalRequest, false);
+    assert.equal(f.notification.notifyApprovalResult, false);
+    await f.page.reload();
+    await f.page.getByText('飞书已连接', { exact: true }).waitFor();
+    assert.equal(await f.page.getByRole('switch', { name: '待我审批的申请', exact: true }).getAttribute('aria-checked'), 'false');
+    await screenshot(f.page, `notifications-${width}`);
+    await section('GitHub 账户', 'github');
+    await screenshot(f.page, `github-${width}`);
+    await section('账户安全', 'security');
+    await screenshot(f.page, `security-${width}`);
     await f.page.locator('#old-password').fill('oldpassword');
     await f.page.locator('#new-password').fill('newpassword123');
     await f.page.locator('#confirm-password').fill('different123');
     await f.page.getByRole('button', { name: '修改密码', exact: true }).click();
     await f.page.getByText('两次输入的新密码不一致', { exact: true }).waitFor();
     assert.equal(f.writes.filter((r) => r.path.endsWith('/password')).length, 0);
+    await f.page.goto(`${base}/account?github=linked`);
+    await f.page.locator('[data-account-panel=github]:not([hidden])').waitFor();
     await f.context.close();
   }
   for (const [requireBio, requireNotification] of [[true, false], [false, true], [true, true]]) {
