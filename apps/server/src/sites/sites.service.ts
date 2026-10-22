@@ -23,7 +23,7 @@ import {
   type SiteVersion,
   type SitePublishResult,
   type SiteShareLink,
-  type UpdateSite,
+  type ConsoleUpdateSite,
 } from '@eat/shared';
 import type { AuthUser } from '../auth/auth.decorators';
 import { DB, type Db } from '../db/db.module';
@@ -68,6 +68,7 @@ export class SitesService {
       ownerId: site.ownerId,
       access: site.access,
       spa: site.spa,
+      commentsEnabled: site.commentsEnabled,
       currentVersionId: site.currentVersionId,
       url: await this.runtime.url(site.slug),
       canManage: this.canManage(site, user),
@@ -109,7 +110,7 @@ export class SitesService {
       throw e;
     }
   }
-  async update(user: AuthUser, slug: string, dto: UpdateSite) {
+  async update(user: AuthUser, slug: string, dto: ConsoleUpdateSite) {
     const site = await this.get(slug);
     this.manage(site, user);
     const password = dto.password ?? ((dto.access ?? site.access) === 'password' && !site.passwordHash
@@ -121,6 +122,7 @@ export class SitesService {
         ...(dto.name !== undefined ? { name: dto.name } : {}),
         ...(dto.description !== undefined ? { description: dto.description } : {}),
         ...(dto.spa !== undefined ? { spa: dto.spa } : {}),
+        ...(dto.commentsEnabled !== undefined ? { commentsEnabled: dto.commentsEnabled } : {}),
         ...(dto.access !== undefined ? { access: dto.access } : {}),
         ...(passwordHash ? { passwordHash } : {}),
         ...((dto.access !== undefined && dto.access !== site.access) || passwordHash
@@ -135,7 +137,11 @@ export class SitesService {
       action: 'site.updated',
       targetType: 'site',
       targetId: site.id,
-      meta: { access: row.access, passwordChanged: !!passwordHash },
+      meta: {
+        access: row.access,
+        passwordChanged: !!passwordHash,
+        ...(row.commentsEnabled !== site.commentsEnabled ? { commentsEnabled: row.commentsEnabled } : {}),
+      },
     });
     return this.info(row, user);
   }

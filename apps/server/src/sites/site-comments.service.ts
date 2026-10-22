@@ -108,6 +108,11 @@ export class SiteCommentsService {
       })),
     );
   }
+  /** 评论关闭后只拦新增；已有讨论仍可查看、解决与删除。 */
+  private assertCommentsEnabled(site: SiteRow) {
+    if (!site.commentsEnabled)
+      throw new ForbiddenException({ error: 'SITE_COMMENTS_DISABLED', message: '该 Folio 已关闭评论' });
+  }
   private async threadUrl(site: SiteRow, version: number, page: string, threadId: string) {
     const url = new URL(page, await this.runtime.url(site.slug, version));
     url.searchParams.set('eat_thread', threadId);
@@ -126,6 +131,7 @@ export class SiteCommentsService {
   async create(user: AuthUser, slug: string, dto: CreateSiteThread, proof?: string) {
     const site = await this.sites.get(slug);
     this.sites.assertView(site, user, proof);
+    this.assertCommentsEnabled(site);
     const version = await this.sites.version(site, dto.versionId);
     const mentions = await this.mentions(dto.mentions);
     const { thread, comment } = await this.db.transaction(async (tx) => {
@@ -164,6 +170,7 @@ export class SiteCommentsService {
   async reply(user: AuthUser, slug: string, threadId: string, dto: SiteCommentBody, proof?: string) {
     const site = await this.sites.get(slug);
     this.sites.assertView(site, user, proof);
+    this.assertCommentsEnabled(site);
     const thread = await this.thread(site, threadId);
     const version = await this.sites.version(site, dto.versionId);
     const mentions = await this.mentions(dto.mentions);

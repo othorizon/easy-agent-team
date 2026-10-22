@@ -19,6 +19,7 @@ import {
   FolderUp,
   History,
   MessageSquare,
+  MessageSquareOff,
   Settings,
   Trash2,
   Upload,
@@ -286,6 +287,19 @@ export function FolioDetailPage() {
           {s.currentVersionId ? (
             <Card className="folio-discussion-card">
               <CardContent className="folio-discussion-body">
+                {!s.commentsEnabled && (
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/40 p-3 text-sm">
+                    <span className="flex items-center gap-2">
+                      <MessageSquareOff className="size-4 text-muted-foreground" />
+                      评论已关闭：Folio 页面不显示评论入口，已有评论仅供查看。
+                    </span>
+                    {s.canManage && (
+                      <Button variant="outline" onClick={() => changeTab('settings')}>
+                        前往设置
+                      </Button>
+                    )}
+                  </div>
+                )}
                 {commentVersion && (
                   <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/40 p-3 text-sm">
                     <span>正在查看发布记录 v{commentVersion.number} 的评论</span>
@@ -301,6 +315,7 @@ export function FolioDetailPage() {
                   initialProof={proof}
                   filterVersionId={commentVersion?.id}
                   siteUrl={s.url}
+                  commentsEnabled={s.commentsEnabled}
                   onAccessVerified={setProof}
                 />
               </CardContent>
@@ -676,6 +691,7 @@ function FolioSettingsForm({ folio: s, onSaved }: { folio: SiteInfo; onSaved: ()
                 access,
                 password: access === 'password' ? d.get('password') || undefined : undefined,
                 spa: d.get('spa') === 'on',
+                commentsEnabled: d.get('commentsEnabled') === 'on',
               });
               onSaved();
               toast.success('设置已保存');
@@ -736,6 +752,15 @@ function FolioSettingsForm({ folio: s, onSaved }: { folio: SiteInfo; onSaved: ()
               </label>
             )}
           </div>
+          <label className="folio-checkbox folio-routing">
+            <input className="mt-1" type="checkbox" name="commentsEnabled" defaultChecked={s.commentsEnabled} />
+            <span>
+              允许评论
+              <span className="mt-1 block text-xs text-muted-foreground">
+                关闭后，Folio 页面不再显示评论入口，也不能发表新评论或回复；已有评论会保留，重新开启即可恢复。
+              </span>
+            </span>
+          </label>
           <label className="folio-checkbox folio-routing">
             <input className="mt-1" type="checkbox" name="spa" defaultChecked={s.spa} />
             <span>

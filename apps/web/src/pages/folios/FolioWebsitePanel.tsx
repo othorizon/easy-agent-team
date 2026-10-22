@@ -4,6 +4,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  EyeOff,
   Copy,
   ExternalLink,
   Info,
@@ -296,6 +297,7 @@ export function FolioWebsitePanel({
   onDelete,
   onRefresh,
   onClose,
+  onHide,
   onLogin,
 }: {
   threads: SiteThread[];
@@ -320,6 +322,8 @@ export function FolioWebsitePanel({
   onDelete: (comment: SiteComment) => void;
   onRefresh: () => void;
   onClose: () => void;
+  /** 本次浏览隐藏评论入口，刷新页面后恢复。 */
+  onHide: () => void;
   onLogin: () => void;
 }) {
   const [activeId, setActiveId] = useState('');
@@ -494,6 +498,14 @@ export function FolioWebsitePanel({
               <DropdownMenuItem disabled={loading} onSelect={onRefresh}>
                 <RefreshCw />
                 刷新评论
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={onHide}>
+                <EyeOff />
+                <span>
+                  暂时隐藏评论
+                  <span className="folio-website-menu-note">刷新页面后恢复</span>
+                </span>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

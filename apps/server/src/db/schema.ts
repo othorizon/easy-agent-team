@@ -182,6 +182,7 @@ export const sites = pgTable('site', {
   passwordHash: text('password_hash'),
   accessRevision: integer('access_revision').notNull().default(1),
   spa: boolean('spa').notNull().default(false),
+  commentsEnabled: boolean('comments_enabled').notNull().default(true),
   currentVersionId: uuid('current_version_id'),
   nextVersion: integer('next_version').notNull().default(1),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

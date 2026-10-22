@@ -92,7 +92,8 @@ describe('CDN additive migration', () => {
     expect((await pool.query('select * from site_setting')).rows).toEqual(settings);
     expect((await pool.query('select * from site_cdn')).rows)
       .toEqual(cdn.map((r) => ({ ...r, verify_origin_certificate: true })));
-    expect((await pool.query('select * from site')).rows).toEqual(sites);
+    // 0033 给存量 Folio 补上 comments_enabled，默认开启评论。
+    expect((await pool.query('select * from site')).rows).toEqual(sites.map((r) => ({ ...r, comments_enabled: true })));
     expect((await pool.query('select * from site_cdn_purge')).rows).toEqual([]);
     await pool.query('update site set current_version_id = gen_random_uuid() where id = $1', [site]);
     expect((await pool.query('select * from site_cdn_purge')).rows).toEqual([]);

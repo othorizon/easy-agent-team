@@ -20,12 +20,12 @@ import {
   prepareSiteUploadSchema, type PrepareSiteUpload,
   siteCommentBodySchema,
   siteThreadQuerySchema,
-  updateSiteSchema,
+  consoleUpdateSiteSchema,
   type CreateSite,
   type CreateSiteThread,
   type PublishSite,
   type SiteCommentBody,
-  type UpdateSite,
+  type ConsoleUpdateSite,
 } from '@eat/shared';
 import { z } from 'zod';
 import type { FastifyRequest, FastifyReply } from 'fastify';
@@ -88,7 +88,7 @@ export class SitesController {
   @Patch(':slug') update(
     @CurrentUser() user: AuthUser,
     @Param('slug') slug: string,
-    @Body(new ZodValidationPipe(updateSiteSchema)) body: UpdateSite,
+    @Body(new ZodValidationPipe(consoleUpdateSiteSchema)) body: ConsoleUpdateSite,
   ) {
     return this.sites.update(user, slug, body);
   }

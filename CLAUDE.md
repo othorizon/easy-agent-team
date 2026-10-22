@@ -89,4 +89,6 @@ Folio 增量上传（决策 72）：CLI/Web 共用清单→OSS V4 二进制 PUT�
 
 Folio 只保留新布局（决策 73）：删除旧目录/本地历史存储和无调用的旧 put/get/discard/kind 方法，网关仅按 blobs-v1 清单 hash 读取。0019 迁移拒绝未处理的旧布局记录；通过后增加布局约束、调整默认值、将 site_version.storage 固定为 oss（保留列支持上一版新协议服务回滚），已有新版本、评论与回滚保留。MCP 内联输入及 50 MiB 上限不变，仍走新上传会话和封存。CLI/shared/指南契约未变，版本保持 CLI 0.8.0 / 指南 34。
 
+Folio 评论开关（决策 84）：`site.comments_enabled`（迁移 0033，默认开），只在控制台设置页可改——REST PATCH 用 `consoleUpdateSiteSchema`，MCP `update_folio` / CLI 仍是 `updateSiteSchema`（会剥掉该字段，别把字段加进 `updateSiteSchema`，否则 MCP 自动获得）。关闭后网关不注入 embed.js、新评论与回复回 403 `SITE_COMMENTS_DISABLED`，已有讨论保留。网页控件可「暂时隐藏评论」（悬停入口的 ×，或面板 ⋯ 菜单），只存内存、刷新即恢复。手写迁移时注意 `_journal.json` 的 `when` 必须大于上一条，否则 migrator 会跳过。不涉及 CLI 行为，版本号不动。
+
 控制台组件层补齐（决策 83，不换组件库）：悬停提示一律用 `components/ui/tooltip.tsx` 的 `Tip`（别再写原生 `title=`；它补了触屏轻点切换，禁用按钮外包 `<span tabIndex={0}>`）；表格一律用 `components/data-table.tsx` 的 `DataTable`（TanStack Table，列宽 / 截断 / 窄屏隐藏写在列 `meta`，前端分页的表不开排序）；授权有效期用 `components/datetime-picker.tsx`（日历按需加载）；表单校验一律 `zodResolver` + `@eat/shared` 的契约，不在 `register` 上写规则，中文报错兜底在 `lib/zod.ts`（main.tsx 已引入），带 refine 的 schema 取字段用 `pickFields()`，允许留空用 `z.literal('').or(规则)`。`components.json` + `@/` 别名只为 `npx shadcn add <x> --view/--diff` 看官方源码，**别直接 add**（会覆盖改过的 button.tsx、装上无关的 `cn` 包，且官方是 React 19 写法）。只动控制台，版本号不动。

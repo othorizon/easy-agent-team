@@ -541,6 +541,46 @@ describe('版本评论、区域锚点、@ 与工具接入', () => {
     })) as any;
     expect(created.comments[0].versionId).toBe(v2);
   });
+  it('关闭评论后不注入评论入口、拒绝新评论与回复，已有讨论保留；开关只在控制台接口开放', async () => {
+    // 前面的用例吊销过 other 的 Token，这里重新登录。
+    const member = (await api('POST', '/api/auth/login', undefined, { email: 'other@site.test', password: 'password123' })).body.token;
+    await api('POST', '/api/sites', owner, { slug: 'quiet', name: 'Quiet' });
+    const version = (await api('POST', '/api/sites/quiet/releases', owner, { files: files('quiet') })).body.id;
+    expect((await api('GET', '/api/sites/quiet', owner)).body.commentsEnabled).toBe(true);
+    expect((await content('/', { site: 'quiet', token: member })).body).toContain('/__eat/embed.js');
+    const thread = await api('POST', '/api/sites/quiet/threads', member, { versionId: version, page: '/', content: '先留一条' });
+    expect(thread.status).toBe(201);
+
+    const tools = app.get(McpToolsService);
+    const user = (await app.get(AuthService).authenticate(owner))!;
+    const viaMcp = (await tools.call(user, 'update_folio', { folio: 'quiet', commentsEnabled: false })) as any;
+    expect(viaMcp.commentsEnabled).toBe(true);
+    expect((await api('PATCH', '/api/sites/quiet', member, { commentsEnabled: false })).status).toBe(403);
+    const off = await api('PATCH', '/api/sites/quiet', owner, { commentsEnabled: false });
+    expect(off.status).toBe(200);
+    expect(off.body.commentsEnabled).toBe(false);
+
+    const page = await content('/', { site: 'quiet', token: member });
+    expect(page.statusCode).toBe(200);
+    expect(page.body).toContain('quiet');
+    expect(page.body).not.toContain('/__eat/embed.js');
+    const create = await api('POST', '/api/sites/quiet/threads', member, { versionId: version, page: '/', content: '再来一条' });
+    expect(create.status).toBe(403);
+    expect(create.body.error).toBe('SITE_COMMENTS_DISABLED');
+    const reply = await api('POST', `/api/sites/quiet/threads/${thread.body.id}/replies`, owner, { versionId: version, content: '回复' });
+    expect(reply.status).toBe(403);
+    await expect(
+      tools.call(user, 'create_folio_comment', { folio: 'quiet', page: '/', versionId: version, content: 'from MCP' }),
+    ).rejects.toThrow('已关闭评论');
+    expect((await api('GET', '/api/sites/quiet/threads', owner)).body).toHaveLength(1);
+    expect((await api('PATCH', `/api/sites/quiet/threads/${thread.body.id}`, owner, { status: 'resolved' })).status).toBe(200);
+
+    expect((await api('PATCH', '/api/sites/quiet', owner, { commentsEnabled: true })).body.commentsEnabled).toBe(true);
+    expect((await content('/', { site: 'quiet', token: member })).body).toContain('/__eat/embed.js');
+    expect(
+      (await api('POST', '/api/sites/quiet/threads', member, { versionId: version, page: '/', content: '恢复后' })).status,
+    ).toBe(201);
+  });
 });
 
 describe('评论删除权限与占位', () => {

@@ -232,6 +232,13 @@
       "when": 1792800000000,
       "tag": "0032_approval_notification_preferences",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792886400000,
+      "tag": "0033_folio_comments_toggle",
+      "breakpoints": true
     }
   ]
 }

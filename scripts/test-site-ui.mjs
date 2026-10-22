@@ -98,6 +98,7 @@ let site = {
   ownerId: user.id,
   access: 'public',
   spa: true,
+  commentsEnabled: true,
   currentVersionId: v2,
   url: published,
   canManage: true,
@@ -196,6 +197,7 @@ async function apiHandler(route) {
     const data = request.postDataJSON();
     const json = (body, status = 200) =>
       route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+    if (path === '/api/requests') return json({ items: [], total: 0, page: 1, pageSize: 1, pendingCount: 0 });
     if (path === '/api/account/onboarding') return json({ requireBio: false, requireNotification: false, bioComplete: false, notificationComplete: false, required: false });
     if (request.method() !== 'GET')
       writes.push({ path, method: request.method(), data, headers: request.headers() });

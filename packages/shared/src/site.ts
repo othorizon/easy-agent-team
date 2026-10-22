@@ -36,6 +36,10 @@ export const updateSiteSchema = z.object({
   password: z.string().min(4).max(128).optional(),
   spa: z.boolean().optional(),
 });
+/** 控制台专用：评论开关不进 CLI / MCP（update_folio 复用的是上面的 updateSiteSchema）。 */
+export const consoleUpdateSiteSchema = updateSiteSchema.extend({
+  commentsEnabled: z.boolean().optional(),
+});
 export const siteFileSchema = z.object({
   path: sitePathSchema,
   content: z.string().max(4 * Math.ceil(SITE_MAX_BYTES / 3)),
@@ -143,6 +147,7 @@ export const siteThreadQuerySchema = z.object({
 });
 export type CreateSite = z.infer<typeof createSiteSchema>;
 export type UpdateSite = z.infer<typeof updateSiteSchema>;
+export type ConsoleUpdateSite = z.infer<typeof consoleUpdateSiteSchema>;
 export type PublishSite = z.infer<typeof publishSiteSchema>;
 export type SiteFile = z.infer<typeof siteFileSchema>;
 export type SiteAnchor = z.infer<typeof siteAnchorSchema>;
@@ -157,6 +162,8 @@ export interface SiteInfo {
   ownerId: string;
   access: z.infer<typeof siteAccessSchema>;
   spa: boolean;
+  /** 关闭后网页不再注入评论入口，也不能发表新评论或回复；已有评论保留。 */
+  commentsEnabled: boolean;
   currentVersionId: string | null;
   url: string;
   canManage: boolean;

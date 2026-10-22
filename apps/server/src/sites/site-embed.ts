@@ -9,7 +9,7 @@ export const SITE_EMBED_SCRIPT = String.raw`(() => {
   // 隔离页面自身的 button / iframe / 全局样式，保证评论入口始终可用。
   var ui = root.attachShadow({mode:'open'});
   var style = document.createElement('style');
-  style.textContent = ':host{all:initial}*{box-sizing:border-box}.wrap{font:14px/1.5 system-ui,sans-serif;color:#171717;display:flex;flex-direction:column;align-items:flex-end;gap:12px}button{font:inherit;cursor:pointer}button:focus-visible{outline:2px solid #93c5fd;outline-offset:3px}.toggle{position:relative;display:grid;place-items:center;width:40px;height:40px;flex:none;padding:0;border:1px solid #e5e7eb;border-radius:50%;background:#fff;color:#6b7280;box-shadow:0 2px 12px #17203308;transition:background-color .16s ease,border-color .16s ease,color .16s ease,box-shadow .16s ease}.toggle:hover{background:#fafafa;border-color:#d1d5db;color:#374151;box-shadow:0 3px 14px #17203310}.toggle[aria-expanded="true"]{background:#f8fafc;color:#475569}.toggle:active{background:#f1f5f9}.toggle-icon{display:flex;pointer-events:none}.comment-dot{position:absolute;top:2px;right:2px;width:6px;height:6px;border:0;border-radius:50%;background:#60a5fa;box-shadow:0 0 0 2px #fff;pointer-events:none}.comment-dot[hidden]{display:none}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}.panel{display:none;width:min(420px,calc(100vw - 36px));height:min(680px,calc(100dvh - 100px));background:#fff;border:1px solid #e5e5e5;border-radius:14px;overflow:hidden;box-shadow:0 18px 60px #18181b14,0 2px 10px #18181b08}.panel iframe{display:block;width:100%;height:100%;border:0;background:#fff}.hint{display:none;max-width:calc(100vw - 36px);padding:10px 14px;border:1px solid #e5e5e5;border-radius:12px;background:#fff;box-shadow:0 4px 18px #0002}.hint span{display:block;color:#737373;font-size:12px}@media(pointer:coarse){.toggle{width:44px;height:44px}}@media(max-width:480px){.panel{width:calc(100vw - 36px);height:calc(100dvh - 100px)}}@media(prefers-reduced-motion:reduce){.toggle{transition:none}}';
+  style.textContent = ':host{all:initial}*{box-sizing:border-box}.wrap{font:14px/1.5 system-ui,sans-serif;color:#171717;display:flex;flex-direction:column;align-items:flex-end;gap:12px}button{font:inherit;cursor:pointer}button:focus-visible{outline:2px solid #93c5fd;outline-offset:3px}.toggle{position:relative;display:grid;place-items:center;width:40px;height:40px;flex:none;padding:0;border:1px solid #e5e7eb;border-radius:50%;background:#fff;color:#6b7280;box-shadow:0 2px 12px #17203308;transition:background-color .16s ease,border-color .16s ease,color .16s ease,box-shadow .16s ease}.toggle:hover{background:#fafafa;border-color:#d1d5db;color:#374151;box-shadow:0 3px 14px #17203310}.toggle[aria-expanded="true"]{background:#f8fafc;color:#475569}.toggle:active{background:#f1f5f9}.toggle-icon{display:flex;pointer-events:none}.comment-dot{position:absolute;top:2px;right:2px;width:6px;height:6px;border:0;border-radius:50%;background:#60a5fa;box-shadow:0 0 0 2px #fff;pointer-events:none}.comment-dot[hidden]{display:none}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}.panel{display:none;width:min(420px,calc(100vw - 36px));height:min(680px,calc(100dvh - 100px));background:#fff;border:1px solid #e5e5e5;border-radius:14px;overflow:hidden;box-shadow:0 18px 60px #18181b14,0 2px 10px #18181b08}.panel iframe{display:block;width:100%;height:100%;border:0;background:#fff}.hint{display:none;max-width:calc(100vw - 36px);padding:10px 14px;border:1px solid #e5e5e5;border-radius:12px;background:#fff;box-shadow:0 4px 18px #0002}.hint span{display:block;color:#737373;font-size:12px}.dock{position:relative;display:flex}.dismiss{position:absolute;top:-6px;left:-6px;display:grid;place-items:center;width:20px;height:20px;padding:0;border:1px solid #e5e7eb;border-radius:50%;background:#fff;color:#6b7280;box-shadow:0 1px 4px #1720331a;opacity:0;pointer-events:none;transition:opacity .16s ease,color .16s ease}.dismiss:hover{color:#111827;border-color:#d1d5db}.dock:hover .dismiss,.dock:focus-within .dismiss{opacity:1;pointer-events:auto}.dock[data-active] .dismiss{display:none}.toast{padding:8px 12px;border:1px solid #e5e5e5;border-radius:10px;background:#fff;color:#404040;font-size:13px;box-shadow:0 4px 18px #0002;transition:opacity .3s ease}@media(pointer:coarse){.toggle{width:44px;height:44px}.dismiss{display:none}}@media(max-width:480px){.panel{width:calc(100vw - 36px);height:calc(100dvh - 100px)}}@media(prefers-reduced-motion:reduce){.toggle,.dismiss,.toast{transition:none}}';
   var wrap = document.createElement('div'); wrap.className='wrap';
   var toggle = document.createElement('button'); toggle.className='toggle'; toggle.type='button';
   var commentIcon = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 11.75a8.75 8.75 0 0 1-12.6 7.85L3 21l1.4-4.9a8.75 8.75 0 1 1 16.1-4.35Z"/></svg>';
@@ -17,8 +17,12 @@ export const SITE_EMBED_SCRIPT = String.raw`(() => {
   var toggleIcon=document.createElement('span'); toggleIcon.className='toggle-icon'; toggleIcon.innerHTML=commentIcon;
   var dot=document.createElement('span'); dot.className='comment-dot'; dot.hidden=true; dot.setAttribute('aria-hidden','true');
   var description=document.createElement('span'); description.id='eat-comment-description'; description.className='sr-only';
-  var hasComments=false;
-  var updateToggle=()=>{ var label=selecting?'取消标注':expanded?'收起评论':'评论'; toggleIcon.innerHTML=selecting||expanded?closeIcon:commentIcon; toggle.setAttribute('aria-label',label); toggle.setAttribute('aria-expanded',String(expanded&&!selecting)); toggle.title=label; dot.hidden=!hasComments||expanded||!!selecting; description.textContent=hasComments?'当前页面已有评论':''; };
+  var hasComments=false, dismissed=false;
+  // 临时隐藏只放在内存里：刷新页面后评论入口自动恢复。
+  var dock=document.createElement('div'); dock.className='dock';
+  var dismiss=document.createElement('button'); dismiss.className='dismiss'; dismiss.type='button'; dismiss.innerHTML='<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';
+  dismiss.setAttribute('aria-label','暂时隐藏评论，刷新页面后恢复'); dismiss.title='暂时隐藏评论（刷新页面后恢复）';
+  var updateToggle=()=>{ var label=selecting?'取消标注':expanded?'收起评论':'评论'; toggleIcon.innerHTML=selecting||expanded?closeIcon:commentIcon; toggle.setAttribute('aria-label',label); toggle.setAttribute('aria-expanded',String(expanded&&!selecting)); toggle.title=label; dot.hidden=!hasComments||expanded||!!selecting; description.textContent=hasComments?'当前页面已有评论':''; if(expanded||selecting) dock.dataset.active=''; else delete dock.dataset.active; };
   toggle.append(toggleIcon,dot); toggle.setAttribute('aria-controls','eat-comment-panel'); toggle.setAttribute('aria-describedby',description.id);
   var panel = document.createElement('div'); panel.className='panel'; panel.id='eat-comment-panel';
   var hint = document.createElement('div'); hint.className='hint'; hint.setAttribute('role','status');
@@ -28,8 +32,8 @@ export const SITE_EMBED_SCRIPT = String.raw`(() => {
   url.searchParams.set('versionId', config.versionId); url.searchParams.set('page', page());
   url.searchParams.set('origin', location.origin);
   var thread = new URL(location.href).searchParams.get('eat_thread'); if (thread) url.searchParams.set('thread', thread);
-  frame.src = url.href; panel.appendChild(frame); wrap.append(panel,hint,toggle); ui.append(style,wrap,description); document.body.appendChild(root);
-  var send = (type, data) => frame.contentWindow.postMessage({ type: type, ...data }, origin);
+  frame.src = url.href; panel.appendChild(frame); dock.append(toggle,dismiss); wrap.append(panel,hint,dock); ui.append(style,wrap,description); document.body.appendChild(root);
+  var send = (type, data) => { if(!dismissed && frame.contentWindow) frame.contentWindow.postMessage({ type: type, ...data }, origin); };
   var lastPage=page();
   var init = () => { if(lastPage!==page()){ lastPage=page(); hasComments=false; updateToggle(); current=null; overlay.style.display='none'; cancelSelection(false); } send('eat:init', { proof: config.proof, page: page(), versionId: config.versionId }); };
   frame.addEventListener('load', init);
@@ -40,6 +44,12 @@ export const SITE_EMBED_SCRIPT = String.raw`(() => {
   var open = (focus) => { expanded=true; panel.style.display='block'; updateToggle(); init(); if(focus) frame.focus(); };
   var close = () => { expanded=false; panel.style.display='none'; updateToggle(); toggle.focus(); };
   var cancelSelection = (reopen) => { if(!selecting) return; selecting=null; start=null; hint.style.display='none'; document.documentElement.style.cursor=previousCursor; updateToggle(); if(current) draw(current.el,current.rect); else overlay.style.display='none'; if(reopen) open(true); };
+  var hide = () => {
+    if(dismissed) return; cancelSelection(false); dismissed=true; expanded=false; current=null; overlay.remove();
+    var toast=document.createElement('div'); toast.className='toast'; toast.setAttribute('role','status'); toast.textContent='评论已隐藏，刷新页面后恢复';
+    wrap.replaceChildren(toast); setTimeout(()=>{ toast.style.opacity='0'; setTimeout(()=>root.remove(),300); },2400);
+  };
+  dismiss.onclick = hide;
   toggle.onclick = () => { if(selecting) cancelSelection(true); else if(expanded) close(); else open(true); };
   if (thread) open(false);
   var css = el => {
@@ -94,11 +104,12 @@ export const SITE_EMBED_SCRIPT = String.raw`(() => {
     if(e.data.type==='eat:ready') init();
     if(e.data.type==='eat:comment-state' && e.data.versionId===config.versionId && e.data.page===page() && typeof e.data.hasComments==='boolean'){ hasComments=e.data.hasComments; updateToggle(); }
     if(e.data.type==='eat:close'){ cancelSelection(false); close(); }
+    if(e.data.type==='eat:hide') hide();
     if(e.data.type==='eat:clear-anchor'){ current=null; overlay.style.display='none'; }
     if(e.data.type==='eat:select' && ['element','region'].includes(e.data.mode)){ previousCursor=document.documentElement.style.cursor; selecting=e.data.mode; panel.style.display='none'; document.documentElement.style.cursor='crosshair'; updateToggle(); hint.textContent=selecting==='element'?'点击要评论的元素':'按住拖动，选择页面区域'; var help=document.createElement('span'); help.textContent='按 Esc 或点击取消标注返回'; hint.appendChild(help); hint.style.display='block'; }
     if(e.data.type==='eat:locate') send('eat:located',{found:locate(e.data.anchor),threadId:e.data.threadId});
   });
-  var redraw=()=>{ if(current && current.el.isConnected) draw(current.el,current.rect); else overlay.style.display='none'; };
+  var redraw=()=>{ if(dismissed) return; if(current && current.el.isConnected) draw(current.el,current.rect); else overlay.style.display='none'; };
   window.addEventListener('scroll',redraw,true); window.addEventListener('resize',redraw);
   ['pushState','replaceState'].forEach(k=>{var original=history[k];history[k]=function(){var result=original.apply(this,arguments);init();return result;};});
   window.addEventListener('popstate',init); window.addEventListener('hashchange',init);

@@ -165,7 +165,7 @@ export class SiteGateway {
       // 禁止 Folio 注册持久化 Service Worker，避免访问策略变化后离线缓存继续提供受保护 Folio。
       if (req.headers['service-worker'] === 'script')
         return reply.status(403).send('Folio 不支持 Service Worker');
-      if (file.type.startsWith('text/html')) {
+      if (file.type.startsWith('text/html') && site.commentsEnabled) {
         const config = Buffer.from(
           JSON.stringify({
             platform: await this.runtime.platform(),

@@ -867,3 +867,10 @@ easy-agent-team/
 - **表单校验挂 shared 契约**：24 个表单全部从 `register` 上的行内规则改成 `zodResolver` + `@eat/shared` 的 zod schema，前后端规则只有一份（slug、环境变量 Key、库名、相对仓库路径、端口范围、飞书 / 域名格式等不再各写一遍正则）。`lib/zod.ts` 用 `z.config({ customError })` 给 shared 里没写中文报错的规则兜底（空值「必填」、长度、数字、邮箱 / URL），schema 自带的中文 message 优先；控制台与 shared 解析到同一个 zod 实例，所以对 shared 的 schema 同样生效。表单形态与请求体不同时从 `.shape` 取字段重新组装——**带 refine 的对象在 zod 4 里不能 `.pick()`**（直接抛错），用 `pickFields()`；「允许留空」写成 `z.literal('').or(规则)`（zod 4 的联合报错会落到真正那条规则上）。`components/form.tsx` 里的 `rules` 正则表删除。Folio 两张设置表单原本提交时手动 `safeParse` 只显示第一条错误，改为 resolver 后逐字段报错、底部仍汇总第一条（`firstErrorMessage()`，覆盖开关类没有报错位置的字段）。
 - **shadcn CLI 只作参考**：加了 `components.json` 与 `@/` 路径别名，`npx shadcn add <组件> --view <路径>` / `--diff` 可看官方源码与上游差异；**不要直接 `add`**——它会覆盖改过的 `button.tsx`，还会装上新版 registry 里的 `cn` 这个无关 npm 包，而且官方代码是 React 19 的 ref-as-prop 写法，本项目是 React 18（会被 asChild 包住的组件必须 forwardRef）。
 - 体积：主包 gzip 312 KB → 335 KB（TanStack Table 约 14 KB、Tooltip / resolvers 等），日历单独 24 KB 按需加载。`@radix-ui/react-tooltip` 锁在 `~1.2.16`：它是与现有 dialog / popover 同一批次的版本，内部的 DismissableLayer / Popper / Slot 与之共用一份；最新的 1.4.x 会另装一套，弹层叠放与「点外部关闭」分属两个实例。只动控制台，CLI / MCP / 指南不涉及，版本号不动。Playwright 桌面 1280 / 移动 390 双视口冒烟 50 项全过（中文报错、禁用字段不阻塞提交、排序、触屏 Tooltip、日历、无横向溢出、无控制台报错）。
+
+### 决策 84：Folio 评论开关与网页内临时隐藏（2026-10-22）
+
+- **评论开关**：`site.comments_enabled`（迁移 `0033_folio_comments_toggle`，默认 `true`，存量 Folio 保持开启）。只在控制台「Folio 详情 → 设置 → 允许评论」开放：REST `PATCH /api/sites/:slug` 用 `consoleUpdateSiteSchema`，而 MCP `update_folio` 与 CLI 继续用 `updateSiteSchema`，传了也会被剥掉；`SiteInfo.commentsEnabled` 照常返回，AI 能看到状态但改不了。
+- **关闭后**：网关不再往 HTML 注入 `/__eat/embed.js`（网页上看不到评论入口）；新建讨论与回复在服务层一律回 403 `SITE_COMMENTS_DISABLED`（控制台 / CLI / MCP 同一条路径）；已有讨论保留，可查看、解决、删除；控制台评论页签显示「评论已关闭」提示并隐藏发表与回复入口。重新开启即恢复，不丢数据。
+- **临时隐藏**：网页评论控件可以「暂时隐藏评论」——桌面悬停圆形入口出现左上角的小 ×，触屏（无悬停）走面板 `⋯` 菜单里的同名项；隐藏后短暂提示「评论已隐藏，刷新页面后恢复」再移除控件。状态只存在 embed 脚本的内存里，**刻意不写 localStorage / Cookie**，刷新即恢复；隐藏后 `send()` 不再向已移除的 iframe 发消息，避免页面 SPA 路由（被包装的 `history.pushState`）报错。
+- 不涉及 CLI 行为与指南，版本号不动。

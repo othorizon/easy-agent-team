@@ -30,6 +30,7 @@ export function FolioDiscussion({
   embedded = false,
   filterVersionId,
   siteUrl,
+  commentsEnabled = true,
   onAccessVerified,
 }: {
   slug: string;
@@ -39,6 +40,8 @@ export function FolioDiscussion({
   embedded?: boolean;
   filterVersionId?: string;
   siteUrl?: string;
+  /** 关闭评论后控制台只读：不给发表与回复入口，解决与删除照常。 */
+  commentsEnabled?: boolean;
   onAccessVerified?: (proof: string) => void;
 }) {
   const [page, setPage] = useState(initialPage);
@@ -346,7 +349,7 @@ export function FolioDiscussion({
       )}
     </div>
   );
-  const composer = versionId && !needsAccess && (
+  const composer = versionId && !needsAccess && commentsEnabled && (
     <div className="folio-composer">
       {user ? (
         <>
@@ -498,6 +501,7 @@ export function FolioDiscussion({
             setMissingLocation(null);
             send('eat:close');
           }}
+          onHide={() => send('eat:hide')}
           onLogin={login}
         />
       ) : (
@@ -623,7 +627,11 @@ export function FolioDiscussion({
                       {status ? '暂无' + (status === 'open' ? '待处理' : '已解决') + '的评论' : '还没有评论'}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      {status ? '切换到全部，查看其他讨论。' : '写下第一条反馈，让讨论从这里开始。'}
+                      {status
+                        ? '切换到全部，查看其他讨论。'
+                        : commentsEnabled
+                          ? '写下第一条反馈，让讨论从这里开始。'
+                          : '评论已关闭。'}
                     </p>
                   </div>
                 )}
@@ -631,7 +639,7 @@ export function FolioDiscussion({
                   <FolioThread
                     key={t.id}
                     thread={t}
-                    canReply={!!user}
+                    canReply={!!user && commentsEnabled}
                     embedded={embedded}
                     siteUrl={siteUrl}
                     targeted={t.id === targetThread}

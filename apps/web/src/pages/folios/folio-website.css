@@ -280,6 +280,12 @@
   width: 14px;
   height: 14px;
 }
+.folio-website-menu-note {
+  display: block;
+  color: #a1a1aa;
+  font-size: 11px;
+  line-height: 1.4;
+}
 .folio-website-context {
   margin: 0 12px 12px 49px;
   padding: 9px;

@@ -24,7 +24,7 @@ const versions = [1, 2].map((number) => ({
     'about/index.html': { hash: fileHash(number, 'about/index.html'), type: 'text/html; charset=utf-8' },
   },
 }));
-const site = { id: 'site-id', slug: 'demo', name: 'Demo', access: 'public', currentVersionId: versionId(1), spa: false };
+const site = { id: 'site-id', slug: 'demo', name: 'Demo', access: 'public', currentVersionId: versionId(1), spa: false, commentsEnabled: true };
 const sites = {
   get: vi.fn(async () => site),
   version: vi.fn(async (_site: unknown, id?: string, number?: number) =>
