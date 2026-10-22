@@ -3,16 +3,19 @@ import { ENV_LIST_DEFAULT_PAGE_SIZE } from '@eat/shared';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, Database, Plus, Search } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { createEnvironmentSchema } from '@eat/shared';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
 import { InlineCode } from '../components/code';
 import { Empty } from '../components/empty';
-import { Field, rules } from '../components/form';
+import { Field } from '../components/form';
 import { PageHeader } from '../components/page-header';
 import { Pagination } from '../components/pagination';
 import { Button } from '../components/ui/button';
+import { Tip } from '../components/ui/tooltip';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { ListSkeleton } from '../components/ui/skeleton';
@@ -210,7 +213,7 @@ function EnvRow({ env, isMine }: { env: EnvironmentInfo; isMine: boolean }) {
             <MetaDot />
             <span className="sm:hidden">{env.variableCount} 个变量</span>
             <MetaDot className="sm:hidden" />
-            <span title={formatDateTime(env.createdAt)}>{formatRelativeTime(env.createdAt)}创建</span>
+            <Tip content={formatDateTime(env.createdAt)}><span>{formatRelativeTime(env.createdAt)}创建</span></Tip>
           </div>
         </div>
       </div>
@@ -260,7 +263,8 @@ function CreateEnvDialog({
   onClose: () => void;
   onSubmit: (v: CreateEnvironmentRequest) => void;
 }) {
-  const { register, handleSubmit, formState: { errors } } = useForm<CreateEnvironmentRequest>({
+  const { register, handleSubmit, formState: { errors } } = useForm({
+    resolver: zodResolver(createEnvironmentSchema),
     defaultValues: { slug: '', name: '', description: '' },
   });
   return (
@@ -276,11 +280,11 @@ function CreateEnvDialog({
               placeholder="internal-services"
               className="font-mono"
               aria-invalid={!!errors.slug}
-              {...register('slug', { required: '请输入标识', pattern: rules.slug })}
+              {...register('slug')}
             />
           </Field>
           <Field label="名称" htmlFor="env-name" required error={errors.name?.message}>
-            <Input id="env-name" placeholder="内部服务" aria-invalid={!!errors.name} {...register('name', { required: '请输入名称' })} />
+            <Input id="env-name" placeholder="内部服务" aria-invalid={!!errors.name} {...register('name')} />
           </Field>
           <Field label="备注" htmlFor="env-desc" hint="供人和 AI 理解这个环境的用途">
             <Textarea id="env-desc" rows={2} placeholder="公司内部服务相关的密钥与配置" {...register('description')} />

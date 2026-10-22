@@ -2,12 +2,15 @@ import type { AccountInfo, HelperInfo, HelpListResult, HelpTargets, Notification
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, UserCog } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { createHelpRequestSchema } from '@eat/shared';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api, ApiError, getToken } from '../api';
 import { InlineCode } from '../components/code';
 import { Combobox } from '../components/combobox';
+import { DataTable, type DataTableColumn } from '../components/data-table';
 import { Empty } from '../components/empty';
 import { Field } from '../components/form';
 import { PageHeader } from '../components/page-header';
@@ -15,15 +18,16 @@ import { PAGE_SIZE_OPTIONS, Pagination } from '../components/pagination';
 import { Segmented } from '../components/segmented';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { Tip } from '../components/ui/tooltip';
 import { Card, CardContent } from '../components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { TableSkeleton } from '../components/ui/skeleton';
 import { Switch } from '../components/ui/switch';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { formatDateTime } from '../lib/format';
 import { useQueryParams } from '../lib/use-query-params';
+import { pickFields } from '../lib/zod';
 
 export const HELP_STATUS_BADGE: Record<string, JSX.Element> = {
   open: <Badge variant="warning">等待回复</Badge>,
@@ -39,6 +43,8 @@ export const HELP_STATUS_BADGE: Record<string, JSX.Element> = {
  * 免得已经了结的历史把当下要处理的淹掉；两个页签共用同一个筛选值，切页签不重置。
  */
 const PENDING_HINT = '还等着某一方回应的求助：等待回复 + 已回复但未确认解决';
+
+type HelpRow = HelpListResult['items'][number];
 
 export function HelpPage() {
   const queryClient = useQueryClient();
@@ -117,41 +123,49 @@ export function HelpPage() {
         <Empty text={emptyText} className="py-6" />
       );
     }
-    return (
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>标题</TableHead>
-            <TableHead className="hidden w-28 sm:table-cell">{dir === 'in' ? '求助者' : '被求助者'}</TableHead>
-            <TableHead className="hidden w-36 lg:table-cell">关联 skill</TableHead>
-            <TableHead className="w-24">状态</TableHead>
-            <TableHead className="hidden w-36 md:table-cell">更新时间</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((r) => (
-            <TableRow key={r.id}>
-              <TableCell>
-                <Link to={`/help/${r.id}`} className="font-medium text-primary hover:underline">
-                  {r.title}
-                </Link>
-                <div className="mt-0.5 text-xs text-muted-foreground sm:hidden">
-                  {dir === 'in' ? r.requesterName : r.helperName} · {formatDateTime(r.updatedAt)}
-                </div>
-              </TableCell>
-              <TableCell className="hidden text-muted-foreground sm:table-cell">
-                {dir === 'in' ? r.requesterName : r.helperName}
-              </TableCell>
-              <TableCell className="hidden lg:table-cell">
-                {r.skillSlug ? <InlineCode>{r.skillSlug}</InlineCode> : <span className="text-muted-foreground">—</span>}
-              </TableCell>
-              <TableCell>{HELP_STATUS_BADGE[r.status]}</TableCell>
-              <TableCell className="hidden text-muted-foreground md:table-cell">{formatDateTime(r.updatedAt)}</TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    );
+    const who = (r: HelpRow) => (dir === 'in' ? r.requesterName : r.helperName);
+    const columns: DataTableColumn<HelpRow>[] = [
+      {
+        id: 'title',
+        header: '标题',
+        cell: ({ row: { original: r } }) => (
+          <>
+            <Link to={`/help/${r.id}`} className="font-medium text-primary hover:underline">
+              {r.title}
+            </Link>
+            <div className="mt-0.5 text-xs text-muted-foreground sm:hidden">
+              {who(r)} · {formatDateTime(r.updatedAt)}
+            </div>
+          </>
+        ),
+      },
+      {
+        id: 'who',
+        header: dir === 'in' ? '求助者' : '被求助者',
+        meta: { className: 'w-28', cellClassName: 'text-muted-foreground', hideBelow: 'sm' },
+        cell: ({ row: { original: r } }) => who(r),
+      },
+      {
+        id: 'skill',
+        header: '关联 skill',
+        meta: { className: 'w-36', hideBelow: 'lg' },
+        cell: ({ row: { original: r } }) =>
+          r.skillSlug ? <InlineCode>{r.skillSlug}</InlineCode> : <span className="text-muted-foreground">—</span>,
+      },
+      {
+        id: 'status',
+        header: '状态',
+        meta: { className: 'w-24' },
+        cell: ({ row: { original: r } }) => HELP_STATUS_BADGE[r.status],
+      },
+      {
+        id: 'updatedAt',
+        header: '更新时间',
+        meta: { className: 'w-36', cellClassName: 'text-muted-foreground', hideBelow: 'md' },
+        cell: ({ row: { original: r } }) => formatDateTime(r.updatedAt),
+      },
+    ];
+    return <DataTable columns={columns} data={rows} getRowId={(r) => r.id} />;
   }
 
   return (
@@ -194,7 +208,7 @@ export function HelpPage() {
                 value: 'pending',
                 label: (
                   <>
-                    <span title={PENDING_HINT}>待回复</span>
+                    <Tip content={PENDING_HINT}><span>待回复</span></Tip>
                     {counts && <span className="text-xs tabular-nums opacity-60">{counts.pending}</span>}
                   </>
                 ),
@@ -321,6 +335,9 @@ function HelpSettingsDialog({ onClose }: { onClose: () => void }) {
   </Dialog>;
 }
 
+/** 求助对象走 Combobox 单独校验（表单值是 helper:/skill: 前缀，提交时再拆成契约里的二选一字段） */
+const askFormSchema = pickFields(createHelpRequestSchema, ['title', 'description', 'tried']);
+
 function AskDialog({
   targets,
   pending,
@@ -334,7 +351,8 @@ function AskDialog({
 }) {
   const [target, setTarget] = useState<string | null>(null);
   const [targetError, setTargetError] = useState(false);
-  const { register, handleSubmit, formState: { errors } } = useForm<{ title: string; description: string; tried: string }>({
+  const { register, handleSubmit, formState: { errors } } = useForm({
+    resolver: zodResolver(askFormSchema),
     defaultValues: { title: '', description: '', tried: '' },
   });
   return (
@@ -383,7 +401,7 @@ function AskDialog({
             />
           </Field>
           <Field label="问题标题" htmlFor="ask-title" required error={errors.title?.message}>
-            <Input id="ask-title" placeholder="一句话说清问题" aria-invalid={!!errors.title} {...register('title', { required: '请输入标题' })} />
+            <Input id="ask-title" placeholder="一句话说清问题" aria-invalid={!!errors.title} {...register('title')} />
           </Field>
           <Field label="问题描述" htmlFor="ask-desc" required error={errors.description?.message}>
             <Textarea
@@ -391,7 +409,7 @@ function AskDialog({
               rows={4}
               placeholder="背景、报错信息、AI 卡在哪一步（不要粘贴密钥）"
               aria-invalid={!!errors.description}
-              {...register('description', { required: '请输入描述' })}
+              {...register('description')}
             />
           </Field>
           <Field label="已经尝试过什么" htmlFor="ask-tried" required error={errors.tried?.message}>
@@ -400,7 +418,7 @@ function AskDialog({
               rows={2}
               placeholder="例如：搜过经验库、看过某文档"
               aria-invalid={!!errors.tried}
-              {...register('tried', { required: '请说明已尝试的办法' })}
+              {...register('tried')}
             />
           </Field>
           <Button type="submit" loading={pending} className="w-full">

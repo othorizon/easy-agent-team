@@ -11,6 +11,7 @@ import { Link } from 'react-router-dom';
 import { ArrowUpRight, ChevronRight, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../api';
+import { DateTimePicker, EXPIRY_PRESETS } from '../components/datetime-picker';
 import { PageHeader } from '../components/page-header';
 import { Pagination } from '../components/pagination';
 import { GithubAppSummary } from '../components/github';
@@ -290,7 +291,7 @@ function RequestDialog({
   });
   const [action, setAction] = useState(initialAction),
     [reason, setReason] = useState(''),
-    [expires, setExpires] = useState('');
+    [expires, setExpires] = useState<Date | undefined>();
   const mutation = useMutation({
     mutationFn: () =>
       api<ApprovalRequestDetail>(
@@ -300,7 +301,7 @@ function RequestDialog({
           ? {
               decision: action,
               reason: reason.trim() || undefined,
-              grantExpiresAt: expires ? new Date(expires).toISOString() : undefined,
+              grantExpiresAt: expires?.toISOString(),
             }
           : action === 'resubmit'
             ? { reason: reason.trim() }
@@ -462,15 +463,16 @@ function RequestDialog({
                     />
                   )}
                   {action === 'approved' && r.type === 'env' && (
-                    <label className="block text-sm">
-                      授权有效期（留空为永久）
-                      <Input
+                    <div className="space-y-1.5 text-sm">
+                      <p>授权有效期（留空为永久）</p>
+                      <DateTimePicker
                         aria-label="授权有效期"
-                        type="datetime-local"
                         value={expires}
-                        onChange={(e) => setExpires(e.target.value)}
+                        onChange={setExpires}
+                        placeholder="永久"
+                        presets={EXPIRY_PRESETS}
                       />
-                    </label>
+                    </div>
                   )}
                   {action === 'approved' && ['db', 'oss'].includes(r.type) && (
                     <p className="text-sm text-muted-foreground">

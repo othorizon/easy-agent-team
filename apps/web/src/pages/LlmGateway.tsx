@@ -7,6 +7,7 @@ import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api, getStoredUser } from '../api';
 import { Confirm } from '../components/confirm';
+import { DataTable, type DataTableColumn } from '../components/data-table';
 import { PageHeader } from '../components/page-header';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -15,7 +16,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { llmAmountInput, llmDisplayQuota } from '../lib/llm-quota';
 
@@ -77,6 +77,34 @@ export function LlmGatewayPage() {
     </div>
   );
 }
+
+type UsageRow = LlmUsagePage['items'][number];
+
+const USAGE_COLUMNS = (currency: LlmGatewayInfo['currency']): DataTableColumn<UsageRow>[] => [
+  {
+    id: 'createdAt',
+    header: '时间',
+    meta: { cellClassName: 'whitespace-nowrap text-xs' },
+    cell: ({ row: { original: r } }) => formatDateTime(new Date(r.createdAt * 1000)),
+  },
+  {
+    id: 'model',
+    header: '模型',
+    meta: { cellClassName: 'font-mono text-xs' },
+    cell: ({ row: { original: r } }) => r.model || '—',
+  },
+  {
+    id: 'tokens',
+    header: '输入 / 输出 Token',
+    cell: ({ row: { original: r } }) => `${r.promptTokens} / ${r.completionTokens}`,
+  },
+  {
+    id: 'quota',
+    header: '额度消耗',
+    meta: { cellClassName: 'whitespace-nowrap' },
+    cell: ({ row: { original: r } }) => llmDisplayQuota(r.quota, currency),
+  },
+];
 
 function PersonalGateway({ info }: { info: LlmGatewayInfo }) {
   const qc = useQueryClient();
@@ -293,39 +321,13 @@ function PersonalGateway({ info }: { info: LlmGatewayInfo }) {
             <p className="mt-1 text-xs text-muted-foreground">只显示最近 30 天记录。</p>
           </div>
           {usage.isError && <p className="text-sm text-destructive">{usage.error.message}</p>}
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>时间</TableHead>
-                <TableHead>模型</TableHead>
-                <TableHead>输入 / 输出 Token</TableHead>
-                <TableHead>额度消耗</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {usage.data?.items.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="whitespace-nowrap text-xs">
-                    {formatDateTime(new Date(r.createdAt * 1000))}
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">{r.model || '—'}</TableCell>
-                  <TableCell>
-                    {r.promptTokens} / {r.completionTokens}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    {llmDisplayQuota(r.quota, info.currency)}
-                  </TableCell>
-                </TableRow>
-              ))}
-              {usage.data?.items.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={4} className="text-center text-muted-foreground">
-                    最近 30 天暂无调用记录
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+          <DataTable
+            columns={USAGE_COLUMNS(info.currency)}
+            data={usage.data?.items}
+            loading={usage.isPending}
+            getRowId={(r) => String(r.id)}
+            empty={<p className="py-6 text-center text-sm text-muted-foreground">最近 30 天暂无调用记录</p>}
+          />
           <div className="mt-3 flex items-center justify-end gap-3 text-sm">
             <Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage(page - 1)}>
               上一页
@@ -423,6 +425,75 @@ function AdminGateway() {
     setInherit(u.initialQuota === null);
     setMode('add');
   };
+  const peopleColumns: DataTableColumn<LlmGatewayInfo>[] = [
+    {
+      id: 'user',
+      header: '用户',
+      cell: ({ row: { original: u } }) => (
+        <>
+          <p>{u.userName}</p>
+          {(u.disabled || u.userStatus !== 'active') && (
+            <p className="text-xs text-destructive">{u.disabled ? '网关已禁用' : 'EAT 账户已禁用'}</p>
+          )}
+          {u.error && <p className="max-w-56 text-xs text-destructive">{u.error}</p>}
+        </>
+      ),
+    },
+    {
+      id: 'keyStatus',
+      header: 'Key 状态',
+      meta: { cellClassName: 'whitespace-nowrap' },
+      cell: ({ row: { original: u } }) =>
+        u.pending ? '同步中' : u.key ? labels[u.key.status] : u.giftClaimed ? '已删除' : '未申请',
+    },
+    {
+      id: 'total',
+      header: '总额度',
+      meta: { cellClassName: 'whitespace-nowrap' },
+      cell: ({ row: { original: u } }) =>
+        u.giftClaimed
+          ? llmDisplayQuota(u.totalQuota, u.currency)
+          : `首次赠送 ${llmDisplayQuota(u.initialQuotaEffective, u.currency)}${u.initialQuota === null ? '（全局）' : ''}`,
+    },
+    {
+      id: 'used',
+      header: '已用 / 剩余',
+      meta: { cellClassName: 'whitespace-nowrap' },
+      cell: ({ row: { original: u } }) =>
+        u.giftClaimed
+          ? `${llmDisplayQuota(u.usedQuota, u.currency)} / ${llmDisplayQuota(u.remainingQuota, u.currency)}`
+          : '—',
+    },
+    {
+      id: 'actions',
+      header: '操作',
+      cell: ({ row: { original: u } }) => (
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" disabled={u.pending || action.isPending} onClick={() => openQuota(u)}>
+            {u.giftClaimed ? '调整额度' : '首次赠送'}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={action.isPending}
+            onClick={() => action.mutate({ user: u, kind: 'policy', payload: { disabled: !u.disabled } })}
+          >
+            {u.disabled ? '恢复网关' : '禁用网关'}
+          </Button>
+          {u.pending && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={action.isPending}
+              onClick={() => action.mutate({ user: u, kind: 'retry', payload: {} })}
+            >
+              重试
+            </Button>
+          )}
+        </div>
+      ),
+    },
+  ];
   return (
     <Card>
       <CardContent>
@@ -452,85 +523,12 @@ function AdminGateway() {
           </div>
         </div>
         {people.isError && <p className="text-sm text-destructive">{people.error.message}</p>}
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>用户</TableHead>
-              <TableHead>Key 状态</TableHead>
-              <TableHead>总额度</TableHead>
-              <TableHead>已用 / 剩余</TableHead>
-              <TableHead>操作</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {people.data
-              ?.filter((u) => (u.userName ?? '').toLowerCase().includes(search.toLowerCase()))
-              .map((u) => (
-                <TableRow key={u.userId}>
-                  <TableCell>
-                    <p>{u.userName}</p>
-                    {(u.disabled || u.userStatus !== 'active') && (
-                      <p className="text-xs text-destructive">
-                        {u.disabled ? '网关已禁用' : 'EAT 账户已禁用'}
-                      </p>
-                    )}
-                    {u.error && <p className="max-w-56 text-xs text-destructive">{u.error}</p>}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    {u.pending
-                      ? '同步中'
-                      : u.key
-                        ? labels[u.key.status]
-                        : u.giftClaimed
-                          ? '已删除'
-                          : '未申请'}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    {u.giftClaimed
-                      ? llmDisplayQuota(u.totalQuota, u.currency)
-                      : `首次赠送 ${llmDisplayQuota(u.initialQuotaEffective, u.currency)}${u.initialQuota === null ? '（全局）' : ''}`}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    {u.giftClaimed
-                      ? `${llmDisplayQuota(u.usedQuota, u.currency)} / ${llmDisplayQuota(u.remainingQuota, u.currency)}`
-                      : '—'}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={u.pending || action.isPending}
-                        onClick={() => openQuota(u)}
-                      >
-                        {u.giftClaimed ? '调整额度' : '首次赠送'}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={action.isPending}
-                        onClick={() =>
-                          action.mutate({ user: u, kind: 'policy', payload: { disabled: !u.disabled } })
-                        }
-                      >
-                        {u.disabled ? '恢复网关' : '禁用网关'}
-                      </Button>
-                      {u.pending && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={action.isPending}
-                          onClick={() => action.mutate({ user: u, kind: 'retry', payload: {} })}
-                        >
-                          重试
-                        </Button>
-                      )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-          </TableBody>
-        </Table>
+        <DataTable
+          columns={peopleColumns}
+          data={people.data?.filter((u) => (u.userName ?? '').toLowerCase().includes(search.toLowerCase()))}
+          loading={people.isPending && !people.isError}
+          getRowId={(u) => u.userId}
+        />
         <Dialog
           open={!!editing}
           onOpenChange={(v) => {

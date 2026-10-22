@@ -26,15 +26,8 @@ import {
   DialogDescription,
 } from '../components/ui/dialog';
 import { Confirm } from '../components/confirm';
+import { DataTable, type DataTableColumn } from '../components/data-table';
 import { Empty } from '../components/empty';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '../components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { SettingsLoadError, SettingsLoading } from '../components/settings';
 import { formatDateTime } from '../lib/format';
@@ -181,6 +174,43 @@ export function OssPage() {
     queryFn: () => api<OssSpaceInfo[]>('GET', `/api/oss/spaces${tab === 'all' ? '?all=true' : ''}`),
     refetchInterval: 5000,
   });
+  const columns: DataTableColumn<OssSpaceInfo>[] = [
+    {
+      id: 'name',
+      header: '空间',
+      meta: { cellClassName: 'max-w-72' },
+      cell: ({ row: { original: s } }) => (
+        <>
+          <Link className="font-medium text-primary hover:underline" to={`/oss/${s.id}`}>
+            {s.name}
+          </Link>
+          <p className="truncate text-xs text-muted-foreground">{s.purpose}</p>
+        </>
+      ),
+    },
+    ...(tab === 'all' ? [{ accessorKey: 'ownerName', header: '申请人' } satisfies DataTableColumn<OssSpaceInfo>] : []),
+    {
+      id: 'status',
+      header: '状态',
+      cell: ({ row: { original: s } }) => (
+        <>
+          <Badge variant={s.status === 'pending' ? 'warning' : 'secondary'}>{statuses[s.status]}</Badge>
+          {s.lastError && <p className="mt-1 text-xs text-destructive">操作失败，可在详情重试</p>}
+          {s.rejectionReason && <p className="mt-1 text-xs text-muted-foreground">{s.rejectionReason}</p>}
+        </>
+      ),
+    },
+    { id: 'publicRead', header: '公开读', cell: ({ row: { original: s } }) => (s.publicRead ? '已开启' : '未开启') },
+    {
+      id: 'actions',
+      header: '操作',
+      cell: ({ row: { original: s } }) => (
+        <Button size="sm" variant="outline" asChild>
+          <Link to={`/oss/${s.id}`}>详情</Link>
+        </Button>
+      ),
+    },
+  ];
   if (params.tab === 'approvals') return <Navigate to="/requests?type=oss" replace />;
   return (
     <div className="space-y-5">
@@ -222,41 +252,7 @@ export function OssPage() {
           ) : !spaces.data.length ? (
             <Empty text="暂无存储空间" />
           ) : (
-            <Table className="min-w-[640px]">
-              <TableHeader>
-                <TableRow>
-                  <TableHead>空间</TableHead>
-                  {tab === 'all' && <TableHead>申请人</TableHead>}
-                  <TableHead>状态</TableHead>
-                  <TableHead>公开读</TableHead>
-                  <TableHead>操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {spaces.data.map((s) => (
-                  <TableRow key={s.id}>
-                    <TableCell className="max-w-72">
-                      <Link className="font-medium text-primary hover:underline" to={`/oss/${s.id}`}>
-                        {s.name}
-                      </Link>
-                      <p className="truncate text-xs text-muted-foreground">{s.purpose}</p>
-                    </TableCell>
-                    {tab === 'all' && <TableCell>{s.ownerName}</TableCell>}
-                    <TableCell>
-                      <Badge variant={s.status === 'pending' ? 'warning' : 'secondary'}>{statuses[s.status]}</Badge>
-                      {s.lastError && <p className="mt-1 text-xs text-destructive">操作失败，可在详情重试</p>}
-                      {s.rejectionReason && <p className="mt-1 text-xs text-muted-foreground">{s.rejectionReason}</p>}
-                    </TableCell>
-                    <TableCell>{s.publicRead ? '已开启' : '未开启'}</TableCell>
-                    <TableCell>
-                      <Button size="sm" variant="outline" asChild>
-                        <Link to={`/oss/${s.id}`}>详情</Link>
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <DataTable columns={columns} data={spaces.data} getRowId={(s) => s.id} className="min-w-[640px]" />
           )}
         </CardContent>
       </Card>

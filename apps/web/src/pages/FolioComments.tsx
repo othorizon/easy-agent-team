@@ -374,7 +374,6 @@ export function FolioDiscussion({
                       type="button"
                       variant="ghost"
                       size="sm"
-                      title="标注元素"
                       onClick={() => send('eat:select', { mode: 'element' })}
                     >
                       <MousePointer2 />
@@ -384,7 +383,6 @@ export function FolioDiscussion({
                       type="button"
                       variant="ghost"
                       size="sm"
-                      title="框选区域"
                       onClick={() => send('eat:select', { mode: 'region' })}
                     >
                       <ScanLine />

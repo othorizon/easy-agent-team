@@ -1,10 +1,12 @@
 import * as React from 'react';
 import { cn } from '../lib/utils';
 import { Label } from './ui/label';
+import type { FieldErrors } from 'react-hook-form';
 
 /**
  * 表单字段容器：label + 控件 + 提示/错误。
  * 配合 react-hook-form 使用：error 传 formState.errors.xxx?.message。
+ * 校验规则不写在 register 上，统一用 zodResolver 挂 `@eat/shared` 里的契约（中文报错兜底见 lib/zod.ts）。
  */
 export function Field({
   label,
@@ -65,11 +67,17 @@ export function Field({
   );
 }
 
-/** 常用校验规则 */
-export const rules = {
-  slug: { value: /^[a-z0-9][a-z0-9-]*$/, message: '仅小写字母、数字、连字符' },
-  envKey: { value: /^[A-Za-z_][A-Za-z0-9_]*$/, message: '字母、数字、下划线，不能以数字开头' },
-  email: { value: /^[^\s@]+@[^\s@]+\.[^\s@]+$/, message: '请输入有效邮箱' },
-  url: { value: /^https?:\/\/.+/, message: '请输入有效的 URL' },
-  dbName: { value: /^[a-z][a-z0-9_]{2,30}$/, message: '小写字母开头，字母/数字/下划线，3-31 位' },
-};
+/**
+ * 表单里第一条报错（按字段声明顺序深度优先）。字段多、不是每个都挂了报错位置的表单，
+ * 提交失败时把它放到表单底部做汇总，免得「点了保存没反应」。
+ */
+export function firstErrorMessage(errors: FieldErrors): string | undefined {
+  for (const [key, value] of Object.entries(errors)) {
+    // ref 是 DOM 节点，往里递归会顺着 React 内部字段绕圈
+    if (key === 'ref' || !value || typeof value !== 'object') continue;
+    if (typeof value.message === 'string' && value.message) return value.message;
+    const nested = firstErrorMessage(value as FieldErrors);
+    if (nested) return nested;
+  }
+  return undefined;
+}

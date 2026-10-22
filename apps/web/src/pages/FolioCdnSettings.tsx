@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useForm } from 'react-hook-form';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -9,13 +10,14 @@ import {
   type SiteSettingsInfo,
 } from '@eat/shared';
 import { api } from '../api';
+import type { z } from '../lib/zod';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
 import { Checkbox } from '../components/ui/checkbox';
 import { Switch } from '../components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { Field } from '../components/form';
+import { Field, firstErrorMessage } from '../components/form';
 import {
   SettingsActions,
   SettingsGroup,
@@ -50,7 +52,8 @@ export function FolioCdnSettings({ active = true }: { active?: boolean }) {
     queryFn: () => api<SiteCdnInfo>('GET', '/api/admin/site-settings/cdn'),
     refetchInterval: 5000,
   });
-  const form = useForm<UpdateSiteCdn>({
+  const form = useForm<z.input<typeof updateSiteCdnSchema>, unknown, UpdateSiteCdn>({
+    resolver: zodResolver(updateSiteCdnSchema),
     defaultValues: {
       enabled: false,
       scope: 'global',
@@ -127,11 +130,10 @@ export function FolioCdnSettings({ active = true }: { active?: boolean }) {
         </p>
       )}
       <form
-        onSubmit={form.handleSubmit((v) => {
-          const p = updateSiteCdnSchema.safeParse(v);
-          if (p.success) save.mutate(p.data);
-          else form.setError('root', { message: p.error.issues[0].message });
-        })}
+        onSubmit={form.handleSubmit(
+          (v) => save.mutate(v),
+          (errs) => form.setError('root', { message: firstErrorMessage(errs) }),
+        )}
         className="settings-form"
       >
         <fieldset disabled={save.isPending || retry.isPending} className="min-w-0">

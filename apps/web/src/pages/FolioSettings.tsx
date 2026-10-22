@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useForm } from 'react-hook-form';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
@@ -10,8 +11,9 @@ import {
   type UpdateSiteSettings,
 } from '@eat/shared';
 import { api } from '../api';
+import type { z } from '../lib/zod';
 import { DokployAppPicker } from '../components/dokploy-app-picker';
-import { Field } from '../components/form';
+import { Field, firstErrorMessage } from '../components/form';
 import {
   SettingsActions,
   SettingsGroup,
@@ -70,14 +72,14 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
     queryFn: () => api<SiteSettingsInfo>('GET', '/api/admin/site-settings'),
     refetchInterval: (q) => (busyStatuses.includes(q.state.data?.status ?? '') ? 1500 : false),
   });
-  const form = useForm<UpdateSiteSettings>({ defaultValues: defaults });
+  const form = useForm<z.input<typeof updateSiteSettingsSchema>, unknown, UpdateSiteSettings>({ resolver: zodResolver(updateSiteSettingsSchema), defaultValues: defaults });
   const initialized = useRef(false);
   const {
     register,
     watch,
     reset,
     setValue,
-    formState: { isDirty },
+    formState: { isDirty, errors },
   } = form;
   useEffect(() => {
     if (settings.data && (!initialized.current || !isDirty)) {
@@ -85,7 +87,7 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
       initialized.current = true;
     }
   }, [settings.data, isDirty, reset]);
-  const mode = watch('tlsMode');
+  const mode = watch('tlsMode') ?? 'alidns';
   const applicationId = watch('platformApplicationId');
   const domain = watch('domain');
   const target = watch('gatewayTarget');
@@ -145,14 +147,11 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
     >
       <form
         className="settings-form"
-        onSubmit={form.handleSubmit((values) => {
-          const parsed = updateSiteSettingsSchema.safeParse(values);
-          if (!parsed.success) {
-            form.setError('root', { message: parsed.error.issues[0].message });
-            return;
-          }
-          save.mutate(parsed.data);
-        })}
+        onSubmit={form.handleSubmit(
+          (values) => save.mutate(values),
+          // 字段旁边能显示的都显示了；底部再汇总第一条，覆盖没有报错位置的开关类字段
+          (errs) => form.setError('root', { message: firstErrorMessage(errs) }),
+        )}
       >
         <fieldset
           disabled={frozen || save.isPending || action.isPending}
@@ -162,7 +161,7 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
             <Field
               required
               label="EAT 控制台 HTTPS 地址"
-              htmlFor="site-platformUrl"
+              htmlFor="site-platformUrl" error={errors.platformUrl?.message}
               hint="用于 Folio 登录和评论，默认填写当前控制台地址，无需修改环境变量。"
             >
               <Input
@@ -175,7 +174,7 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
             <Field
               required
               label="发布域名后缀"
-              htmlFor="site-domain"
+              htmlFor="site-domain" error={errors.domain?.message}
               hint="应与控制台域名分开，例如 demo.sites.example.com"
             >
               <Input id="site-domain" {...register('domain')} placeholder="sites.example.com" required />
@@ -183,7 +182,7 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
             <Field
               required
               label="部署入口 IP / 主机名"
-              htmlFor="site-gatewayTarget"
+              htmlFor="site-gatewayTarget" error={errors.gatewayTarget?.message}
               hint="填写 Dokploy 所在服务器入口，域名应关闭 CDN / Cloudflare 代理。"
             >
               <Input
@@ -196,7 +195,7 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
             <Field
               className="settings-span"
               label="EAT 应用"
-              htmlFor="site-eat-app"
+              htmlFor="site-eat-app" error={errors.platformApplicationId?.message}
               required
               hint="选择在 Dokploy 中运行 EAT 控制台的应用，也可手动填写 Application ID。"
             >
@@ -219,7 +218,7 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
                 />
               </div>
             </Field>
-            <Field required label="EAT 容器端口" htmlFor="site-upstreamPort">
+            <Field required label="EAT 容器端口" htmlFor="site-upstreamPort" error={errors.upstreamPort?.message}>
               <Input
                 id="site-upstreamPort"
                 type="number"
@@ -231,7 +230,7 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
             </Field>
             <Field
               label="EAT 内部地址（可选）"
-              htmlFor="site-upstreamUrl"
+              htmlFor="site-upstreamUrl" error={errors.upstreamUrl?.message}
               hint="需要自定义时填写 Traefik 能访问的服务根地址。"
             >
               <Input
@@ -245,13 +244,13 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
             title="文件存储"
             description="发布文件存入私有 OSS Bucket，凭证留空会保留已保存的值。"
           >
-            <Field required label="OSS 地域" htmlFor="site-ossRegion">
+            <Field required label="OSS 地域" htmlFor="site-ossRegion" error={errors.ossRegion?.message}>
               <Input id="site-ossRegion" {...register('ossRegion')} placeholder="oss-cn-hangzhou" required />
             </Field>
-            <Field required label="私有 OSS Bucket" htmlFor="site-ossBucket">
+            <Field required label="私有 OSS Bucket" htmlFor="site-ossBucket" error={errors.ossBucket?.message}>
               <Input id="site-ossBucket" {...register('ossBucket')} required />
             </Field>
-            <Field label="OSS AccessKey ID" htmlFor="site-ossAccessKeyId">
+            <Field label="OSS AccessKey ID" htmlFor="site-ossAccessKeyId" error={errors.ossAccessKeyId?.message}>
               <Input
                 id="site-ossAccessKeyId"
                 type="password"
@@ -262,7 +261,7 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
                 }
               />
             </Field>
-            <Field label="OSS AccessKey Secret" htmlFor="site-ossAccessKeySecret">
+            <Field label="OSS AccessKey Secret" htmlFor="site-ossAccessKeySecret" error={errors.ossAccessKeySecret?.message}>
               <Input
                 id="site-ossAccessKeySecret"
                 type="password"
@@ -276,7 +275,7 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
             title="HTTPS 与证书"
             description="选择自动签发或复用已有证书，保留当前服务的证书管理方式。"
           >
-            <Field label="HTTPS 证书方式" htmlFor="site-tlsMode">
+            <Field label="HTTPS 证书方式" htmlFor="site-tlsMode" error={errors.tlsMode?.message}>
               <Controller
                 control={form.control}
                 name="tlsMode"
@@ -304,11 +303,11 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
             </Field>
             {['alidns', 'cloudflare'].includes(mode) && (
               <>
-                <Field required label="证书联系邮箱" htmlFor="site-acmeEmail">
+                <Field required label="证书联系邮箱" htmlFor="site-acmeEmail" error={errors.acmeEmail?.message}>
                   <Input id="site-acmeEmail" type="email" {...register('acmeEmail')} required />
                 </Field>
                 {mode === 'alidns' && (
-                  <Field label="DNS AccessKey ID" htmlFor="site-dnsAccessKeyId">
+                  <Field label="DNS AccessKey ID" htmlFor="site-dnsAccessKeyId" error={errors.dnsAccessKeyId?.message}>
                     <Input
                       id="site-dnsAccessKeyId"
                       type="password"
@@ -324,7 +323,7 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
                 )}
                 <Field
                   label={mode === 'alidns' ? 'DNS AccessKey Secret' : 'Cloudflare API Token'}
-                  htmlFor="site-dnsAccessKeySecret"
+                  htmlFor="site-dnsAccessKeySecret" error={errors.dnsAccessKeySecret?.message}
                 >
                   <Input
                     id="site-dnsAccessKeySecret"
@@ -371,10 +370,6 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
                   <Controller
                     control={form.control}
                     name="certificateId"
-                    rules={{
-                      validate: (value) =>
-                        form.getValues('tlsMode') !== 'certificate' || !!value || '请选择已有泛域名证书',
-                    }}
                     render={({ field, fieldState }) => (
                       <Select
                         name={field.name}
@@ -425,10 +420,6 @@ export function FolioSettingsCard({ active = true }: { active?: boolean }) {
                 <Controller
                   control={form.control}
                   name="resolverName"
-                  rules={{
-                    validate: (value) =>
-                      form.getValues('tlsMode') !== 'resolver' || !!value || '请选择 DNS 证书解析器',
-                  }}
                   render={({ field, fieldState }) => (
                     <Select
                       name={field.name}

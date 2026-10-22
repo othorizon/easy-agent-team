@@ -2,27 +2,30 @@ import type { CreateDbInstanceRequest, DbAssignmentInfo, DbInstanceInfo } from '
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, Plus, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { createDbAssignmentSchema, createDbInstanceSchema } from '@eat/shared';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useForm } from 'react-hook-form';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
 import { InlineCode } from '../components/code';
 import { Confirm } from '../components/confirm';
+import { DataTable, type DataTableColumn } from '../components/data-table';
 import { Empty } from '../components/empty';
-import { Field, rules } from '../components/form';
+import { Field } from '../components/form';
 import { PageHeader } from '../components/page-header';
 import { PAGE_SIZE_OPTIONS, Pagination } from '../components/pagination';
 import { Segmented } from '../components/segmented';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { Tip } from '../components/ui/tooltip';
 import { Card, CardContent } from '../components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { TableSkeleton } from '../components/ui/skeleton';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { useQueryParams } from '../lib/use-query-params';
+import { z } from '../lib/zod';
 import { AssignmentActions, DB_STATUS_BADGE, useAssignmentAction } from './db-shared';
 
 export function DbsPage() {
@@ -118,73 +121,162 @@ export function DbsPage() {
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '删除失败'),
   });
 
-  function AssignmentTable({ rows, admin, loading, emptyText }: { rows: DbAssignmentInfo[]; admin: boolean; loading: boolean; emptyText: React.ReactNode }) {
-    if (loading) return <TableSkeleton rows={2} />;
-    if (rows.length === 0) return <Empty text={keyword ? '没有符合条件的数据库' : emptyText} action={clearSearch} className="py-6" />;
-    return (
-      <Table className={admin ? 'min-w-[760px]' : 'min-w-[600px]'}>
-        <TableHeader>
-          <TableRow>
-            <TableHead>库</TableHead>
-            <TableHead className="w-32">实例</TableHead>
-            {admin && <TableHead className="w-24">申请人</TableHead>}
-            <TableHead>用途</TableHead>
-            <TableHead className="w-22">状态</TableHead>
-            <TableHead className="w-40">凭证</TableHead>
-            <TableHead className={admin ? 'w-64' : 'w-20'}>操作</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((r) => (
-            <TableRow key={r.id}>
-              <TableCell>
-                {/* 库名即详情入口（决策 39）；操作列里再给一个显式的「详情」，不靠猜 */}
-                <Link to={`/db/${r.id}`}>
-                  <InlineCode className="text-primary hover:underline">{r.dbName}</InlineCode>
-                </Link>
-              </TableCell>
-              <TableCell className="text-muted-foreground whitespace-nowrap">{r.instanceName}</TableCell>
-              {admin && <TableCell className="text-muted-foreground whitespace-nowrap">{r.requesterName}</TableCell>}
-              <TableCell className="max-w-48 truncate text-muted-foreground" title={r.purpose}>
-                {r.purpose}
-              </TableCell>
-              <TableCell>{DB_STATUS_BADGE[r.status]}</TableCell>
-              <TableCell>
-                {r.environmentSlug ? (
-                  <Link to={`/envs/${r.environmentSlug}`}>
-                    <InlineCode className="text-primary hover:underline">{r.environmentSlug}</InlineCode>
-                  </Link>
-                ) : r.error ? (
-                  <span className="block max-w-40 truncate text-destructive" title={r.error}>
-                    {r.error}
-                  </span>
-                ) : (
-                  '—'
-                )}
-              </TableCell>
-              <TableCell>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <Button asChild size="sm" variant="ghost" className="text-muted-foreground">
-                    <Link to={`/db/${r.id}`}>
-                      详情
-                      <ArrowRight className="size-3.5" />
-                    </Link>
-                  </Button>
-                  {admin && (
-                    <AssignmentActions
-                      row={r}
-                      pending={act.isPending && act.variables?.id === r.id}
-                      onAct={(action) => act.mutate({ id: r.id, action })}
-                    />
-                  )}
-                </div>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    );
-  }
+  const assignmentColumns = (admin: boolean): DataTableColumn<DbAssignmentInfo>[] => [
+    {
+      id: 'dbName',
+      header: '库',
+      // 库名即详情入口（决策 39）；操作列里再给一个显式的「详情」，不靠猜
+      cell: ({ row: { original: r } }) => (
+        <Link to={`/db/${r.id}`}>
+          <InlineCode className="text-primary hover:underline">{r.dbName}</InlineCode>
+        </Link>
+      ),
+    },
+    {
+      accessorKey: 'instanceName',
+      header: '实例',
+      meta: { className: 'w-32', cellClassName: 'text-muted-foreground whitespace-nowrap' },
+    },
+    ...(admin
+      ? [
+          {
+            accessorKey: 'requesterName',
+            header: '申请人',
+            meta: { className: 'w-24', cellClassName: 'text-muted-foreground whitespace-nowrap' },
+          } satisfies DataTableColumn<DbAssignmentInfo>,
+        ]
+      : []),
+    {
+      id: 'purpose',
+      header: '用途',
+      meta: { cellClassName: 'text-muted-foreground' },
+      cell: ({ row: { original: r } }) => (
+        <Tip content={r.purpose}>
+          <span className="block max-w-48 truncate">{r.purpose}</span>
+        </Tip>
+      ),
+    },
+    {
+      id: 'status',
+      header: '状态',
+      meta: { className: 'w-22' },
+      cell: ({ row: { original: r } }) => DB_STATUS_BADGE[r.status],
+    },
+    {
+      id: 'credential',
+      header: '凭证',
+      meta: { className: 'w-40' },
+      cell: ({ row: { original: r } }) =>
+        r.environmentSlug ? (
+          <Link to={`/envs/${r.environmentSlug}`}>
+            <InlineCode className="text-primary hover:underline">{r.environmentSlug}</InlineCode>
+          </Link>
+        ) : r.error ? (
+          <Tip content={r.error}>
+            <span className="block max-w-40 truncate text-destructive">{r.error}</span>
+          </Tip>
+        ) : (
+          '—'
+        ),
+    },
+    {
+      id: 'actions',
+      header: '操作',
+      meta: { className: admin ? 'w-64' : 'w-20' },
+      cell: ({ row: { original: r } }) => (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button asChild size="sm" variant="ghost" className="text-muted-foreground">
+            <Link to={`/db/${r.id}`}>
+              详情
+              <ArrowRight className="size-3.5" />
+            </Link>
+          </Button>
+          {admin && (
+            <AssignmentActions
+              row={r}
+              pending={act.isPending && act.variables?.id === r.id}
+              onAct={(action) => act.mutate({ id: r.id, action })}
+            />
+          )}
+        </div>
+      ),
+    },
+  ];
+
+  const assignmentTable = (rows: DbAssignmentInfo[], admin: boolean, loading: boolean, emptyText: React.ReactNode) => (
+    <DataTable
+      columns={assignmentColumns(admin)}
+      data={rows}
+      loading={loading}
+      skeletonRows={2}
+      getRowId={(r) => r.id}
+      className={admin ? 'min-w-[760px]' : 'min-w-[600px]'}
+      empty={<Empty text={keyword ? '没有符合条件的数据库' : emptyText} action={clearSearch} className="py-6" />}
+    />
+  );
+
+  const instanceColumns: DataTableColumn<DbInstanceInfo>[] = [
+    {
+      accessorKey: 'name',
+      header: '名称',
+      meta: { cellClassName: 'font-medium whitespace-nowrap' },
+      cell: ({ row: { original: r } }) => (
+        <>
+          {r.name}
+          <div className="mt-0.5 text-xs text-muted-foreground md:hidden">
+            {r.host}:{r.port}
+          </div>
+        </>
+      ),
+    },
+    {
+      id: 'engine',
+      header: '类型',
+      meta: { className: 'w-24' },
+      cell: ({ row: { original: r } }) => <Badge variant="secondary">{r.engine}</Badge>,
+    },
+    {
+      id: 'address',
+      header: '地址',
+      meta: { hideBelow: 'md' },
+      cell: ({ row: { original: r } }) => (
+        <InlineCode>
+          {r.host}:{r.port}
+        </InlineCode>
+      ),
+    },
+    {
+      accessorKey: 'assignmentCount',
+      header: '已分配',
+      meta: { className: 'w-18 text-right', cellClassName: 'tabular-nums' },
+    },
+    {
+      accessorKey: 'note',
+      header: '备注',
+      meta: { hideBelow: 'lg', cellClassName: 'max-w-xs truncate text-muted-foreground' },
+    },
+    ...(isAdmin
+      ? [
+          {
+            id: 'actions',
+            header: '操作',
+            meta: { className: 'w-20' },
+            cell: ({ row: { original: r } }) => (
+              <Confirm
+                title="删除实例登记？"
+                description="不影响实例本身，仅移除平台上的登记。"
+                confirmText="删除"
+                onConfirm={() => removeInstance.mutate(r.id)}
+              >
+                <Button size="sm" variant="outline-destructive">
+                  删除
+                </Button>
+              </Confirm>
+            ),
+          } satisfies DataTableColumn<DbInstanceInfo>,
+        ]
+      : []),
+  ];
 
   return (
     <div className="space-y-5">
@@ -234,14 +326,14 @@ export function DbsPage() {
         <TabsContent value="mine" className="mt-4">
           <Card>
             <CardContent className="space-y-4">
-              {mine.isError ? loadError : (
-                <AssignmentTable
-                  rows={assignmentRows}
-                  admin={false}
-                  loading={mine.isLoading}
-                  emptyText="暂无。点击「申请数据库」，批准后凭证会出现在你的环境列表里。"
-                />
-              )}
+              {mine.isError
+                ? loadError
+                : assignmentTable(
+                    assignmentRows,
+                    false,
+                    mine.isLoading,
+                    '暂无。点击「申请数据库」，批准后凭证会出现在你的环境列表里。',
+                  )}
               {pagination}
             </CardContent>
           </Card>
@@ -250,61 +342,17 @@ export function DbsPage() {
         <TabsContent value="instances" className="mt-4">
           <Card>
             <CardContent className="space-y-4">
-              {instances.isLoading ? (
-                <TableSkeleton rows={2} />
-              ) : instances.isError ? (
+              {instances.isError ? (
                 loadError
-              ) : instanceRows.length === 0 ? (
-                <Empty text={keyword ? '没有符合条件的实例' : '暂无实例（由管理员登记）'} action={clearSearch} className="py-6" />
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>名称</TableHead>
-                      <TableHead className="w-24">类型</TableHead>
-                      <TableHead className="hidden md:table-cell">地址</TableHead>
-                      <TableHead className="w-18 text-right">已分配</TableHead>
-                      <TableHead className="hidden lg:table-cell">备注</TableHead>
-                      {isAdmin && <TableHead className="w-20">操作</TableHead>}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {instanceRows.map((r) => (
-                      <TableRow key={r.id}>
-                        <TableCell className="font-medium whitespace-nowrap">
-                          {r.name}
-                          <div className="mt-0.5 text-xs text-muted-foreground md:hidden">
-                            {r.host}:{r.port}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="secondary">{r.engine}</Badge>
-                        </TableCell>
-                        <TableCell className="hidden md:table-cell">
-                          <InlineCode>
-                            {r.host}:{r.port}
-                          </InlineCode>
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">{r.assignmentCount}</TableCell>
-                        <TableCell className="hidden max-w-xs truncate text-muted-foreground lg:table-cell">{r.note}</TableCell>
-                        {isAdmin && (
-                          <TableCell>
-                            <Confirm
-                              title="删除实例登记？"
-                              description="不影响实例本身，仅移除平台上的登记。"
-                              confirmText="删除"
-                              onConfirm={() => removeInstance.mutate(r.id)}
-                            >
-                              <Button size="sm" variant="outline-destructive">
-                                删除
-                              </Button>
-                            </Confirm>
-                          </TableCell>
-                        )}
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <DataTable
+                  columns={instanceColumns}
+                  data={instanceRows}
+                  loading={instances.isLoading}
+                  skeletonRows={2}
+                  getRowId={(r) => r.id}
+                  empty={<Empty text={keyword ? '没有符合条件的实例' : '暂无实例（由管理员登记）'} action={clearSearch} className="py-6" />}
+                />
               )}
               {pagination}
             </CardContent>
@@ -315,7 +363,7 @@ export function DbsPage() {
           <TabsContent value="all" className="mt-4">
             <Card>
               <CardContent className="space-y-4">
-                {all.isError ? loadError : <AssignmentTable rows={assignmentRows} admin loading={all.isLoading} emptyText="暂无分配" />}
+                {all.isError ? loadError : assignmentTable(assignmentRows, true, all.isLoading, '暂无分配')}
                 {pagination}
               </CardContent>
             </Card>
@@ -351,7 +399,8 @@ function AddInstanceDialog({
   onClose: () => void;
   onSubmit: (v: CreateDbInstanceRequest) => void;
 }) {
-  const { register, handleSubmit, control, formState: { errors } } = useForm<CreateDbInstanceRequest>({
+  const { register, handleSubmit, control, formState: { errors } } = useForm({
+    resolver: zodResolver(createDbInstanceSchema),
     defaultValues: { name: '', engine: 'postgres', host: '', port: 5432, adminUser: '', adminPassword: '', note: '' },
   });
   return (
@@ -362,10 +411,10 @@ function AddInstanceDialog({
         </DialogHeader>
         <form
           className="flex flex-col gap-4"
-          onSubmit={handleSubmit((v) => onSubmit({ ...v, port: Number(v.port) }))}
+          onSubmit={handleSubmit(onSubmit)}
         >
           <Field label="名称" htmlFor="ins-name" required error={errors.name?.message}>
-            <Input id="ins-name" placeholder="团队测试 PG" aria-invalid={!!errors.name} {...register('name', { required: '请输入名称' })} />
+            <Input id="ins-name" placeholder="团队测试 PG" aria-invalid={!!errors.name} {...register('name')} />
           </Field>
           <Field label="类型">
             <Controller
@@ -385,7 +434,7 @@ function AddInstanceDialog({
           </Field>
           <div className="grid grid-cols-3 gap-4">
             <Field label="主机" htmlFor="ins-host" required error={errors.host?.message} className="col-span-2">
-              <Input id="ins-host" placeholder="db.internal.example.com" aria-invalid={!!errors.host} {...register('host', { required: '请输入主机' })} />
+              <Input id="ins-host" placeholder="db.internal.example.com" aria-invalid={!!errors.host} {...register('host')} />
             </Field>
             <Field label="端口" htmlFor="ins-port" required error={errors.port?.message}>
               <Input
@@ -394,12 +443,12 @@ function AddInstanceDialog({
                 min={1}
                 max={65535}
                 aria-invalid={!!errors.port}
-                {...register('port', { required: '请输入端口', valueAsNumber: true })}
+                {...register('port', { valueAsNumber: true })}
               />
             </Field>
           </div>
           <Field label="管理账号" htmlFor="ins-user" required error={errors.adminUser?.message}>
-            <Input id="ins-user" placeholder="postgres" aria-invalid={!!errors.adminUser} {...register('adminUser', { required: '请输入管理账号' })} />
+            <Input id="ins-user" placeholder="postgres" aria-invalid={!!errors.adminUser} {...register('adminUser')} />
           </Field>
           <Field label="管理密码" htmlFor="ins-pass" hint="加密存储">
             <Input id="ins-pass" type="password" autoComplete="new-password" {...register('adminPassword')} />
@@ -416,6 +465,9 @@ function AddInstanceDialog({
   );
 }
 
+/** 契约里 instanceId 只要求是字符串（服务端再查存在性），表单上空值要拦成「请选择实例」 */
+const requestDbFormSchema = createDbAssignmentSchema.extend({ instanceId: z.string().min(1, '请选择实例') });
+
 function RequestDbDialog({
   instances,
   pending,
@@ -427,11 +479,10 @@ function RequestDbDialog({
   onClose: () => void;
   onSubmit: (v: { instanceId: string; dbName: string; purpose: string }) => void;
 }) {
-  const { register, handleSubmit, control, formState: { errors } } = useForm<{
-    instanceId: string;
-    dbName: string;
-    purpose: string;
-  }>({ defaultValues: { instanceId: '', dbName: '', purpose: '' } });
+  const { register, handleSubmit, control, formState: { errors } } = useForm({
+    resolver: zodResolver(requestDbFormSchema),
+    defaultValues: { instanceId: '', dbName: '', purpose: '' },
+  });
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
@@ -443,7 +494,6 @@ function RequestDbDialog({
             <Controller
               control={control}
               name="instanceId"
-              rules={{ required: '请选择实例' }}
               render={({ field }) => (
                 <Select value={field.value || undefined} onValueChange={field.onChange}>
                   <SelectTrigger aria-invalid={!!errors.instanceId}>
@@ -472,7 +522,7 @@ function RequestDbDialog({
               placeholder="proj_crm"
               className="font-mono"
               aria-invalid={!!errors.dbName}
-              {...register('dbName', { required: '请输入库名', pattern: rules.dbName })}
+              {...register('dbName')}
             />
           </Field>
           <Field label="用途" htmlFor="req-purpose" required error={errors.purpose?.message} hint="给管理员看">
@@ -481,7 +531,7 @@ function RequestDbDialog({
               rows={2}
               placeholder="CRM 小工具的数据存储"
               aria-invalid={!!errors.purpose}
-              {...register('purpose', { required: '请说明用途' })}
+              {...register('purpose')}
             />
           </Field>
           <Button type="submit" loading={pending} className="w-full">

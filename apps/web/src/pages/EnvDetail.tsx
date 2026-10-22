@@ -11,26 +11,30 @@ import type {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, ArrowRight, Check, Database, Eye, EyeOff, Loader2, Pencil, Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import { useState } from 'react';
+import { createEnvironmentSchema, upsertVariableSchema } from '@eat/shared';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useForm } from 'react-hook-form';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
 import { CopyButton, InlineCode } from '../components/code';
 import { Combobox } from '../components/combobox';
+import { DateTimePicker, EXPIRY_PRESETS } from '../components/datetime-picker';
 import { Confirm } from '../components/confirm';
+import { DataTable, type DataTableColumn } from '../components/data-table';
 import { Empty } from '../components/empty';
-import { Field, rules } from '../components/form';
+import { Field } from '../components/form';
 import { PageHeader } from '../components/page-header';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { Tip } from '../components/ui/tooltip';
 import { Card, CardContent } from '../components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { TableSkeleton } from '../components/ui/skeleton';
 import { Switch } from '../components/ui/switch';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { formatDateTime } from '../lib/format';
+import type { z } from '../lib/zod';
 import { cn } from '../lib/utils';
 import { DB_STATUS_BADGE } from './db-shared';
 
@@ -168,6 +172,129 @@ export function EnvDetailPage() {
 
   const isDbEnv = env?.source === 'db_assignment';
 
+  const variableColumns: DataTableColumn<VariableMeta>[] = [
+    {
+      accessorKey: 'key',
+      header: 'Key',
+      enableSorting: true,
+      cell: ({ row: { original: row } }) => (
+        <>
+          <span className="inline-flex items-center gap-1">
+            <InlineCode>{row.key}</InlineCode>
+            <CopyButton text={row.key} />
+            {!row.secret && <Badge variant="secondary">非敏感</Badge>}
+          </span>
+          <div className="mt-0.5 truncate text-xs text-muted-foreground md:hidden">{row.description}</div>
+        </>
+      ),
+    },
+    {
+      accessorKey: 'description',
+      header: '备注',
+      meta: { hideBelow: 'md', cellClassName: 'max-w-sm truncate text-muted-foreground' },
+    },
+    {
+      id: 'value',
+      header: '值',
+      meta: { className: 'w-44' },
+      cell: ({ row: { original: row } }) => (
+        <ValueCell
+          row={row}
+          revealed={revealed[row.key]}
+          canReveal={canManage && row.hasAccess}
+          revealing={reveal.isPending && reveal.variables === row.key}
+          onReveal={() => reveal.mutate(row.key)}
+          onHide={() =>
+            setRevealed((prev) => {
+              const next = { ...prev };
+              delete next[row.key];
+              return next;
+            })
+          }
+        />
+      ),
+    },
+    {
+      id: 'access',
+      header: '权限',
+      meta: { className: 'w-24' },
+      cell: ({ row: { original: row } }) =>
+        row.hasAccess ? <Badge variant="success">可读取</Badge> : <Badge variant="outline">无权限</Badge>,
+    },
+    {
+      id: 'visibility',
+      header: '对未授权成员',
+      meta: { className: 'w-36', cellClassName: 'text-muted-foreground', hideBelow: 'lg' },
+      cell: ({ row: { original: row } }) => (row.visibleWithoutPermission ? '可见名称与备注' : '完全隐藏'),
+    },
+    {
+      accessorKey: 'version',
+      header: '版本',
+      meta: { className: 'w-16', cellClassName: 'tabular-nums text-muted-foreground', hideBelow: 'sm' },
+      cell: ({ row: { original: row } }) => `v${row.version}`,
+    },
+    ...(canManage
+      ? [
+          {
+            id: 'actions',
+            header: '操作',
+            meta: { className: 'w-36' },
+            cell: ({ row: { original: row } }) => (
+              <div className="flex items-center gap-1.5">
+                <Button size="sm" variant="outline" onClick={() => setEditing(row)}>
+                  更新
+                </Button>
+                <Confirm
+                  title={`删除 ${row.key}？`}
+                  description="删除后已授权成员将无法再读取该变量。"
+                  confirmText="删除"
+                  onConfirm={() => removeVar.mutate(row.key)}
+                >
+                  <Button size="sm" variant="outline-destructive">
+                    删除
+                  </Button>
+                </Confirm>
+              </div>
+            ),
+          } satisfies DataTableColumn<VariableMeta>,
+        ]
+      : []),
+  ];
+
+  const grantColumns: DataTableColumn<GrantInfo>[] = [
+    { accessorKey: 'userName', header: '用户', meta: { cellClassName: 'font-medium' } },
+    {
+      id: 'scope',
+      header: '范围',
+      cell: ({ row: { original: g } }) => (
+        <>
+          {g.variableKey ? <InlineCode>{g.variableKey}</InlineCode> : <Badge>整个环境</Badge>}
+          <div className="mt-0.5 text-xs text-muted-foreground sm:hidden">
+            {g.expiresAt ? `至 ${formatDateTime(g.expiresAt)}` : '永久'}
+          </div>
+        </>
+      ),
+    },
+    {
+      id: 'expiresAt',
+      header: '有效期',
+      meta: { cellClassName: 'text-muted-foreground', hideBelow: 'sm' },
+      cell: ({ row: { original: g } }) => (g.expiresAt ? formatDateTime(g.expiresAt) : '永久'),
+    },
+    {
+      id: 'actions',
+      header: '操作',
+      meta: { className: 'w-20' },
+      cell: ({ row: { original: g } }) => (
+        <Confirm title="撤销该授权？" confirmText="撤销" onConfirm={() => revokeGrant.mutate(g.id)}>
+          <Button size="sm" variant="outline-destructive">
+            撤销
+          </Button>
+        </Confirm>
+      ),
+    },
+  ];
+
   return (
     <div className="space-y-5">
       <div>
@@ -234,86 +361,13 @@ export function EnvDetailPage() {
       {env && <ResourceRequests type="env" resourceId={env.id}/>}
       <Card>
         <CardContent>
-          {variables.isLoading ? (
-            <TableSkeleton />
-          ) : (variables.data ?? []).length === 0 ? (
-            <Empty text="这个环境还没有变量" />
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Key</TableHead>
-                  <TableHead className="hidden md:table-cell">备注</TableHead>
-                  <TableHead className="w-44">值</TableHead>
-                  <TableHead className="w-24">权限</TableHead>
-                  <TableHead className="hidden w-36 lg:table-cell">对未授权成员</TableHead>
-                  <TableHead className="hidden w-16 sm:table-cell">版本</TableHead>
-                  {canManage && <TableHead className="w-36">操作</TableHead>}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(variables.data ?? []).map((row) => (
-                  <TableRow key={row.id}>
-                    <TableCell>
-                      <span className="inline-flex items-center gap-1">
-                        <InlineCode>{row.key}</InlineCode>
-                        <CopyButton text={row.key} />
-                        {!row.secret && <Badge variant="secondary">非敏感</Badge>}
-                      </span>
-                      <div className="mt-0.5 truncate text-xs text-muted-foreground md:hidden">{row.description}</div>
-                    </TableCell>
-                    <TableCell className="hidden max-w-sm truncate text-muted-foreground md:table-cell">
-                      {row.description}
-                    </TableCell>
-                    <TableCell>
-                      <ValueCell
-                        row={row}
-                        revealed={revealed[row.key]}
-                        canReveal={canManage && row.hasAccess}
-                        revealing={reveal.isPending && reveal.variables === row.key}
-                        onReveal={() => reveal.mutate(row.key)}
-                        onHide={() =>
-                          setRevealed((prev) => {
-                            const next = { ...prev };
-                            delete next[row.key];
-                            return next;
-                          })
-                        }
-                      />
-                    </TableCell>
-                    <TableCell>
-                      {row.hasAccess ? <Badge variant="success">可读取</Badge> : <Badge variant="outline">无权限</Badge>}
-                    </TableCell>
-                    <TableCell className="hidden text-muted-foreground lg:table-cell">
-                      {row.visibleWithoutPermission ? '可见名称与备注' : '完全隐藏'}
-                    </TableCell>
-                    <TableCell className="hidden tabular-nums text-muted-foreground sm:table-cell">
-                      v{row.version}
-                    </TableCell>
-                    {canManage && (
-                      <TableCell>
-                        <div className="flex items-center gap-1.5">
-                          <Button size="sm" variant="outline" onClick={() => setEditing(row)}>
-                            更新
-                          </Button>
-                          <Confirm
-                            title={`删除 ${row.key}？`}
-                            description="删除后已授权成员将无法再读取该变量。"
-                            confirmText="删除"
-                            onConfirm={() => removeVar.mutate(row.key)}
-                          >
-                            <Button size="sm" variant="outline-destructive">
-                              删除
-                            </Button>
-                          </Confirm>
-                        </div>
-                      </TableCell>
-                    )}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+          <DataTable
+            columns={variableColumns}
+            data={variables.data}
+            loading={variables.isLoading}
+            getRowId={(row) => row.id}
+            empty={<Empty text="这个环境还没有变量" />}
+          />
         </CardContent>
       </Card>
 
@@ -329,45 +383,14 @@ export function EnvDetailPage() {
                 新增授权
               </Button>
             </div>
-            {grants.isLoading ? (
-              <TableSkeleton rows={2} />
-            ) : (grants.data ?? []).length === 0 ? (
-              <Empty text="暂无授权。成员发起权限申请后也可在「权限申请」页审批。" className="py-6" />
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>用户</TableHead>
-                    <TableHead>范围</TableHead>
-                    <TableHead className="hidden sm:table-cell">有效期</TableHead>
-                    <TableHead className="w-20">操作</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(grants.data ?? []).map((g) => (
-                    <TableRow key={g.id}>
-                      <TableCell className="font-medium">{g.userName}</TableCell>
-                      <TableCell>
-                        {g.variableKey ? <InlineCode>{g.variableKey}</InlineCode> : <Badge>整个环境</Badge>}
-                        <div className="mt-0.5 text-xs text-muted-foreground sm:hidden">
-                          {g.expiresAt ? `至 ${formatDateTime(g.expiresAt)}` : '永久'}
-                        </div>
-                      </TableCell>
-                      <TableCell className="hidden text-muted-foreground sm:table-cell">
-                        {g.expiresAt ? formatDateTime(g.expiresAt) : '永久'}
-                      </TableCell>
-                      <TableCell>
-                        <Confirm title="撤销该授权？" confirmText="撤销" onConfirm={() => revokeGrant.mutate(g.id)}>
-                          <Button size="sm" variant="outline-destructive">
-                            撤销
-                          </Button>
-                        </Confirm>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
+            <DataTable
+              columns={grantColumns}
+              data={grants.data}
+              loading={grants.isLoading}
+              skeletonRows={2}
+              getRowId={(g) => g.id}
+              empty={<Empty text="暂无授权。成员发起权限申请后也可在「权限申请」页审批。" className="py-6" />}
+            />
           </CardContent>
         </Card>
       )}
@@ -448,9 +471,11 @@ function ValueCell({
   if (shown != null) {
     return (
       <span className="inline-flex max-w-44 items-center gap-1">
-        <InlineCode className="truncate" title={shown}>
-          {shown}
-        </InlineCode>
+        <Tip content={shown}>
+          <span className="min-w-0 truncate">
+            <InlineCode>{shown}</InlineCode>
+          </span>
+        </Tip>
         <CopyButton text={shown} />
         {row.value == null && (
           <IconButton label="隐藏值" onClick={onHide}>
@@ -484,16 +509,17 @@ function IconButton({
   children: React.ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      disabled={disabled}
-      onClick={onClick}
-      className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-60"
-    >
-      {children}
-    </button>
+    <Tip content={label}>
+      <button
+        type="button"
+        aria-label={label}
+        disabled={disabled}
+        onClick={onClick}
+        className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-60"
+      >
+        {children}
+      </button>
+    </Tip>
   );
 }
 
@@ -574,7 +600,8 @@ function EditEnvDialog({
   onClose: () => void;
   onSubmit: (v: UpdateEnvironmentRequest) => void;
 }) {
-  const { register, handleSubmit, formState: { errors } } = useForm<{ name: string; description: string }>({
+  const { register, handleSubmit, formState: { errors } } = useForm({
+    resolver: zodResolver(createEnvironmentSchema.pick({ name: true, description: true })),
     defaultValues: { name: env.name, description: env.description },
   });
   return (
@@ -585,7 +612,7 @@ function EditEnvDialog({
         </DialogHeader>
         <form className="flex flex-col gap-4" onSubmit={handleSubmit(onSubmit)}>
           <Field label="名称" htmlFor="env-edit-name" required error={errors.name?.message}>
-            <Input id="env-edit-name" aria-invalid={!!errors.name} {...register('name', { required: '请输入名称' })} />
+            <Input id="env-edit-name" aria-invalid={!!errors.name} {...register('name')} />
           </Field>
           <Field label="备注" htmlFor="env-edit-desc" hint="供人和 AI 理解这个环境的用途">
             <Textarea id="env-edit-desc" rows={2} {...register('description')} />
@@ -599,13 +626,11 @@ function EditEnvDialog({
   );
 }
 
-interface VariableFormValues {
-  key: string;
-  value: string;
-  description: string;
-  visibleWithoutPermission: boolean;
-  secret: boolean;
-}
+/** 表单里值始终是字符串（输入框），「留空 = 保持当前值」在提交时再转换成契约里的缺省 */
+const variableFormSchema = upsertVariableSchema.extend({ value: upsertVariableSchema.shape.value.unwrap() });
+/** 新增变量值必填（服务端同样拒绝缺省值） */
+const newVariableFormSchema = variableFormSchema.refine((v) => v.value !== '', { path: ['value'], message: '请输入值' });
+type VariableFormValues = z.output<typeof variableFormSchema>;
 
 function VariableDialog({
   editing,
@@ -619,7 +644,8 @@ function VariableDialog({
   onSubmit: (v: UpsertVariableRequest) => void;
 }) {
   const isNew = editing === 'new';
-  const { register, handleSubmit, control, watch, formState: { errors } } = useForm<VariableFormValues>({
+  const { register, handleSubmit, control, watch, formState: { errors } } = useForm({
+    resolver: zodResolver(isNew ? newVariableFormSchema : variableFormSchema),
     defaultValues: isNew
       ? { key: '', value: '', description: '', visibleWithoutPermission: true, secret: true }
       : {
@@ -657,7 +683,7 @@ function VariableDialog({
               className="font-mono"
               disabled={!isNew}
               aria-invalid={!!errors.key}
-              {...register('key', { required: '请输入 Key', pattern: rules.envKey })}
+              {...register('key')}
             />
           </Field>
           <Field
@@ -692,7 +718,7 @@ function VariableDialog({
               placeholder={isNew ? undefined : '不填则保持当前值'}
               className={secret ? undefined : 'font-mono'}
               aria-invalid={!!errors.value}
-              {...register('value', { required: isNew ? '请输入值' : false })}
+              {...register('value')}
             />
           </Field>
           <Field label="备注" htmlFor="var-desc" hint="AI 会读取，请写清楚这个变量的作用">
@@ -732,7 +758,7 @@ function GrantDialog({
 }) {
   const [userId, setUserId] = useState<string | null>(null);
   const [variableId, setVariableId] = useState<string>('');
-  const [expiresAt, setExpiresAt] = useState('');
+  const [expiresAt, setExpiresAt] = useState<Date | undefined>();
   const [userError, setUserError] = useState(false);
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -751,7 +777,7 @@ function GrantDialog({
             onSubmit({
               userId,
               variableId: variableId || undefined,
-              expiresAt: expiresAt ? new Date(expiresAt).toISOString() : undefined,
+              expiresAt: expiresAt?.toISOString(),
             });
           }}
         >
@@ -783,11 +809,12 @@ function GrantDialog({
             </Select>
           </Field>
           <Field label="有效期" htmlFor="grant-expire" hint="不填为永久">
-            <Input
+            <DateTimePicker
               id="grant-expire"
-              type="datetime-local"
               value={expiresAt}
-              onChange={(e) => setExpiresAt(e.target.value)}
+              onChange={setExpiresAt}
+              placeholder="永久"
+              presets={EXPIRY_PRESETS}
             />
           </Field>
           <Button type="submit" loading={pending} className="w-full">

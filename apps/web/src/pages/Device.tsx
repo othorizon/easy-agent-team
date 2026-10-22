@@ -1,5 +1,7 @@
 import { ArrowRight, CheckCircle2 } from 'lucide-react';
 import { useState } from 'react';
+import { deviceApproveRequestSchema } from '@eat/shared';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -22,6 +24,7 @@ export function DevicePage() {
   const [loading, setLoading] = useState(false);
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm<FormValues>({
+    resolver: zodResolver(deviceApproveRequestSchema),
     defaultValues: { userCode: params.get('code') ?? '', tokenName: '' },
   });
 
@@ -85,7 +88,7 @@ export function DevicePage() {
                 placeholder="例如 AB2C-3DEF"
                 className="font-mono tracking-[0.15em] uppercase"
                 aria-invalid={!!errors.userCode}
-                {...register('userCode', { required: '请输入终端显示的代码' })}
+                {...register('userCode')}
               />
             </Field>
             <Field

@@ -11,6 +11,8 @@ import { api } from '../../api';
 import { PAGE_SIZE_OPTIONS, Pagination } from '../../components/pagination';
 import { useQueryParams } from '../../lib/use-query-params';
 import { Button } from '../../components/ui/button';
+import { Tip } from '../../components/ui/tooltip';
+import { formatDateTime } from '../../lib/format';
 import { Input, Textarea } from '../../components/ui/input';
 import {
   Dialog,
@@ -37,8 +39,8 @@ function FolioProject({ site }: { site: SiteInfo }) {
     <article className="folio-project">
       <div className="folio-project-header">
         <div className="folio-project-identity">
-          <h2><Link className="folio-project-link" to={detailUrl} title={site.name}>{site.name}</Link></h2>
-          <span className="folio-project-slug" title={site.slug}>{site.slug}</span>
+          <h2><Tip content={site.name}><Link className="folio-project-link" to={detailUrl}>{site.name}</Link></Tip></h2>
+          <Tip content={site.slug}><span className="folio-project-slug">{site.slug}</span></Tip>
         </div>
         <span className={published ? 'folio-status' : 'folio-status folio-status-draft'}>
           <i />{published ? '已发布' : '待发布'}
@@ -48,19 +50,23 @@ function FolioProject({ site }: { site: SiteInfo }) {
       <div className="folio-project-footer">
         <div className="folio-project-meta">
           <FolioAccess access={site.access} />
-          <time className="folio-project-date" dateTime={site.updatedAt} title={new Date(site.updatedAt).toLocaleString('zh-CN')}>
-            {new Date(site.updatedAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })} 更新
-          </time>
+          <Tip content={formatDateTime(site.updatedAt)}>
+            <time className="folio-project-date" dateTime={site.updatedAt}>
+              {new Date(site.updatedAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })} 更新
+            </time>
+          </Tip>
         </div>
         <div className="folio-project-actions">
           {published ? (
             <>
-              <Button
-                variant="ghost" size="icon-sm" aria-label={'复制链接：' + site.name} title="复制链接"
-                onClick={() => void navigator.clipboard.writeText(site.url)
-                  .then(() => toast.success('已复制 Folio 链接'))
-                  .catch(() => toast.error('复制失败，请重试'))}
-              ><Copy /></Button>
+              <Tip content="复制链接">
+                <Button
+                  variant="ghost" size="icon-sm" aria-label={'复制链接：' + site.name}
+                  onClick={() => void navigator.clipboard.writeText(site.url)
+                    .then(() => toast.success('已复制 Folio 链接'))
+                    .catch(() => toast.error('复制失败，请重试'))}
+                ><Copy /></Button>
+              </Tip>
               <Button asChild variant="outline" size="sm">
                 <a href={site.url} target="_blank" rel="noreferrer" aria-label={'打开 ' + site.name}>
                   打开<ArrowUpRight />
@@ -75,11 +81,13 @@ function FolioProject({ site }: { site: SiteInfo }) {
             </Button>
           )}
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label={'更多操作：' + site.name} title="更多操作">
-                <MoreHorizontal />
-              </Button>
-            </DropdownMenuTrigger>
+            <Tip content="更多操作">
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label={'更多操作：' + site.name}>
+                  <MoreHorizontal />
+                </Button>
+              </DropdownMenuTrigger>
+            </Tip>
             <DropdownMenuContent align="end">
               <DropdownMenuItem asChild>
                 <Link to={detailUrl}><MessageSquare />{published ? '查看评论' : '查看详情'}</Link>
@@ -201,7 +209,7 @@ export function FoliosPage() {
                     onChange={(e) => setParams({ q: e.target.value, page: '1' })} placeholder="搜索 Folio…"
                   />
                   {query && (
-                    <button type="button" aria-label="清空搜索" title="清空搜索" onClick={() => {
+                    <button type="button" aria-label="清空搜索" onClick={() => {
                       setParams({ q: '', page: '1' });
                       searchInput.current?.focus();
                     }}><X /></button>
@@ -213,8 +221,8 @@ export function FoliosPage() {
                   <option value="name">名称排序</option>
                 </select>
                 <div className="folio-view-switch" role="group" aria-label="Folio 视图">
-                  <button type="button" aria-label="卡片视图" title="卡片视图" aria-pressed={view === 'grid'} onClick={() => changeView('grid')}><LayoutGrid /></button>
-                  <button type="button" aria-label="列表视图" title="列表视图" aria-pressed={view === 'list'} onClick={() => changeView('list')}><List /></button>
+                  <Tip content="卡片视图"><button type="button" aria-label="卡片视图" aria-pressed={view === 'grid'} onClick={() => changeView('grid')}><LayoutGrid /></button></Tip>
+                  <Tip content="列表视图"><button type="button" aria-label="列表视图" aria-pressed={view === 'list'} onClick={() => changeView('list')}><List /></button></Tip>
                 </div>
               </div>
             </div>

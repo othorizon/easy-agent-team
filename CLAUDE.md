@@ -88,3 +88,5 @@ Folio 命名（决策 70）：原「页面」功能统一为 Folio，CLI 使用 
 Folio 增量上传（决策 72）：CLI/Web 共用清单→OSS V4 二进制 PUT→私有快照流式 SHA-256 验证→禁止覆盖封存→事务发布。每版完整清单、Folio 内 blob 共享；site_upload 持久化会话/租约/完成结果，删除通过 site_cleanup 持续清扫独立 UUID 前缀。新增内容验证读取仍经过 EAT 一次。CLI 0.8.0 / 指南 34；迁移 0018，协议、CORS、恢复、清理及真实 OSS 联调步骤见 docs/folio-uploads.md。本次不执行生产迁移/部署/数据清理。
 
 Folio 只保留新布局（决策 73）：删除旧目录/本地历史存储和无调用的旧 put/get/discard/kind 方法，网关仅按 blobs-v1 清单 hash 读取。0019 迁移拒绝未处理的旧布局记录；通过后增加布局约束、调整默认值、将 site_version.storage 固定为 oss（保留列支持上一版新协议服务回滚），已有新版本、评论与回滚保留。MCP 内联输入及 50 MiB 上限不变，仍走新上传会话和封存。CLI/shared/指南契约未变，版本保持 CLI 0.8.0 / 指南 34。
+
+控制台组件层补齐（决策 83，不换组件库）：悬停提示一律用 `components/ui/tooltip.tsx` 的 `Tip`（别再写原生 `title=`；它补了触屏轻点切换，禁用按钮外包 `<span tabIndex={0}>`）；表格一律用 `components/data-table.tsx` 的 `DataTable`（TanStack Table，列宽 / 截断 / 窄屏隐藏写在列 `meta`，前端分页的表不开排序）；授权有效期用 `components/datetime-picker.tsx`（日历按需加载）；表单校验一律 `zodResolver` + `@eat/shared` 的契约，不在 `register` 上写规则，中文报错兜底在 `lib/zod.ts`（main.tsx 已引入），带 refine 的 schema 取字段用 `pickFields()`，允许留空用 `z.literal('').or(规则)`。`components.json` + `@/` 别名只为 `npx shadcn add <x> --view/--diff` 看官方源码，**别直接 add**（会覆盖改过的 button.tsx、装上无关的 `cn` 包，且官方是 React 19 写法）。只动控制台，版本号不动。

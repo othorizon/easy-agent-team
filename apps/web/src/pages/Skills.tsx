@@ -1,5 +1,6 @@
 import type { PushSkillRequest, SkillInfo, SkillListResult } from '@eat/shared';
-import { SKILL_LIST_DEFAULT_PAGE_SIZE, parseSkillFrontmatter, slugifyName } from '@eat/shared';
+import { SKILL_LIST_DEFAULT_PAGE_SIZE, parseSkillFrontmatter, pushSkillSchema, slugifyName } from '@eat/shared';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Lock, Minus, Plus, Search } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
@@ -9,12 +10,13 @@ import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
 import { InlineCode } from '../components/code';
 import { Empty } from '../components/empty';
-import { Field, rules } from '../components/form';
+import { Field } from '../components/form';
 import { PageHeader } from '../components/page-header';
 import { Pagination } from '../components/pagination';
 import { Segmented } from '../components/segmented';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { Tip } from '../components/ui/tooltip';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
@@ -22,6 +24,7 @@ import { ListSkeleton } from '../components/ui/skeleton';
 import { formatDateTime, formatRelativeTime } from '../lib/format';
 import { cn } from '../lib/utils';
 import { useQueryParams } from '../lib/use-query-params';
+import { pickFields, z } from '../lib/zod';
 
 /** 范围是高频筛选，做成带数量的分段切换；数量键对应 SkillListResult.counts */
 const SCOPE_OPTIONS: Array<{ value: keyof SkillListResult['counts']; label: string }> = [
@@ -337,15 +340,17 @@ function SkillMeta({ skill, isMine }: { skill: SkillInfo; isMine: boolean }) {
       <MetaDot />
       <span>v{skill.currentVersion}</span>
       <MetaDot />
-      <span className="inline-flex items-center gap-0.5" title={`${skill.subscriberCount} 人订阅`}>
-        <SubscriberGlyph />
-        {skill.subscriberCount}
-        <span className="sr-only sm:not-sr-only"> 人订阅</span>
-      </span>
+      <Tip content={`${skill.subscriberCount} 人订阅`}>
+        <span className="inline-flex items-center gap-0.5">
+          <SubscriberGlyph />
+          {skill.subscriberCount}
+          <span className="sr-only sm:not-sr-only"> 人订阅</span>
+        </span>
+      </Tip>
       <MetaDot className="hidden sm:inline" />
-      <span className="hidden sm:inline" title={formatDateTime(skill.updatedAt)}>
-        {formatRelativeTime(skill.updatedAt)}更新
-      </span>
+      <Tip content={formatDateTime(skill.updatedAt)}>
+        <span className="hidden sm:inline">{formatRelativeTime(skill.updatedAt)}更新</span>
+      </Tip>
     </div>
   );
 }
@@ -360,16 +365,15 @@ function SkillMeta({ skill, isMine }: { skill: SkillInfo; isMine: boolean }) {
 function SubscribeAction({ skill, pending, onToggle }: { skill: SkillInfo; pending: boolean; onToggle: () => void }) {
   if (skill.subscriptionLocked) {
     return (
-      <Button
-        size="sm"
-        variant="ghost"
-        disabled
-        className="text-muted-foreground disabled:opacity-100"
-        title="管理员已设为捆绑，全员同步且不可退订"
-      >
-        <Lock className="size-3.5" />
-        已捆绑
-      </Button>
+      <Tip content="管理员已设为捆绑，全员同步且不可退订">
+        {/* 禁用的按钮收不到指针事件，提示挂在外层 */}
+        <span tabIndex={0} className="inline-flex rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/40">
+          <Button size="sm" variant="ghost" disabled className="text-muted-foreground disabled:opacity-100">
+            <Lock className="size-3.5" />
+            已捆绑
+          </Button>
+        </span>
+      </Tip>
     );
   }
   if (pending) {
@@ -407,13 +411,12 @@ function SubscribeAction({ skill, pending, onToggle }: { skill: SkillInfo; pendi
   );
 }
 
-interface CreateFormValues {
-  slug: string;
-  name: string;
-  description: string;
-  content: string;
-  private: boolean;
-}
+/** 控制台建 Skill 时名称必填（CLI push 可缺省、回落到原值或 slug）；可见性用开关表示 */
+const createSkillFormSchema = pickFields(pushSkillSchema, ['slug', 'content']).extend({
+  name: pushSkillSchema.shape.name.unwrap(),
+  description: pushSkillSchema.shape.description.unwrap(),
+  private: z.boolean(),
+});
 
 function CreateSkillDialog({
   pending,
@@ -424,7 +427,8 @@ function CreateSkillDialog({
   onClose: () => void;
   onSubmit: (v: PushSkillRequest) => void;
 }) {
-  const { register, handleSubmit, control, getValues, setValue, formState: { errors } } = useForm<CreateFormValues>({
+  const { register, handleSubmit, control, getValues, setValue, formState: { errors } } = useForm({
+    resolver: zodResolver(createSkillFormSchema),
     defaultValues: { slug: '', name: '', description: '', content: '', private: false },
   });
 
@@ -446,7 +450,7 @@ function CreateSkillDialog({
     if (fm.description) fill('description', fm.description, 2000, '触发描述');
     if (filled.length > 0) toast.info(`已从 SKILL.md frontmatter 填入${filled.join('、')}`);
   };
-  const contentField = register('content', { required: '请输入正文' });
+  const contentField = register('content');
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -475,11 +479,11 @@ function CreateSkillDialog({
                 placeholder="weekly-report"
                 className="font-mono"
                 aria-invalid={!!errors.slug}
-                {...register('slug', { required: '请输入标识', pattern: rules.slug })}
+                {...register('slug')}
               />
             </Field>
             <Field label="名称" htmlFor="skill-name" required error={errors.name?.message}>
-              <Input id="skill-name" placeholder="运营周报生成" aria-invalid={!!errors.name} {...register('name', { required: '请输入名称' })} />
+              <Input id="skill-name" placeholder="运营周报生成" aria-invalid={!!errors.name} {...register('name')} />
             </Field>
           </div>
           <Field label="触发描述" htmlFor="skill-desc" hint="AI 靠它判断何时使用这个 skill">

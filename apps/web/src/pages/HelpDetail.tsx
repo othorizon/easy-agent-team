@@ -2,13 +2,15 @@ import type { DistillRequest, HelpRequestDetail } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Check, Send, Trash2 } from 'lucide-react';
 import { useState } from 'react';
+import { distillRequestSchema, replyHelpRequestSchema } from '@eat/shared';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useForm } from 'react-hook-form';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
 import { InlineCode } from '../components/code';
 import { Confirm } from '../components/confirm';
-import { Field, rules } from '../components/form';
+import { Field } from '../components/form';
 import { PageLoading } from '../components/page-loading';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -18,8 +20,20 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input, Textarea } from '../components/ui/input';
 import { Switch } from '../components/ui/switch';
 import { formatDateTime } from '../lib/format';
+import { z } from '../lib/zod';
 import { sendHelpReply, type HelpReplyInput } from '../lib/help-reply';
 import { HELP_STATUS_BADGE } from './Help';
+
+/** 只有空白的回复不发（输入框不显示报错，只标红） */
+const replyFormSchema = replyHelpRequestSchema.extend({
+  content: replyHelpRequestSchema.shape.content.refine((v) => !!v.trim()),
+  reopen: z.boolean(),
+});
+
+/** 经验标识可留空（提交时转成缺省，由服务端生成 exp-xxx） */
+const distillFormSchema = distillRequestSchema.extend({
+  slug: distillRequestSchema.shape.slug.unwrap().or(z.literal('')),
+});
 
 export function HelpDetailPage() {
   const { id = '' } = useParams();
@@ -28,7 +42,7 @@ export function HelpDetailPage() {
   const me = getStoredUser();
   const [distilling, setDistilling] = useState(false);
   // 已解决的求助默认重新打开；取消勾选可只留言（决策 66）。
-  const replyForm = useForm<{ content: string; reopen: boolean }>({ defaultValues: { content: '', reopen: true } });
+  const replyForm = useForm({ resolver: zodResolver(replyFormSchema), defaultValues: { content: '', reopen: true } });
 
   const detail = useQuery({
     queryKey: ['help', id],
@@ -235,7 +249,7 @@ export function HelpDetailPage() {
                   disabled={replyBusy}
                   maxLength={10000}
                   aria-invalid={!!replyForm.formState.errors.content}
-                  {...replyForm.register('content', { required: true, validate: (value) => !!value.trim() })}
+                  {...replyForm.register('content')}
                 />
                 {r.status === 'resolved' && (
                   <label className="flex cursor-pointer items-start gap-2 text-sm">
@@ -312,7 +326,8 @@ function DistillDialog({
   onClose: () => void;
   onSubmit: (v: DistillRequest) => void;
 }) {
-  const { register, handleSubmit, control, formState: { errors } } = useForm<DistillRequest>({
+  const { register, handleSubmit, control, formState: { errors } } = useForm({
+    resolver: zodResolver(distillFormSchema),
     defaultValues: { public: false, grantedToRequester: true, grantedToHelper: false, useAi: true, slug: '' },
   });
   return (
@@ -363,7 +378,7 @@ function DistillDialog({
               placeholder="exp-duizhang"
               className="font-mono"
               aria-invalid={!!errors.slug}
-              {...register('slug', { pattern: rules.slug })}
+              {...register('slug')}
             />
           </Field>
           <Button type="submit" loading={pending} className="w-full">

@@ -2,6 +2,8 @@ import type { SkillDetail, SkillSubscriber, SkillVersionInfo, UpdateSkillRequest
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Pencil, Plus, X } from 'lucide-react';
 import { useState } from 'react';
+import { updateSkillSchema } from '@eat/shared';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useForm } from 'react-hook-form';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -9,19 +11,46 @@ import { api, ApiError, getStoredUser } from '../api';
 import { CodeBlock, InlineCode } from '../components/code';
 import { Combobox } from '../components/combobox';
 import { Confirm } from '../components/confirm';
+import { DataTable, type DataTableColumn } from '../components/data-table';
 import { Empty } from '../components/empty';
 import { Field } from '../components/form';
 import { PageLoading } from '../components/page-loading';
 import { Segmented } from '../components/segmented';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { Tip } from '../components/ui/tooltip';
 import { Card, CardContent } from '../components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
-import { TableSkeleton } from '../components/ui/skeleton';
 import { Switch } from '../components/ui/switch';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { formatDateTime } from '../lib/format';
+import { z } from '../lib/zod';
+
+const VERSION_COLUMNS: DataTableColumn<SkillVersionInfo>[] = [
+  {
+    id: 'version',
+    header: '版本',
+    meta: { className: 'w-16', cellClassName: 'tabular-nums' },
+    cell: ({ row: { original: v } }) => `v${v.version}`,
+  },
+  {
+    id: 'changelog',
+    header: '说明',
+    meta: { cellClassName: 'text-muted-foreground' },
+    cell: ({ row: { original: v } }) => v.changelog || '—',
+  },
+  {
+    accessorKey: 'createdBy',
+    header: '提交人',
+    meta: { className: 'w-28', cellClassName: 'text-muted-foreground', hideBelow: 'sm' },
+  },
+  {
+    id: 'createdAt',
+    header: '时间',
+    meta: { className: 'w-40', cellClassName: 'text-muted-foreground', hideBelow: 'md' },
+    cell: ({ row: { original: v } }) => formatDateTime(v.createdAt),
+  },
+];
 
 export function SkillDetailPage() {
   const { slug = '' } = useParams();
@@ -123,9 +152,14 @@ export function SkillDetailPage() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {s.subscriptionLocked ? (
-              <Button variant="outline" disabled title="管理员已设为捆绑，全员同步且不可退订">
-                已捆绑
-              </Button>
+              <Tip content="管理员已设为捆绑，全员同步且不可退订">
+                {/* 禁用的按钮收不到指针事件，提示挂在外层 */}
+                <span tabIndex={0} className="inline-flex rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/40">
+                  <Button variant="outline" disabled>
+                    已捆绑
+                  </Button>
+                </span>
+              </Tip>
             ) : (
               <Button
                 variant={s.subscribed ? 'outline' : 'default'}
@@ -265,34 +299,14 @@ export function SkillDetailPage() {
       <Card>
         <CardContent>
           <h2 className="mb-3 text-sm font-semibold">版本历史</h2>
-          {versions.isLoading ? (
-            <TableSkeleton rows={2} />
-          ) : (versions.data ?? []).length === 0 ? (
-            <Empty text="暂无版本记录" className="py-6" />
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-16">版本</TableHead>
-                  <TableHead>说明</TableHead>
-                  <TableHead className="hidden w-28 sm:table-cell">提交人</TableHead>
-                  <TableHead className="hidden w-40 md:table-cell">时间</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(versions.data ?? []).map((v) => (
-                  <TableRow key={v.version}>
-                    <TableCell className="tabular-nums">v{v.version}</TableCell>
-                    <TableCell className="text-muted-foreground">{v.changelog || '—'}</TableCell>
-                    <TableCell className="hidden text-muted-foreground sm:table-cell">{v.createdBy}</TableCell>
-                    <TableCell className="hidden text-muted-foreground md:table-cell">
-                      {formatDateTime(v.createdAt)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+          <DataTable
+            columns={VERSION_COLUMNS}
+            data={versions.data}
+            loading={versions.isLoading}
+            skeletonRows={2}
+            getRowId={(v) => String(v.version)}
+            empty={<Empty text="暂无版本记录" className="py-6" />}
+          />
         </CardContent>
       </Card>
 
@@ -309,13 +323,14 @@ export function SkillDetailPage() {
   );
 }
 
-interface EditFormValues {
-  name: string;
-  description: string;
-  private: boolean;
-  allowHelp: boolean;
-  bundled: boolean;
-}
+/** 元信息编辑：名称在控制台必填；可见性用开关表示，提交时再换成契约里的 visibility */
+const editSkillFormSchema = z.object({
+  name: updateSkillSchema.shape.name.unwrap(),
+  description: updateSkillSchema.shape.description.unwrap(),
+  private: z.boolean(),
+  allowHelp: z.boolean(),
+  bundled: z.boolean(),
+});
 
 function EditSkillDialog({
   skill,
@@ -330,7 +345,8 @@ function EditSkillDialog({
   onClose: () => void;
   onSubmit: (v: UpdateSkillRequest) => void;
 }) {
-  const { register, handleSubmit, control, watch, formState: { errors } } = useForm<EditFormValues>({
+  const { register, handleSubmit, control, watch, formState: { errors } } = useForm({
+    resolver: zodResolver(editSkillFormSchema),
     defaultValues: {
       name: skill.name,
       description: skill.description,
@@ -359,7 +375,7 @@ function EditSkillDialog({
           )}
         >
           <Field label="名称" htmlFor="edit-name" required error={errors.name?.message}>
-            <Input id="edit-name" aria-invalid={!!errors.name} {...register('name', { required: '请输入名称' })} />
+            <Input id="edit-name" aria-invalid={!!errors.name} {...register('name')} />
           </Field>
           <Field label="触发描述" htmlFor="edit-desc" hint="可多行；AI 靠它判断何时使用这个 skill">
             <Textarea id="edit-desc" rows={4} {...register('description')} />
@@ -461,6 +477,57 @@ function SubscribersCard({ slug, skill }: { slug: string; skill: SkillDetail }) 
   });
 
   const rows = subscribers.data ?? [];
+  const subscriberColumns: DataTableColumn<SkillSubscriber>[] = [
+    {
+      id: 'member',
+      header: '成员',
+      cell: ({ row: { original: r } }) => (
+        <>
+          <span className="font-medium">{r.name}</span>
+          {r.role === 'admin' && (
+            <Badge variant="outline" className="ml-2">
+              管理员
+            </Badge>
+          )}
+          <div className="truncate text-xs text-muted-foreground">{r.email}</div>
+          <div className="text-xs text-muted-foreground sm:hidden">{SOURCE_LABEL[r.source]}</div>
+        </>
+      ),
+    },
+    {
+      id: 'source',
+      header: '来源',
+      meta: { className: 'w-24', hideBelow: 'sm' },
+      cell: ({ row: { original: r } }) => (
+        <Badge variant={r.source === 'bundled' ? 'warning' : 'secondary'}>{SOURCE_LABEL[r.source]}</Badge>
+      ),
+    },
+    {
+      id: 'subscribedAt',
+      header: '订阅时间',
+      meta: { className: 'w-40', cellClassName: 'text-muted-foreground', hideBelow: 'md' },
+      cell: ({ row: { original: r } }) => (r.subscribedAt ? formatDateTime(r.subscribedAt) : '—'),
+    },
+    {
+      id: 'actions',
+      header: '',
+      meta: { className: 'w-16' },
+      cell: ({ row: { original: r } }) =>
+        r.removable && (
+          <Confirm
+            title={`取消 ${r.name} 的订阅？`}
+            description="对方下次 eat sync 时会从本地移除这个 skill。"
+            confirmText="取消订阅"
+            onConfirm={() => remove.mutate(r.userId)}
+          >
+            <Button variant="ghost" size="icon-sm" aria-label={`取消 ${r.name} 的订阅`}>
+              <X />
+            </Button>
+          </Confirm>
+        ),
+    },
+  ];
+
   return (
     <Card>
       <CardContent>
@@ -475,58 +542,14 @@ function SubscribersCard({ slug, skill }: { slug: string; skill: SkillDetail }) 
             </Button>
           )}
         </div>
-        {subscribers.isPending ? (
-          <TableSkeleton rows={2} />
-        ) : rows.length === 0 ? (
-          <Empty text="还没有人订阅" className="py-6" />
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>成员</TableHead>
-                <TableHead className="hidden w-24 sm:table-cell">来源</TableHead>
-                <TableHead className="hidden w-40 md:table-cell">订阅时间</TableHead>
-                <TableHead className="w-16" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((r) => (
-                <TableRow key={r.userId}>
-                  <TableCell>
-                    <span className="font-medium">{r.name}</span>
-                    {r.role === 'admin' && (
-                      <Badge variant="outline" className="ml-2">
-                        管理员
-                      </Badge>
-                    )}
-                    <div className="truncate text-xs text-muted-foreground">{r.email}</div>
-                    <div className="text-xs text-muted-foreground sm:hidden">{SOURCE_LABEL[r.source]}</div>
-                  </TableCell>
-                  <TableCell className="hidden sm:table-cell">
-                    <Badge variant={r.source === 'bundled' ? 'warning' : 'secondary'}>{SOURCE_LABEL[r.source]}</Badge>
-                  </TableCell>
-                  <TableCell className="hidden text-muted-foreground md:table-cell">
-                    {r.subscribedAt ? formatDateTime(r.subscribedAt) : '—'}
-                  </TableCell>
-                  <TableCell>
-                    {r.removable && (
-                      <Confirm
-                        title={`取消 ${r.name} 的订阅？`}
-                        description="对方下次 eat sync 时会从本地移除这个 skill。"
-                        confirmText="取消订阅"
-                        onConfirm={() => remove.mutate(r.userId)}
-                      >
-                        <Button variant="ghost" size="icon-sm" aria-label={`取消 ${r.name} 的订阅`}>
-                          <X />
-                        </Button>
-                      </Confirm>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
+        <DataTable
+          columns={subscriberColumns}
+          data={rows}
+          loading={subscribers.isPending}
+          skeletonRows={2}
+          getRowId={(r) => r.userId}
+          empty={<Empty text="还没有人订阅" className="py-6" />}
+        />
       </CardContent>
       {adding && (
         <AddSubscriberDialog

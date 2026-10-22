@@ -11,6 +11,8 @@ import { ENV_LIST_MAX_PAGE_SIZE, SKILL_LIST_MAX_PAGE_SIZE } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Plus } from 'lucide-react';
 import { useState } from 'react';
+import { createTemplateSchema } from '@eat/shared';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
@@ -206,7 +208,8 @@ function CreateTemplateDialog({
   onClose: () => void;
   onSubmit: (v: { name: string; description: string }) => void;
 }) {
-  const { register, handleSubmit, formState: { errors } } = useForm<{ name: string; description: string }>({
+  const { register, handleSubmit, formState: { errors } } = useForm({
+    resolver: zodResolver(createTemplateSchema),
     defaultValues: { name: '', description: '' },
   });
   return (
@@ -217,7 +220,7 @@ function CreateTemplateDialog({
         </DialogHeader>
         <form className="flex flex-col gap-4" onSubmit={handleSubmit(onSubmit)}>
           <Field label="名称" htmlFor="tpl-name" required error={errors.name?.message}>
-            <Input id="tpl-name" placeholder="运营 / 测试 / 客服…" aria-invalid={!!errors.name} {...register('name', { required: '请输入名称' })} />
+            <Input id="tpl-name" placeholder="运营 / 测试 / 客服…" aria-invalid={!!errors.name} {...register('name')} />
           </Field>
           <Field label="说明" htmlFor="tpl-desc" hint="适用于哪类岗位、包含什么能力">
             <Textarea id="tpl-desc" rows={2} {...register('description')} />

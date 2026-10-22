@@ -19,12 +19,12 @@ const badgeVariants = cva(
   },
 );
 
-function Badge({
-  className,
-  variant,
-  ...props
-}: React.HTMLAttributes<HTMLSpanElement> & VariantProps<typeof badgeVariants>) {
-  return <span data-slot="badge" className={cn(badgeVariants({ variant }), className)} {...props} />;
-}
+/* forwardRef：徽标常被 Tip 等 asChild 触发器包住，React 18 下拿不到 ref 就无法定位浮层 */
+const Badge = React.forwardRef<HTMLSpanElement, React.HTMLAttributes<HTMLSpanElement> & VariantProps<typeof badgeVariants>>(
+  ({ className, variant, ...props }, ref) => (
+    <span ref={ref} data-slot="badge" className={cn(badgeVariants({ variant }), className)} {...props} />
+  ),
+);
+Badge.displayName = 'Badge';
 
 export { Badge, badgeVariants };

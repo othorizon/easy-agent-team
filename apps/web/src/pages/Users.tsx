@@ -4,19 +4,21 @@ import { Plus } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { createUserRequestSchema, resetUserPasswordRequestSchema } from '@eat/shared';
 import { toast } from 'sonner';
 import { api, ApiError, getStoredUser, getToken, setSession } from '../api';
 import { Confirm } from '../components/confirm';
-import { Field, rules } from '../components/form';
+import { DataTable, type DataTableColumn } from '../components/data-table';
+import { Field } from '../components/form';
 import { PageHeader } from '../components/page-header';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { Tip } from '../components/ui/tooltip';
 import { Card, CardContent } from '../components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { TableSkeleton } from '../components/ui/skeleton';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 
 interface UserRow {
   id: string;
@@ -88,6 +90,93 @@ export function UsersPage() {
     }, onError,
   });
 
+  const columns: DataTableColumn<UserRow>[] = [
+    { accessorKey: 'name', header: '姓名', enableSorting: true, meta: { cellClassName: 'font-medium whitespace-nowrap' } },
+    {
+      accessorKey: 'email',
+      header: '邮箱',
+      enableSorting: true,
+      meta: { cellClassName: 'text-muted-foreground' },
+      cell: ({ row: { original: row } }) => (
+        <Tip content={row.email}>
+          <span className="block max-w-48 truncate">{row.email}</span>
+        </Tip>
+      ),
+    },
+    {
+      accessorKey: 'role',
+      header: '角色',
+      enableSorting: true,
+      meta: { className: 'w-28' },
+      cell: ({ row: { original: row } }) =>
+        row.id === me?.id ? (
+          <Badge variant={row.role === 'admin' ? 'warning' : 'secondary'}>
+            {row.role === 'admin' ? '管理员' : '成员'}（我）
+          </Badge>
+        ) : (
+          <Select
+            value={row.role}
+            onValueChange={(v) => update.mutate({ id: row.id, role: v as UserRow['role'] })}
+          >
+            <SelectTrigger className="h-7 w-24 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="admin">管理员</SelectItem>
+              <SelectItem value="member">成员</SelectItem>
+            </SelectContent>
+          </Select>
+        ),
+    },
+    {
+      accessorKey: 'status',
+      header: '状态',
+      enableSorting: true,
+      meta: { className: 'w-20' },
+      cell: ({ row: { original: row } }) =>
+        row.status === 'active' ? <Badge variant="success">正常</Badge> : <Badge variant="destructive">已禁用</Badge>,
+    },
+    {
+      id: 'github',
+      header: 'GitHub 组织',
+      meta: { cellClassName: 'min-w-64' },
+      cell: ({ row: { original: row } }) => <GithubAccountPanel userId={row.id} />,
+    },
+    {
+      id: 'actions',
+      header: '操作',
+      meta: { className: 'w-40' },
+      cell: ({ row: { original: row } }) => (
+        <>
+          <Button size="sm" variant="outline" className="mb-1.5" onClick={() => { setEditingProfile(row); setName(row.name); setBio(row.bio); }}>编辑资料</Button>
+          {row.id === me?.id ? null : (
+            <div className="flex items-center gap-1.5">
+              <Button size="sm" variant="outline" onClick={() => setResetting(row)}>
+                重置密码
+              </Button>
+              {row.status === 'active' ? (
+                <Confirm
+                  title={`禁用 ${row.name}？`}
+                  description="其 EAT 登录 Token 将立即吊销。模型 API Key 和 OSS 权限会同步停用，云端生效存在传播延迟。"
+                  confirmText="禁用"
+                  onConfirm={() => update.mutate({ id: row.id, status: 'disabled' })}
+                >
+                  <Button size="sm" variant="outline-destructive">
+                    禁用
+                  </Button>
+                </Confirm>
+              ) : (
+                <Button size="sm" variant="outline" onClick={() => update.mutate({ id: row.id, status: 'active' })}>
+                  启用
+                </Button>
+              )}
+            </div>
+          )}
+        </>
+      ),
+    },
+  ];
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -109,82 +198,13 @@ export function UsersPage() {
           <p className="mb-4 text-sm leading-relaxed text-muted-foreground">
             不能修改自己的角色或状态，避免锁死唯一管理员。
           </p>
-          {users.isLoading ? (
-            <TableSkeleton />
-          ) : (
-            <Table className="min-w-[560px]">
-              <TableHeader>
-                <TableRow>
-                  <TableHead>姓名</TableHead>
-                  <TableHead>邮箱</TableHead>
-                  <TableHead className="w-28">角色</TableHead>
-                  <TableHead className="w-20">状态</TableHead>
-                  <TableHead>GitHub 组织</TableHead>
-                  <TableHead className="w-40">操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(users.data ?? []).map((row) => (
-                  <TableRow key={row.id}>
-                    <TableCell className="font-medium whitespace-nowrap">{row.name}</TableCell>
-                    <TableCell className="max-w-48 truncate text-muted-foreground" title={row.email}>
-                      {row.email}
-                    </TableCell>
-                    <TableCell>
-                      {row.id === me?.id ? (
-                        <Badge variant={row.role === 'admin' ? 'warning' : 'secondary'}>
-                          {row.role === 'admin' ? '管理员' : '成员'}（我）
-                        </Badge>
-                      ) : (
-                        <Select
-                          value={row.role}
-                          onValueChange={(v) => update.mutate({ id: row.id, role: v as UserRow['role'] })}
-                        >
-                          <SelectTrigger className="h-7 w-24 text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="admin">管理员</SelectItem>
-                            <SelectItem value="member">成员</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {row.status === 'active' ? <Badge variant="success">正常</Badge> : <Badge variant="destructive">已禁用</Badge>}
-                    </TableCell>
-                    <TableCell className="min-w-64"><GithubAccountPanel userId={row.id} /></TableCell>
-                    <TableCell>
-                      <Button size="sm" variant="outline" className="mb-1.5" onClick={() => { setEditingProfile(row); setName(row.name); setBio(row.bio); }}>编辑资料</Button>
-                      {row.id === me?.id ? null : (
-                        <div className="flex items-center gap-1.5">
-                          <Button size="sm" variant="outline" onClick={() => setResetting(row)}>
-                            重置密码
-                          </Button>
-                          {row.status === 'active' ? (
-                            <Confirm
-                              title={`禁用 ${row.name}？`}
-                              description="其 EAT 登录 Token 将立即吊销。模型 API Key 和 OSS 权限会同步停用，云端生效存在传播延迟。"
-                              confirmText="禁用"
-                              onConfirm={() => update.mutate({ id: row.id, status: 'disabled' })}
-                            >
-                              <Button size="sm" variant="outline-destructive">
-                                禁用
-                              </Button>
-                            </Confirm>
-                          ) : (
-                            <Button size="sm" variant="outline" onClick={() => update.mutate({ id: row.id, status: 'active' })}>
-                              启用
-                            </Button>
-                          )}
-                        </div>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+          <DataTable
+            columns={columns}
+            data={users.data}
+            loading={users.isLoading}
+            getRowId={(row) => row.id}
+            className="min-w-[560px]"
+          />
         </CardContent>
       </Card>
 
@@ -212,6 +232,9 @@ export function UsersPage() {
   );
 }
 
+/** 角色走单独的 Select，不进表单 */
+const createUserFormSchema = createUserRequestSchema.omit({ role: true });
+
 function CreateUserDialog({
   pending,
   onClose,
@@ -222,7 +245,8 @@ function CreateUserDialog({
   onSubmit: (v: { name: string; email: string; password: string; role: 'admin' | 'member' }) => void;
 }) {
   const [role, setRole] = useState<'admin' | 'member'>('member');
-  const { register, handleSubmit, formState: { errors } } = useForm<{ name: string; email: string; password: string }>({
+  const { register, handleSubmit, formState: { errors } } = useForm({
+    resolver: zodResolver(createUserFormSchema),
     defaultValues: { name: '', email: '', password: '' },
   });
   return (
@@ -233,7 +257,7 @@ function CreateUserDialog({
         </DialogHeader>
         <form className="flex flex-col gap-4" onSubmit={handleSubmit((v) => onSubmit({ ...v, role }))}>
           <Field label="姓名" htmlFor="user-name" required error={errors.name?.message}>
-            <Input id="user-name" placeholder="张三" aria-invalid={!!errors.name} {...register('name', { required: '请输入姓名' })} />
+            <Input id="user-name" placeholder="张三" aria-invalid={!!errors.name} {...register('name')} />
           </Field>
           <Field label="邮箱" htmlFor="user-email" required error={errors.email?.message}>
             <Input
@@ -241,7 +265,7 @@ function CreateUserDialog({
               type="email"
               placeholder="zhangsan@example.com"
               aria-invalid={!!errors.email}
-              {...register('email', { required: '请输入邮箱', pattern: rules.email })}
+              {...register('email')}
             />
           </Field>
           <Field label="初始密码" htmlFor="user-pass" required error={errors.password?.message} hint="至少 8 位，创建后线下告知对方">
@@ -250,7 +274,7 @@ function CreateUserDialog({
               type="password"
               autoComplete="new-password"
               aria-invalid={!!errors.password}
-              {...register('password', { required: '请输入初始密码', minLength: { value: 8, message: '至少 8 位' } })}
+              {...register('password')}
             />
           </Field>
           <Field label="角色">
@@ -284,7 +308,8 @@ function ResetPasswordDialog({
   onClose: () => void;
   onSubmit: (password: string) => void;
 }) {
-  const { register, handleSubmit, formState: { errors } } = useForm<{ password: string }>({
+  const { register, handleSubmit, formState: { errors } } = useForm({
+    resolver: zodResolver(resetUserPasswordRequestSchema),
     defaultValues: { password: '' },
   });
   return (
@@ -301,7 +326,7 @@ function ResetPasswordDialog({
               placeholder="至少 8 位"
               autoComplete="new-password"
               aria-invalid={!!errors.password}
-              {...register('password', { required: '请输入新密码', minLength: { value: 8, message: '至少 8 位' } })}
+              {...register('password')}
             />
           </Field>
           <Button type="submit" loading={pending} className="w-full">

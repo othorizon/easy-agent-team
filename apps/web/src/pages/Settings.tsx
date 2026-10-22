@@ -10,7 +10,8 @@ import type {
   UpdateAiSettingsRequest,
   UpdateDokploySettingsRequest,
 } from '@eat/shared';
-import { DOMAIN_SUFFIX_REGEX, normalizeDomainSuffix } from '@eat/shared';
+import { normalizeDomainSuffix, updateAiSettingsSchema, updateDokploySettingsSchema } from '@eat/shared';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { BrainCircuit, Cloud, Globe2, LockKeyhole, Network, Server } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
@@ -18,7 +19,7 @@ import { Controller, useForm } from 'react-hook-form';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api, getStoredUser } from '../api';
-import { Field, rules } from '../components/form';
+import { Field } from '../components/form';
 import { PageHeader } from '../components/page-header';
 import {
   SettingsActions,
@@ -212,6 +213,12 @@ function AiForm({ settings }: { settings: AiSettingsInfo }) {
     reset,
     formState: { errors, isDirty },
   } = useForm<UpdateAiSettingsRequest>({
+    // apiKey 留空 = 保留已保存的 key；还没配置过时必须填
+    resolver: zodResolver(
+      settings.configured
+        ? updateAiSettingsSchema
+        : updateAiSettingsSchema.refine((v) => v.apiKey !== '', { path: ['apiKey'], message: '请输入 API Key' }),
+    ),
     defaultValues: {
       apiBaseUrl: settings.apiBaseUrl,
       apiKey: '',
@@ -281,10 +288,7 @@ function AiForm({ settings }: { settings: AiSettingsInfo }) {
               id="ai-url"
               placeholder="https://api.example.com/v1"
               aria-invalid={!!errors.apiBaseUrl}
-              {...register('apiBaseUrl', {
-                required: '请输入 API Base URL',
-                pattern: rules.url,
-              })}
+              {...register('apiBaseUrl')}
             />
           </Field>
           <Field
@@ -304,7 +308,7 @@ function AiForm({ settings }: { settings: AiSettingsInfo }) {
               autoComplete="new-password"
               placeholder={settings.configured ? '留空保留现有 Key' : '输入 API Key'}
               aria-invalid={!!errors.apiKey}
-              {...register('apiKey', settings.configured ? {} : { required: '请输入 API Key' })}
+              {...register('apiKey')}
             />
           </Field>
           <Field
@@ -318,7 +322,7 @@ function AiForm({ settings }: { settings: AiSettingsInfo }) {
               id="ai-model"
               placeholder="模型名称"
               aria-invalid={!!errors.model}
-              {...register('model', { required: '请输入模型名称' })}
+              {...register('model')}
             />
           </Field>
           <label className="settings-toggle settings-span" htmlFor="ai-enabled">
@@ -392,7 +396,13 @@ function DokployForm({ settings, active }: { settings: DokploySettingsInfo; acti
     setValue,
     reset,
     formState: { errors, isDirty },
-  } = useForm<UpdateDokploySettingsRequest>({
+  } = useForm({
+    // apiToken 留空 = 保留已保存的 token；还没配置过时必须填
+    resolver: zodResolver(
+      settings.configured
+        ? updateDokploySettingsSchema
+        : updateDokploySettingsSchema.refine((v) => v.apiToken !== '', { path: ['apiToken'], message: '请输入 API Token' }),
+    ),
     defaultValues: {
       apiUrl: settings.apiUrl,
       apiToken: '',
@@ -490,10 +500,7 @@ function DokployForm({ settings, active }: { settings: DokploySettingsInfo; acti
               placeholder="https://dokploy.example.com/api"
               className="font-mono"
               aria-invalid={!!errors.apiUrl}
-              {...register('apiUrl', {
-                required: '请输入 API 地址',
-                pattern: rules.url,
-              })}
+              {...register('apiUrl')}
             />
           </Field>
           <Field
@@ -511,7 +518,7 @@ function DokployForm({ settings, active }: { settings: DokploySettingsInfo; acti
               autoComplete="new-password"
               placeholder={settings.configured ? '留空保持现有 Token' : 'Dokploy 控制台生成'}
               aria-invalid={!!errors.apiToken}
-              {...register('apiToken', settings.configured ? {} : { required: '请输入 API Token' })}
+              {...register('apiToken')}
             />
           </Field>
           <label className="settings-toggle settings-span" htmlFor="dokploy-enabled">
@@ -682,12 +689,7 @@ function DokployForm({ settings, active }: { settings: DokploySettingsInfo; acti
               className="font-mono"
               placeholder="apps.example.com"
               aria-invalid={!!errors.domainSuffix}
-              {...register('domainSuffix', {
-                validate: (v) =>
-                  !v ||
-                  DOMAIN_SUFFIX_REGEX.test(normalizeDomainSuffix(v)) ||
-                  '需为合法主机名，如 apps.example.com（不含协议与路径）',
-              })}
+              {...register('domainSuffix')}
             />
           </Field>
           <label className="settings-toggle settings-span" htmlFor="dokploy-domain-https">

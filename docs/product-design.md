@@ -657,7 +657,7 @@ sequenceDiagram
 | 层 | 选择 | 理由 |
 |---|---|---|
 | 平台服务 | **NestJS（Fastify 适配器）单体**：REST API + 后台任务一体 | 领域模块多、后台工作重（webhook 重试/部署轮询/检查调度），模块化 + DI + Guard 承载资源级权限最顺手；一个容器丢进 Dokploy |
-| 控制台前端 | React + Vite + **Tailwind CSS v4 + shadcn 风格组件**（SPA），构建产物由后端静态托管 | 内部管理后台无 SEO 需求；组件源码内置仓库（Radix 原语 + cva + react-hook-form），样式完全可控、包体积小；桌面侧边栏 + 移动端抽屉的响应式布局；多板块页面（求助/数据库/权限申请）用页内 tabs 组织并同步 URL `?tab=`（决策 22）；部署仍是一个容器（初版用 Ant Design，决策 21 迁移） |
+| 控制台前端 | React + Vite + **Tailwind CSS v4 + shadcn 风格组件**（SPA），构建产物由后端静态托管 | 内部管理后台无 SEO 需求；组件源码内置仓库（Radix 原语 + cva + react-hook-form），样式完全可控、包体积小；表格统一走 TanStack Table 的 `DataTable`、表单校验统一挂 `@eat/shared` 的 zod 契约、悬停提示统一用 `Tip`（决策 83，不换组件库）；桌面侧边栏 + 移动端抽屉的响应式布局；多板块页面（求助/数据库/权限申请）用页内 tabs 组织并同步 URL `?tab=`（决策 22）；部署仍是一个容器（初版用 Ant Design，决策 21 迁移） |
 | 任务队列 / 定时 | pg-boss（队列落 PostgreSQL）+ `@nestjs/schedule` | 重试与轮询不为此引入 Redis，基础设施保持「一个容器 + 一个库」 |
 | 数据库 | PostgreSQL | jsonb 灵活、单库承载业务+审计+队列足够 |
 | ORM | Drizzle（首选）/ Prisma | SQL 可控、迁移即 SQL、无引擎二进制 |
@@ -857,3 +857,13 @@ easy-agent-team/
 - 快捷同意环境变量申请默认不设置到期时间，卡片明确提示；需要设置有效期时进入详情审批。驳回链接只预先展开理由编辑，填写必填原因后提交；查看详情直接打开指定申请。
 - 个人中心提供「待我审批的申请」「我的申请处理结果」两个独立开关，存量与新增用户默认开启。发送和每次重试检查最新偏好，关闭不视为投递失败；旧版偏好接口省略新字段时保留原值。
 - 个人中心复用系统设置布局，分为个人资料、通知设置、GitHub 账户、账户安全；桌面侧边分类、手机下拉分类。通知偏好与机器人连接分区，已验证连接折叠展示。分类切换保留未保存表单；强制完善资料保持独立流程，GitHub 回调默认进入 GitHub 分类。
+
+### 决策 83：控制台补齐组件层，不换组件库（2026-10-22）
+
+- **不换组件库**：评估过 Mantine / MUI / Chakra / Ant Design / HeroUI，结论是保留 shadcn 风格（Tailwind v4 + Radix + 组件源码在仓库），把缺的基础设施补上。自带样式系统的库与 Tailwind 主题打架，Ant Design 是决策 21 刚迁走的，换库等于重写全部页面且收益不在选型上。
+- **悬停提示 `Tip`**（`components/ui/tooltip.tsx`）：替换全部原生 `title=`（禁用原因、截断全文、相对时间的完整时刻、图标按钮名）。Radix Tooltip 在触屏上不响应，`Tip` 补了「轻触切换」——点一下开、再点或点别处关，用 click 而不是 pointerdown 判定，在截断单元格上开始滑动不会误开。content 为空时不出浮层；转发 ref 与事件，可以被 Confirm / DropdownMenuTrigger 包住；禁用的按钮要先包一层 `<span tabIndex={0}>`。`Badge` 改为 forwardRef（常被 asChild 触发器包住）。
+- **日期时间 `DateTimePicker`**（`components/datetime-picker.tsx`）：替换授权有效期的两处 `datetime-local`（各浏览器长得不一样）。值是本地时区的 `Date`、提交时 `toISOString()`；带「1 / 7 / 30 / 90 天」档位、不可选过去的日期、可清空（= 永久）；选日期时沿用已选的时刻，没有就落在当天 23:59。日历（react-day-picker v9 + date-fns，约 24 KB gzip）用 `React.lazy` 拆包，点开才加载。
+- **表格 `DataTable`**（`components/data-table.tsx`，TanStack Table）：10 个页面的 18 张表全部迁移。列宽、截断、窄屏隐藏（`meta.hideBelow: 'sm' | 'md' | 'lg'`）写在列定义的 `meta` 里，不再在表头和单元格各写一遍；加载骨架与空状态由组件统一处理；排序按列显式开启（`enableSorting: true` + accessor），**前端分页的表不开排序**（只排当前页会误导，如数据库实例表），服务端分页仍走 `components/pagination.tsx`。
+- **表单校验挂 shared 契约**：24 个表单全部从 `register` 上的行内规则改成 `zodResolver` + `@eat/shared` 的 zod schema，前后端规则只有一份（slug、环境变量 Key、库名、相对仓库路径、端口范围、飞书 / 域名格式等不再各写一遍正则）。`lib/zod.ts` 用 `z.config({ customError })` 给 shared 里没写中文报错的规则兜底（空值「必填」、长度、数字、邮箱 / URL），schema 自带的中文 message 优先；控制台与 shared 解析到同一个 zod 实例，所以对 shared 的 schema 同样生效。表单形态与请求体不同时从 `.shape` 取字段重新组装——**带 refine 的对象在 zod 4 里不能 `.pick()`**（直接抛错），用 `pickFields()`；「允许留空」写成 `z.literal('').or(规则)`（zod 4 的联合报错会落到真正那条规则上）。`components/form.tsx` 里的 `rules` 正则表删除。Folio 两张设置表单原本提交时手动 `safeParse` 只显示第一条错误，改为 resolver 后逐字段报错、底部仍汇总第一条（`firstErrorMessage()`，覆盖开关类没有报错位置的字段）。
+- **shadcn CLI 只作参考**：加了 `components.json` 与 `@/` 路径别名，`npx shadcn add <组件> --view <路径>` / `--diff` 可看官方源码与上游差异；**不要直接 `add`**——它会覆盖改过的 `button.tsx`，还会装上新版 registry 里的 `cn` 这个无关 npm 包，而且官方代码是 React 19 的 ref-as-prop 写法，本项目是 React 18（会被 asChild 包住的组件必须 forwardRef）。
+- 体积：主包 gzip 312 KB → 335 KB（TanStack Table 约 14 KB、Tooltip / resolvers 等），日历单独 24 KB 按需加载。`@radix-ui/react-tooltip` 锁在 `~1.2.16`：它是与现有 dialog / popover 同一批次的版本，内部的 DismissableLayer / Popper / Slot 与之共用一份；最新的 1.4.x 会另装一套，弹层叠放与「点外部关闭」分属两个实例。只动控制台，CLI / MCP / 指南不涉及，版本号不动。Playwright 桌面 1280 / 移动 390 双视口冒烟 50 项全过（中文报错、禁用字段不阻塞提交、排序、触屏 Tooltip、日历、无横向溢出、无控制台报错）。

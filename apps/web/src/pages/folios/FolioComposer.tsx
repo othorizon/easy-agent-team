@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowUp, AtSign } from 'lucide-react';
 import { Button } from '../../components/ui/button';
+import { Tip } from '../../components/ui/tooltip';
 import { Textarea } from '../../components/ui/input';
 import { Badge } from '../../components/ui/badge';
 import * as Popover from '@radix-ui/react-popover';
@@ -177,24 +178,25 @@ export function FolioComposer({
       )}
       <div className="folio-editor-footer">
         <div className="folio-editor-tools">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="提及同事"
-            title="提及同事"
-            disabled={busy}
-            onClick={() => {
-              setMentionDismissed(false);
-              updateDraft({
-                content: content + (content && !/\s$/.test(content) ? ' ' : '') + '@',
-                mentions,
-              });
-              input.current?.focus();
-            }}
-          >
-            <AtSign />
-          </Button>
+          <Tip content="提及同事">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="提及同事"
+              disabled={busy}
+              onClick={() => {
+                setMentionDismissed(false);
+                updateDraft({
+                  content: content + (content && !/\s$/.test(content) ? ' ' : '') + '@',
+                  mentions,
+                });
+                input.current?.focus();
+              }}
+            >
+              <AtSign />
+            </Button>
+          </Tip>
           {toolbar}
         </div>
         <div className="folio-editor-send">
@@ -203,11 +205,13 @@ export function FolioComposer({
               取消
             </Button>
           )}
-          <kbd title="Ctrl / ⌘ + Enter 发送">⌘ ↵</kbd>
-          <Button type="submit" loading={busy} disabled={!content.trim()} aria-label={label} title={label}>
-            {!busy && <ArrowUp />}
-            <span className="sr-only">{label}</span>
-          </Button>
+          <Tip content="Ctrl / ⌘ + Enter 发送"><kbd>⌘ ↵</kbd></Tip>
+          <Tip content={label}>
+            <Button type="submit" loading={busy} disabled={!content.trim()} aria-label={label}>
+              {!busy && <ArrowUp />}
+              <span className="sr-only">{label}</span>
+            </Button>
+          </Tip>
         </div>
       </div>
     </form>

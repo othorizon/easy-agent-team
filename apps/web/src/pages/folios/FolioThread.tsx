@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import type { SiteComment, SiteThread } from '@eat/shared';
 import { Check, CheckCircle2, ChevronDown, ExternalLink, MapPin, MessageSquare, Trash2 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
+import { Tip } from '../../components/ui/tooltip';
+import { formatDateTime } from '../../lib/format';
 
 export function FolioThread({
   thread: t,
@@ -49,14 +51,16 @@ export function FolioThread({
           <div className="folio-comment-body">
             <header className="folio-comment-meta">
               <span className="folio-author">{c.authorName}</span>
-              <time dateTime={c.createdAt} title={new Date(c.createdAt).toLocaleString()}>
-                {new Date(c.createdAt).toLocaleString(undefined, {
-                  month: 'short',
-                  day: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}
-              </time>
+              <Tip content={formatDateTime(c.createdAt)}>
+                <time dateTime={c.createdAt}>
+                  {new Date(c.createdAt).toLocaleString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                </time>
+              </Tip>
               {index === 0 && t.status === 'resolved' && (
                 <span className="folio-resolved">
                   <CheckCircle2 />
@@ -64,18 +68,19 @@ export function FolioThread({
                 </span>
               )}
               {canReply && c.canDelete && !c.deletedAt && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className="folio-comment-delete"
-                  aria-label="删除评论"
-                  title="删除评论"
-                  disabled={deleting}
-                  onClick={() => onDelete(c)}
-                >
-                  <Trash2 />
-                </Button>
+                <Tip content="删除评论">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className="folio-comment-delete"
+                    aria-label="删除评论"
+                    disabled={deleting}
+                    onClick={() => onDelete(c)}
+                  >
+                    <Trash2 />
+                  </Button>
+                </Tip>
               )}
             </header>
             {index === 0 && t.anchor.text && (

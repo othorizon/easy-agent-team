@@ -9,17 +9,18 @@ import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
 import { InlineCode } from '../components/code';
 import { Confirm } from '../components/confirm';
+import { DataTable, type DataTableColumn } from '../components/data-table';
 import { Empty } from '../components/empty';
 import { GithubAppSummary, useGithubApp } from '../components/github';
 import { ApplicationMemberAdd, ApplicationMemberGithub, GithubRepositoryMembers, observedMember, useRepositoryCollaborators } from '../components/github-repository-members';
 import { PageHeader } from '../components/page-header';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { Tip } from '../components/ui/tooltip';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { TableSkeleton } from '../components/ui/skeleton';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { formatDateTime } from '../lib/format';
 import { ApprovalBadge, EditAppDialog } from './Apps';
@@ -29,14 +30,35 @@ const STATUS_BADGE: Record<string, JSX.Element> = {
   error: <Badge variant="destructive">失败</Badge>, cancelled: <Badge variant="outline">已取消</Badge>, archived: <Badge variant="outline">已归档</Badge>,
 };
 const BUILD_STATUS: Record<string, string> = { running: '构建中', done: '成功', error: '失败', cancelled: '已取消' };
+const DEPLOYMENT_COLUMNS: DataTableColumn<DeploymentInfo>[] = [
+  {
+    id: 'createdAt',
+    header: '时间',
+    meta: { className: 'w-36', cellClassName: 'whitespace-nowrap text-muted-foreground' },
+    cell: ({ row: { original: d } }) => formatDateTime(d.createdAt),
+  },
+  { id: 'status', header: '状态', meta: { className: 'w-20' }, cell: ({ row: { original: d } }) => STATUS_BADGE[d.status] },
+  { id: 'origin', header: '来源', meta: { className: 'w-32' }, cell: ({ row: { original: d } }) => <OriginCell d={d} /> },
+  {
+    id: 'error',
+    header: '备注',
+    meta: { cellClassName: 'text-muted-foreground' },
+    cell: ({ row: { original: d } }) => (
+      <Tip content={d.error}>
+        <span className="block max-w-80 truncate">{d.error ?? '—'}</span>
+      </Tip>
+    ),
+  },
+];
+
 function OriginCell({ d }: { d: DeploymentInfo }) {
   if (!d.platform) return <Badge variant="destructive">部署后台</Badge>;
-  return <span className="flex flex-wrap items-center gap-1 text-muted-foreground" title={d.platform.claim === 'inferred' ? '归属按触发时间推断，未必准确' : undefined}>
+  return <Tip content={d.platform.claim === 'inferred' ? '归属按触发时间推断，未必准确' : undefined}><span className="flex flex-wrap items-center gap-1 text-muted-foreground">
     {d.platform.triggeredByName}
     {d.platform.source === 'console' && <Badge variant="outline">控制台</Badge>}
     {d.platform.source === 'remote' && <Badge variant="outline">远程 MCP</Badge>}
     {d.platform.claim === 'inferred' && ' ⚠'}
-  </span>;
+  </span></Tip>;
 }
 
 export function AppDetailPage() {
@@ -92,9 +114,12 @@ function AppDetail({ slug }: { slug: string }) {
       actions={<>
         {app.url && <Button asChild variant="outline"><a href={app.url} target="_blank" rel="noreferrer"><ExternalLink />访问应用</a></Button>}
         {canManage && <Button variant="outline" onClick={() => setEditing(true)}><Pencil />编辑配置</Button>}
-        {app.isMember && <Confirm title={`部署 ${app.slug}？`} description={`将按 ${app.branch || '当前'} 分支重新构建并上线。`} confirmText="部署" destructive={false} onConfirm={() => deploy.mutate()}>
-          <Button disabled={!app.canDeploy || deploy.isPending} title={!app.deployApproved ? '当前仓库需管理员授权后才能部署' : undefined}><Rocket />部署</Button>
-        </Confirm>}
+        {app.isMember && (app.deployApproved ? <Confirm title={`部署 ${app.slug}？`} description={`将按 ${app.branch || '当前'} 分支重新构建并上线。`} confirmText="部署" destructive={false} onConfirm={() => deploy.mutate()}>
+          <Button disabled={!app.canDeploy || deploy.isPending}><Rocket />部署</Button>
+        </Confirm> : <Tip content="当前仓库需管理员授权后才能部署">
+          {/* 未授权时按钮禁用、收不到指针事件，提示挂在外层 */}
+          <span tabIndex={0} className="inline-flex rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/40"><Button disabled><Rocket />部署</Button></span>
+        </Tip>)}
       </>} />
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
       <InlineCode>{app.slug}</InlineCode><span>所有者 · {app.ownerName}</span>
@@ -335,30 +360,12 @@ function Deployments({ app }: { app: AppInfo }) {
           </article>)}
         </div>
         <div className="hidden md:block">
-        <Table className="min-w-[560px]">
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-36">时间</TableHead>
-              <TableHead className="w-20">状态</TableHead>
-              <TableHead className="w-32">来源</TableHead>
-              <TableHead>备注</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {(deployments.data ?? []).map((d) => (
-              <TableRow key={d.deploymentId ?? d.platform?.id}>
-                <TableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(d.createdAt)}</TableCell>
-                <TableCell>{STATUS_BADGE[d.status]}</TableCell>
-                <TableCell>
-                  <OriginCell d={d} />
-                </TableCell>
-                <TableCell className="max-w-80 truncate text-muted-foreground" title={d.error ?? undefined}>
-                  {d.error ?? '—'}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+          <DataTable
+            columns={DEPLOYMENT_COLUMNS}
+            data={deployments.data}
+            getRowId={(d, i) => d.deploymentId ?? d.platform?.id ?? String(i)}
+            className="min-w-[560px]"
+          />
         </div>
         </>
       )}

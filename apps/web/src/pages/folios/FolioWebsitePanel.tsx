@@ -19,6 +19,8 @@ import {
   X,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
+import { Tip } from '../../components/ui/tooltip';
+import { formatDateTime } from '../../lib/format';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -74,18 +76,19 @@ function CommentMenu({
 }) {
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="folio-website-more"
-          aria-label={root ? '讨论操作' : '回复操作'}
-          title={root ? '讨论操作' : '回复操作'}
-        >
-          <MoreHorizontal />
-        </Button>
-      </DropdownMenuTrigger>
+      <Tip content={root ? '讨论操作' : '回复操作'}>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="folio-website-more"
+            aria-label={root ? '讨论操作' : '回复操作'}
+          >
+            <MoreHorizontal />
+          </Button>
+        </DropdownMenuTrigger>
+      </Tip>
       <DropdownMenuContent
         align="end"
         className="folio-website-menu"
@@ -193,14 +196,16 @@ function WebsiteThread({
             <span className="folio-website-comment-content" id={'comment-content-' + comment.id}>
               <span className="folio-website-meta">
                 <span className="folio-author">{comment.authorName}</span>
-                <time dateTime={comment.createdAt} title={new Date(comment.createdAt).toLocaleString()}>
-                  {new Date(comment.createdAt).toLocaleString(undefined, {
-                    month: 'short',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
-                </time>
+                <Tip content={formatDateTime(comment.createdAt)}>
+                  <time dateTime={comment.createdAt}>
+                    {new Date(comment.createdAt).toLocaleString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </time>
+                </Tip>
                 {index === 0 && thread.status === 'resolved' && (
                   <CheckCircle2 className="folio-website-resolved-icon" aria-label="已解决" />
                 )}
@@ -472,7 +477,7 @@ export function FolioWebsitePanel({
           <h2>
             评论 <span>{open.length}</span>
           </h2>
-          <p title={page}>未解决 · {page || '/'}</p>
+          <Tip content={page || '/'}><p>未解决 · {page || '/'}</p></Tip>
         </div>
         <div className="folio-website-header-actions">
           <DropdownMenu>
@@ -590,17 +595,18 @@ export function FolioWebsitePanel({
                 onEscape={clearSelection}
                 toolbar={
                   <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label="选择标注位置"
-                        title="选择标注位置"
-                      >
-                        <MapPin />
-                      </Button>
-                    </DropdownMenuTrigger>
+                    <Tip content="选择标注位置">
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label="选择标注位置"
+                        >
+                          <MapPin />
+                        </Button>
+                      </DropdownMenuTrigger>
+                    </Tip>
                     <DropdownMenuContent
                       align="start"
                       side="top"

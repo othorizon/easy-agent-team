@@ -12,24 +12,28 @@ import type {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Activity, ClipboardCheck, Link2, Plus, RefreshCw, Trash2, UserCog, X } from 'lucide-react';
 import { useState } from 'react';
+import { upsertMcpConfigSchema } from '@eat/shared';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useFieldArray, useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
 import { CodeBlock, CopyButton, InlineCode } from '../components/code';
 import { Combobox } from '../components/combobox';
 import { Confirm } from '../components/confirm';
+import { DataTable, type DataTableColumn } from '../components/data-table';
 import { Empty } from '../components/empty';
-import { Field, rules } from '../components/form';
+import { Field } from '../components/form';
 import { PageHeader } from '../components/page-header';
 import { Segmented } from '../components/segmented';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { Tip } from '../components/ui/tooltip';
 import { Card, CardContent } from '../components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { TableSkeleton } from '../components/ui/skeleton';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { formatDateTime } from '../lib/format';
+import { z } from '../lib/zod';
 
 const REQUESTS_KEY = 'mcp-subscription-requests';
 
@@ -96,6 +100,110 @@ export function McpConfigsPage() {
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '删除失败'),
   });
 
+  const columns: DataTableColumn<McpConfigInfo>[] = [
+    {
+      id: 'config',
+      header: '配置',
+      cell: ({ row: { original: c } }) => (
+        <>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <InlineCode>{c.slug}</InlineCode>
+            <span className="font-medium">{c.name}</span>
+          </div>
+          <div className="mt-0.5 truncate text-xs text-muted-foreground md:hidden">{c.description}</div>
+          {['pending', 'rejected'].includes(c.subscriptionStatus) && <ResourceRequests type="mcp" resourceId={c.id} />}
+        </>
+      ),
+    },
+    {
+      accessorKey: 'description',
+      header: '说明',
+      meta: { hideBelow: 'md', cellClassName: 'max-w-xs truncate text-muted-foreground' },
+    },
+    {
+      id: 'transport',
+      header: '传输',
+      meta: { className: 'w-18', hideBelow: 'sm' },
+      cell: ({ row: { original: c } }) => (
+        <div className="flex flex-col items-start gap-1">
+          <Badge variant="secondary">{c.transport}</Badge>
+          {c.gatewayEnabled && (
+            <Tip content="平台代理到上游，成员拿到的是专属接入地址">
+              <Badge variant="outline">经平台分发</Badge>
+            </Tip>
+          )}
+        </div>
+      ),
+    },
+    {
+      accessorKey: 'ownerName',
+      header: '作者',
+      meta: { className: 'w-24', cellClassName: 'whitespace-nowrap text-muted-foreground', hideBelow: 'lg' },
+    },
+    {
+      id: 'visibility',
+      header: '可见性',
+      meta: { className: 'w-24', hideBelow: 'sm' },
+      cell: ({ row: { original: c } }) =>
+        c.visibility === 'private' ? (
+          <Tip content="不出现在其他成员的清单里，只能由 Owner / 管理员分配">
+            <Badge variant="outline">不公开</Badge>
+          </Tip>
+        ) : (
+          <Tip content="全员可见，可自助申请订阅">
+            <Badge>团队可见</Badge>
+          </Tip>
+        ),
+    },
+    {
+      id: 'actions',
+      header: '操作',
+      // 窄屏不锁死宽度：操作按钮本来就会换行，锁了只会把配置名挤成一列一个字
+      meta: { className: 'w-auto lg:w-80' },
+      cell: ({ row: { original: c } }) => {
+        const canManage = canApprove(c);
+        return (
+          <div className="flex flex-wrap items-center gap-1.5 lg:flex-nowrap">
+            <SubscribeAction
+              config={c}
+              canApprove={canManage}
+              pending={subscribe.isPending || unsubscribe.isPending}
+              onSubscribe={() => subscribe.mutate({ slug: c.slug, reason: '' })}
+              onRequest={() => setRequesting(c)}
+              onUnsubscribe={() => unsubscribe.mutate(c)}
+            />
+            {c.gatewayUrl && (
+              <Button size="sm" variant="outline" onClick={() => setAccessing(c)}>
+                <Link2 />
+                接入地址
+              </Button>
+            )}
+            {canManage && (
+              <>
+                <Button size="sm" variant="outline" onClick={() => setManaging(c)}>
+                  订阅者
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setEditing(c)}>
+                  编辑
+                </Button>
+                <Confirm
+                  title={`删除配置 ${c.slug}？`}
+                  description="订阅者本地的该配置会在下次 sync 时移除。"
+                  confirmText="删除"
+                  onConfirm={() => remove.mutate(c.slug)}
+                >
+                  <Button size="sm" variant="outline-destructive">
+                    删除
+                  </Button>
+                </Confirm>
+              </>
+            )}
+          </div>
+        );
+      },
+    },
+  ];
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -119,7 +227,7 @@ export function McpConfigsPage() {
                   <ClipboardCheck />
                   订阅申请
                   {pendingCount > 0 && (
-                    <span className="size-1.5 rounded-full bg-warning" title={`${pendingCount} 条待审批`} />
+                    <span className="size-1.5 rounded-full bg-warning" role="img" aria-label={`${pendingCount} 条待审批`} />
                   )}
                 </Link></Button>
               </>
@@ -133,103 +241,13 @@ export function McpConfigsPage() {
       />
       <Card>
         <CardContent>
-          {configs.isLoading ? (
-            <TableSkeleton />
-          ) : list.length === 0 ? (
-            <Empty text="还没有 MCP 配置" />
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>配置</TableHead>
-                  <TableHead className="hidden md:table-cell">说明</TableHead>
-                  <TableHead className="hidden w-18 sm:table-cell">传输</TableHead>
-                  <TableHead className="hidden w-24 lg:table-cell">作者</TableHead>
-                  <TableHead className="hidden w-24 sm:table-cell">可见性</TableHead>
-                  {/* 窄屏不锁死宽度：操作按钮本来就会换行，锁了只会把配置名挤成一列一个字 */}
-                  <TableHead className="w-auto lg:w-80">操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {list.map((c) => {
-                  const canManage = canApprove(c);
-                  return (
-                    <TableRow key={c.id}>
-                      <TableCell>
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                          <InlineCode>{c.slug}</InlineCode>
-                          <span className="font-medium">{c.name}</span>
-                        </div>
-                        <div className="mt-0.5 truncate text-xs text-muted-foreground md:hidden">{c.description}</div>
-                        {['pending','rejected'].includes(c.subscriptionStatus) && <ResourceRequests type="mcp" resourceId={c.id}/>}
-                      </TableCell>
-                      <TableCell className="hidden max-w-xs truncate text-muted-foreground md:table-cell">
-                        {c.description}
-                      </TableCell>
-                      <TableCell className="hidden sm:table-cell">
-                        <div className="flex flex-col items-start gap-1">
-                          <Badge variant="secondary">{c.transport}</Badge>
-                          {c.gatewayEnabled && (
-                            <Badge variant="outline" title="平台代理到上游，成员拿到的是专属接入地址">
-                              经平台分发
-                            </Badge>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="hidden whitespace-nowrap text-muted-foreground lg:table-cell">{c.ownerName}</TableCell>
-                      <TableCell className="hidden sm:table-cell">
-                        {c.visibility === 'private' ? (
-                          <Badge variant="outline" title="不出现在其他成员的清单里，只能由 Owner / 管理员分配">
-                            不公开
-                          </Badge>
-                        ) : (
-                          <Badge title="全员可见，可自助申请订阅">团队可见</Badge>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap items-center gap-1.5 lg:flex-nowrap">
-                          <SubscribeAction
-                            config={c}
-                            canApprove={canManage}
-                            pending={subscribe.isPending || unsubscribe.isPending}
-                            onSubscribe={() => subscribe.mutate({ slug: c.slug, reason: '' })}
-                            onRequest={() => setRequesting(c)}
-                            onUnsubscribe={() => unsubscribe.mutate(c)}
-                          />
-                          {c.gatewayUrl && (
-                            <Button size="sm" variant="outline" onClick={() => setAccessing(c)}>
-                              <Link2 />
-                              接入地址
-                            </Button>
-                          )}
-                          {canManage && (
-                            <>
-                              <Button size="sm" variant="outline" onClick={() => setManaging(c)}>
-                                订阅者
-                              </Button>
-                              <Button size="sm" variant="outline" onClick={() => setEditing(c)}>
-                                编辑
-                              </Button>
-                              <Confirm
-                                title={`删除配置 ${c.slug}？`}
-                                description="订阅者本地的该配置会在下次 sync 时移除。"
-                                confirmText="删除"
-                                onConfirm={() => remove.mutate(c.slug)}
-                              >
-                                <Button size="sm" variant="outline-destructive">
-                                  删除
-                                </Button>
-                              </Confirm>
-                            </>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          )}
+          <DataTable
+            columns={columns}
+            data={list}
+            loading={configs.isLoading}
+            getRowId={(c) => c.id}
+            empty={<Empty text="还没有 MCP 配置" />}
+          />
         </CardContent>
       </Card>
 
@@ -401,6 +419,57 @@ function AccessUrlDialog({ config, onClose }: { config: McpConfigInfo; onClose: 
   );
 }
 
+type GatewayCallRow = McpGatewayCallList['items'][number];
+
+const CALL_COLUMNS: DataTableColumn<GatewayCallRow>[] = [
+  {
+    id: 'createdAt',
+    header: '时间',
+    meta: { cellClassName: 'whitespace-nowrap text-muted-foreground' },
+    cell: ({ row: { original: r } }) => formatDateTime(r.createdAt),
+  },
+  { accessorKey: 'userName', header: '成员', meta: { cellClassName: 'whitespace-nowrap' } },
+  {
+    id: 'config',
+    header: '配置',
+    meta: { hideBelow: 'sm' },
+    cell: ({ row: { original: r } }) => <InlineCode>{r.configSlug}</InlineCode>,
+  },
+  {
+    id: 'call',
+    header: '调用',
+    cell: ({ row: { original: r } }) => (
+      <>
+        <span className="font-mono text-xs">{r.toolName ?? r.method ?? '—'}</span>
+        {r.toolName && <div className="text-xs text-muted-foreground">{r.method}</div>}
+      </>
+    ),
+  },
+  {
+    id: 'duration',
+    header: '耗时',
+    meta: { className: 'w-20', cellClassName: 'whitespace-nowrap text-muted-foreground', hideBelow: 'md' },
+    cell: ({ row: { original: r } }) => `${r.durationMs} ms`,
+  },
+  {
+    id: 'status',
+    header: '结果',
+    meta: { className: 'w-16' },
+    cell: ({ row: { original: r } }) =>
+      r.status === 0 ? (
+        // 失败原因直接摊开：藏在 title 里等于没有，排查时要看的就是这一句
+        <div className="space-y-1">
+          <Badge variant="destructive">失败</Badge>
+          {r.error && <div className="max-w-56 break-words text-xs text-muted-foreground">{r.error}</div>}
+        </div>
+      ) : r.status < 400 ? (
+        <Badge variant="success">{r.status}</Badge>
+      ) : (
+        <Badge variant="warning">{r.status}</Badge>
+      ),
+  },
+];
+
 /** 网关调用记录：谁、什么时候、调了哪个工具。只记 method 与工具名，不记参数 */
 function GatewayCallsDialog({ onClose }: { onClose: () => void }) {
   const [page, setPage] = useState(1);
@@ -427,51 +496,7 @@ function GatewayCallsDialog({ onClose }: { onClose: () => void }) {
           <Empty text="还没有调用记录" className="py-6" />
         ) : (
           <>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>时间</TableHead>
-                  <TableHead>成员</TableHead>
-                  <TableHead className="hidden sm:table-cell">配置</TableHead>
-                  <TableHead>调用</TableHead>
-                  <TableHead className="hidden w-20 md:table-cell">耗时</TableHead>
-                  <TableHead className="w-16">结果</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell className="whitespace-nowrap text-muted-foreground">{formatDateTime(r.createdAt)}</TableCell>
-                    <TableCell className="whitespace-nowrap">{r.userName}</TableCell>
-                    <TableCell className="hidden sm:table-cell">
-                      <InlineCode>{r.configSlug}</InlineCode>
-                    </TableCell>
-                    <TableCell>
-                      <span className="font-mono text-xs">{r.toolName ?? r.method ?? '—'}</span>
-                      {r.toolName && <div className="text-xs text-muted-foreground">{r.method}</div>}
-                    </TableCell>
-                    <TableCell className="hidden whitespace-nowrap text-muted-foreground md:table-cell">
-                      {r.durationMs} ms
-                    </TableCell>
-                    <TableCell>
-                      {r.status === 0 ? (
-                        // 失败原因直接摊开：藏在 title 里等于没有，排查时要看的就是这一句
-                        <div className="space-y-1">
-                          <Badge variant="destructive">失败</Badge>
-                          {r.error && (
-                            <div className="max-w-56 break-words text-xs text-muted-foreground">{r.error}</div>
-                          )}
-                        </div>
-                      ) : r.status < 400 ? (
-                        <Badge variant="success">{r.status}</Badge>
-                      ) : (
-                        <Badge variant="warning">{r.status}</Badge>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <DataTable columns={CALL_COLUMNS} data={rows} getRowId={(r) => r.id} />
             {totalPages > 1 && (
               <div className="flex items-center justify-between gap-2 text-sm text-muted-foreground">
                 <span>
@@ -552,6 +577,55 @@ function SubscribersDialog({ config, onClose }: { config: McpConfigInfo; onClose
     .filter((u) => u.status === 'active' && !rows.some((r) => r.userId === u.id))
     .map((u) => ({ value: u.id, label: u.name, hint: u.email }));
 
+  const subscriberColumns: DataTableColumn<McpSubscriber>[] = [
+    {
+      id: 'member',
+      header: '成员',
+      cell: ({ row: { original: r } }) => (
+        <>
+          <span className="font-medium">{r.name}</span>
+          {r.role === 'admin' && (
+            <Badge variant="outline" className="ml-2">
+              管理员
+            </Badge>
+          )}
+          <div className="truncate text-xs text-muted-foreground">{r.email}</div>
+          <div className="text-xs text-muted-foreground sm:hidden">{SUBSCRIBER_SOURCE_LABEL[r.source]}</div>
+        </>
+      ),
+    },
+    {
+      id: 'source',
+      header: '来源',
+      meta: { className: 'w-24', hideBelow: 'sm' },
+      cell: ({ row: { original: r } }) => <Badge variant="secondary">{SUBSCRIBER_SOURCE_LABEL[r.source]}</Badge>,
+    },
+    {
+      id: 'subscribedAt',
+      header: '生效时间',
+      meta: { className: 'w-40', cellClassName: 'text-muted-foreground', hideBelow: 'md' },
+      cell: ({ row: { original: r } }) => (r.subscribedAt ? formatDateTime(r.subscribedAt) : '—'),
+    },
+    {
+      id: 'actions',
+      header: '',
+      meta: { className: 'w-12' },
+      cell: ({ row: { original: r } }) =>
+        r.removable && (
+          <Confirm
+            title={`取消 ${r.name} 的订阅？`}
+            description="对方下次 eat sync 时会从本地移除这个 MCP 配置。"
+            confirmText="取消订阅"
+            onConfirm={() => remove.mutate(r.userId)}
+          >
+            <Button variant="ghost" size="icon-sm" aria-label={`取消 ${r.name} 的订阅`}>
+              <X />
+            </Button>
+          </Confirm>
+        ),
+    },
+  ];
+
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-xl">
@@ -579,76 +653,46 @@ function SubscribersDialog({ config, onClose }: { config: McpConfigInfo; onClose
             </Button>
           </div>
         </Field>
-        {subscribers.isPending ? (
-          <TableSkeleton rows={2} />
-        ) : rows.length === 0 ? (
-          <Empty text="还没有人订阅" className="py-6" />
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>成员</TableHead>
-                <TableHead className="hidden w-24 sm:table-cell">来源</TableHead>
-                <TableHead className="hidden w-40 md:table-cell">生效时间</TableHead>
-                <TableHead className="w-12" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((r) => (
-                <TableRow key={r.userId}>
-                  <TableCell>
-                    <span className="font-medium">{r.name}</span>
-                    {r.role === 'admin' && (
-                      <Badge variant="outline" className="ml-2">
-                        管理员
-                      </Badge>
-                    )}
-                    <div className="truncate text-xs text-muted-foreground">{r.email}</div>
-                    <div className="text-xs text-muted-foreground sm:hidden">{SUBSCRIBER_SOURCE_LABEL[r.source]}</div>
-                  </TableCell>
-                  <TableCell className="hidden sm:table-cell">
-                    <Badge variant="secondary">{SUBSCRIBER_SOURCE_LABEL[r.source]}</Badge>
-                  </TableCell>
-                  <TableCell className="hidden text-muted-foreground md:table-cell">
-                    {r.subscribedAt ? formatDateTime(r.subscribedAt) : '—'}
-                  </TableCell>
-                  <TableCell>
-                    {r.removable && (
-                      <Confirm
-                        title={`取消 ${r.name} 的订阅？`}
-                        description="对方下次 eat sync 时会从本地移除这个 MCP 配置。"
-                        confirmText="取消订阅"
-                        onConfirm={() => remove.mutate(r.userId)}
-                      >
-                        <Button variant="ghost" size="icon-sm" aria-label={`取消 ${r.name} 的订阅`}>
-                          <X />
-                        </Button>
-                      </Confirm>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
+        <DataTable
+          columns={subscriberColumns}
+          data={rows}
+          loading={subscribers.isPending}
+          skeletonRows={2}
+          getRowId={(r) => r.userId}
+          empty={<Empty text="还没有人订阅" className="py-6" />}
+        />
       </DialogContent>
     </Dialog>
   );
 }
 
-interface FormValues {
-  slug: string;
-  name: string;
-  description: string;
-  transport: 'stdio' | 'http';
-  command: string;
-  argsText: string;
-  url: string;
-  headerPairs: Array<{ key: string; value: string }>;
-  envPairs: Array<{ key: string; value: string }>;
-  visibility: 'team' | 'private';
-  gatewayEnabled: boolean;
-}
+const mcpShape = upsertMcpConfigSchema.shape;
+const kvRecord = mcpShape.headers.unwrap();
+const kvPairSchema = z.object({ key: kvRecord.keyType, value: kvRecord.valueType });
+
+/**
+ * 表单形态与请求体不同（参数是一行文本、header / env 是键值对数组），字段规则从契约里逐个取；
+ * 「stdio 要 command、http 要 url」契约里是整体 refine，这里拆到对应字段上报错。
+ */
+const mcpConfigFormSchema = z
+  .object({
+    slug: mcpShape.slug,
+    name: mcpShape.name,
+    description: mcpShape.description,
+    transport: mcpShape.transport,
+    command: mcpShape.command.unwrap(),
+    argsText: z.string(),
+    url: mcpShape.url.unwrap(),
+    headerPairs: z.array(kvPairSchema),
+    envPairs: z.array(kvPairSchema),
+    visibility: mcpShape.visibility.unwrap(),
+    gatewayEnabled: z.boolean(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.transport === 'stdio' && !v.command.trim()) ctx.addIssue({ code: 'custom', path: ['command'], message: '请输入命令' });
+    if (v.transport === 'http' && !v.url.trim()) ctx.addIssue({ code: 'custom', path: ['url'], message: '请输入 URL' });
+  });
+type FormValues = z.output<typeof mcpConfigFormSchema>;
 
 function McpConfigDialog({
   editing,
@@ -662,7 +706,8 @@ function McpConfigDialog({
   onSubmit: (v: UpsertMcpConfigRequest) => void;
 }) {
   const isNew = editing === 'new';
-  const { register, handleSubmit, control, watch, formState: { errors } } = useForm<FormValues>({
+  const { register, handleSubmit, control, watch, formState: { errors } } = useForm({
+    resolver: zodResolver(mcpConfigFormSchema),
     defaultValues: isNew
       ? {
           slug: '',
@@ -735,11 +780,11 @@ function McpConfigDialog({
                 className="font-mono"
                 disabled={!isNew}
                 aria-invalid={!!errors.slug}
-                {...register('slug', { required: '请输入标识', pattern: rules.slug })}
+                {...register('slug')}
               />
             </Field>
             <Field label="名称" htmlFor="mcp-name" required error={errors.name?.message}>
-              <Input id="mcp-name" aria-invalid={!!errors.name} {...register('name', { required: '请输入名称' })} />
+              <Input id="mcp-name" aria-invalid={!!errors.name} {...register('name')} />
             </Field>
           </div>
           <Field label="说明" htmlFor="mcp-desc" hint="这个 MCP 能做什么">
@@ -770,9 +815,7 @@ function McpConfigDialog({
                     placeholder="npx"
                     className="font-mono"
                     aria-invalid={!!errors.command}
-                    {...register('command', {
-                      validate: (v) => transport !== 'stdio' || !!v.trim() || '请输入命令',
-                    })}
+                    {...register('command')}
                   />
                 </Field>
                 <Field label="参数" htmlFor="mcp-args" hint="空格分隔">
@@ -833,9 +876,7 @@ function McpConfigDialog({
                   placeholder="https://mcp.internal.example.com/mcp"
                   className="font-mono"
                   aria-invalid={!!errors.url}
-                  {...register('url', {
-                    validate: (v) => transport !== 'http' || !!v.trim() || '请输入 URL',
-                  })}
+                  {...register('url')}
                 />
               </Field>
               <Field

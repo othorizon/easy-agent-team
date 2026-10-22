@@ -14,8 +14,11 @@ import {
   DEFAULT_DOCKERFILE,
   DEFAULT_PUBLISH_DIRECTORY,
   STATIC_CONTAINER_PORT,
+  createAppSchema,
   githubRepoWebUrl,
+  mountAppSchema,
 } from '@eat/shared';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronRight, GitBranch, Link2, Plus, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -26,12 +29,13 @@ import { InlineCode } from '../components/code';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { DokployAppPicker } from '../components/dokploy-app-picker';
 import { Empty } from '../components/empty';
-import { Field, rules } from '../components/form';
+import { Field } from '../components/form';
 import { PageHeader } from '../components/page-header';
 import { PAGE_SIZE_OPTIONS, Pagination } from '../components/pagination';
 import { Segmented } from '../components/segmented';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { Tip } from '../components/ui/tooltip';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { TableSkeleton } from '../components/ui/skeleton';
@@ -39,6 +43,7 @@ import { Switch } from '../components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { useQueryParams } from '../lib/use-query-params';
+import { z } from '../lib/zod';
 
 const BUILD_TYPE_OPTIONS: Array<{ label: string; value: AppBuildType }> = [
   { label: APP_BUILD_TYPE_LABEL.dockerfile, value: 'dockerfile' },
@@ -204,7 +209,7 @@ function AppListRow({ app: a, userId, isAdmin, showOwner, from }: { app: AppInfo
         <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"><span>{a.managed ? '平台创建' : '挂载应用'}</span><span aria-hidden className="text-muted-foreground/50">·</span><span>{!a.managed ? '构建由部署后台管理' : a.buildType === 'dockerfile' ? 'Dockerfile' : a.buildType === 'static' ? '静态站点' : '构建方式待核验'}</span></div>
       </div>
       <div className="col-span-2 min-w-0 lg:col-span-1">
-        <p title={repository} className="break-all font-mono text-xs text-muted-foreground lg:truncate">{repository}</p>
+        <Tip content={repository}><p className="break-all font-mono text-xs text-muted-foreground lg:truncate">{repository}</p></Tip>
         <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-[11px] text-muted-foreground">
           <span className="inline-flex min-w-0 items-center gap-1 rounded bg-muted/70 px-1.5 py-0.5"><GitBranch className="size-3 shrink-0" aria-hidden /><span className="break-all">{a.managed ? a.branch || '分支未配置' : '分支由部署后台管理'}</span></span>
           {a.repoUrl && <GithubRepositoryScope slug={a.slug} />}
@@ -219,16 +224,19 @@ function AppListRow({ app: a, userId, isAdmin, showOwner, from }: { app: AppInfo
 
 // ---------- 表单：构建方式字段（创建与编辑共用） ----------
 
-type BuildFormValues = {
-  buildType: AppBuildType;
-  dockerfile: string;
-  dockerContextPath: string;
-  publishDirectory: string;
-  staticSpa: boolean;
-  port: number;
-};
+const appShape = createAppSchema.shape;
 
-const containerPort = (v: number) => (Number.isInteger(v) && v >= 1 && v <= 65535 ? true : '1-65535 的整数');
+/** 构建字段的规则直接取创建契约（相对路径、端口范围与服务端同一份），创建与编辑共用 */
+const buildFieldsShape = {
+  buildType: appShape.buildType,
+  dockerfile: appShape.dockerfile.unwrap(),
+  dockerContextPath: appShape.dockerContextPath.unwrap(),
+  publishDirectory: appShape.publishDirectory.unwrap(),
+  staticSpa: z.boolean(),
+  port: appShape.port.unwrap(),
+};
+/* 用输入类型：端口是 coerce 的数字，输入侧为 unknown */
+type BuildFormValues = z.input<z.ZodObject<typeof buildFieldsShape>>;
 
 /** 构建方式 + 各自的可选项（决策 31：只开放 static / dockerfile 两种） */
 function BuildFields<T extends BuildFormValues>({
@@ -261,19 +269,19 @@ function BuildFields<T extends BuildFormValues>({
       {buildType === 'dockerfile' ? (
         <div className="grid gap-4 sm:grid-cols-[1fr_1fr_7rem]">
           <Field label="Dockerfile 路径" htmlFor={`${idPrefix}-dockerfile`} hint="相对仓库根" error={f.formState.errors.dockerfile?.message}>
-            <Input id={`${idPrefix}-dockerfile`} className="font-mono" placeholder={DEFAULT_DOCKERFILE} {...f.register('dockerfile', { validate: repoPath })} />
+            <Input id={`${idPrefix}-dockerfile`} className="font-mono" placeholder={DEFAULT_DOCKERFILE} {...f.register('dockerfile')} />
           </Field>
           <Field label="构建上下文" htmlFor={`${idPrefix}-context`} hint="相对仓库根，留空为仓库根" error={f.formState.errors.dockerContextPath?.message}>
-            <Input id={`${idPrefix}-context`} className="font-mono" placeholder="." {...f.register('dockerContextPath', { validate: repoPath })} />
+            <Input id={`${idPrefix}-context`} className="font-mono" placeholder="." {...f.register('dockerContextPath')} />
           </Field>
           <Field label="容器端口" htmlFor={`${idPrefix}-port`} hint="域名流量转发到它" error={f.formState.errors.port?.message}>
-            <Input id={`${idPrefix}-port`} type="number" className="font-mono" placeholder={String(DEFAULT_CONTAINER_PORT)} {...f.register('port', { valueAsNumber: true, validate: containerPort })} />
+            <Input id={`${idPrefix}-port`} type="number" className="font-mono" placeholder={String(DEFAULT_CONTAINER_PORT)} {...f.register('port', { valueAsNumber: true })} />
           </Field>
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="发布目录" htmlFor={`${idPrefix}-publish`} hint="相对仓库根，交给 nginx 托管的目录" error={f.formState.errors.publishDirectory?.message}>
-            <Input id={`${idPrefix}-publish`} className="font-mono" placeholder={DEFAULT_PUBLISH_DIRECTORY} {...f.register('publishDirectory', { validate: repoPath })} />
+            <Input id={`${idPrefix}-publish`} className="font-mono" placeholder={DEFAULT_PUBLISH_DIRECTORY} {...f.register('publishDirectory')} />
           </Field>
           <Field label="SPA 模式" hint={`所有路径回退到 index.html（前端路由用）；静态托管由 nginx 监听 ${STATIC_CONTAINER_PORT} 端口，域名流量转发到它`}>
             <Controller control={f.control} name="staticSpa" render={({ field }) => <Switch checked={field.value} onCheckedChange={field.onChange} />} />
@@ -284,12 +292,19 @@ function BuildFields<T extends BuildFormValues>({
   );
 }
 
-const repoPath = (v: string) => (v.startsWith('/') || v.split('/').includes('..') ? '需为相对仓库根的路径' : true);
-
-type CreateFormValues = CreateAppRequest;
+/** 名称 / 分支 / Dockerfile 路径留空时提交前回落默认值，所以表单上允许留空 */
+const createAppFormSchema = z.object({
+  slug: appShape.slug,
+  name: z.literal('').or(appShape.name),
+  repoUrl: appShape.repoUrl,
+  branch: z.literal('').or(appShape.branch.unwrap()),
+  ...buildFieldsShape,
+  description: appShape.description.unwrap(),
+});
 
 function CreateAppDialog({ pending, onClose, onSubmit }: { pending: boolean; onClose: () => void; onSubmit: (v: CreateAppRequest) => void }) {
-  const form = useForm<CreateFormValues>({
+  const form = useForm({
+    resolver: zodResolver(createAppFormSchema),
     defaultValues: {
       slug: '',
       name: '',
@@ -325,7 +340,7 @@ function CreateAppDialog({ pending, onClose, onSubmit }: { pending: boolean; onC
         >
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="标识（slug）" htmlFor="app-slug" required error={errors.slug?.message}>
-              <Input id="app-slug" placeholder="crm-tool" className="font-mono" aria-invalid={!!errors.slug} {...register('slug', { required: '请输入标识', pattern: rules.slug })} />
+              <Input id="app-slug" placeholder="crm-tool" className="font-mono" aria-invalid={!!errors.slug} {...register('slug')} />
             </Field>
             <Field label="名称" htmlFor="app-name" hint="留空同标识">
               <Input id="app-name" placeholder="CRM 小工具" {...register('name')} />
@@ -333,7 +348,7 @@ function CreateAppDialog({ pending, onClose, onSubmit }: { pending: boolean; onC
           </div>
           <div className="grid gap-4 sm:grid-cols-[1fr_9rem]">
             <Field label="Git 仓库地址" htmlFor="app-repo" required error={errors.repoUrl?.message} hint="https 或 ssh 地址；私有仓库需管理员在 Dokploy 设置里配好 SSH key">
-              <Input id="app-repo" className="font-mono" placeholder="git@git.example.com:team/crm.git" aria-invalid={!!errors.repoUrl} {...register('repoUrl', { required: '请输入 Git 仓库地址' })} />
+              <Input id="app-repo" className="font-mono" placeholder="git@git.example.com:team/crm.git" aria-invalid={!!errors.repoUrl} {...register('repoUrl')} />
             </Field>
             <Field label="分支" htmlFor="app-branch">
               <Input id="app-branch" className="font-mono" placeholder={DEFAULT_BRANCH} {...register('branch')} />
@@ -352,10 +367,21 @@ function CreateAppDialog({ pending, onClose, onSubmit }: { pending: boolean; onC
   );
 }
 
-type EditFormValues = BuildFormValues & { name: string; description: string; repoUrl: string; branch: string; dokployApplicationId: string };
+/** 平台托管的应用必须有仓库地址；挂载的应用仓库地址只作备注、必须有 application id */
+function editAppFormSchema(managed: boolean) {
+  return z.object({
+    name: appShape.name,
+    description: appShape.description.unwrap(),
+    repoUrl: managed ? appShape.repoUrl : mountAppSchema.shape.repoUrl.unwrap(),
+    branch: z.literal('').or(appShape.branch.unwrap()),
+    ...buildFieldsShape,
+    dokployApplicationId: managed ? z.string() : mountAppSchema.shape.dokployApplicationId,
+  });
+}
 
 export function EditAppDialog({ app, pending, onClose, onSubmit }: { app: AppInfo; pending: boolean; onClose: () => void; onSubmit: (v: UpdateAppRequest) => void }) {
-  const form = useForm<EditFormValues>({
+  const form = useForm({
+    resolver: zodResolver(editAppFormSchema(app.managed)),
     defaultValues: {
       name: app.name,
       description: app.description,
@@ -401,13 +427,13 @@ export function EditAppDialog({ app, pending, onClose, onSubmit }: { app: AppInf
           )}
         >
           <Field label="名称" htmlFor="app-edit-name" required error={errors.name?.message}>
-            <Input id="app-edit-name" aria-invalid={!!errors.name} {...register('name', { required: '请输入名称' })} />
+            <Input id="app-edit-name" aria-invalid={!!errors.name} {...register('name')} />
           </Field>
           {app.managed ? (
             <>
               <div className="grid gap-4 sm:grid-cols-[1fr_9rem]">
                 <Field label="Git 仓库地址" htmlFor="app-edit-repo" required error={errors.repoUrl?.message} hint="更换仓库后需重新审批，更换分支无需重审。">
-                  <Input id="app-edit-repo" className="font-mono" aria-invalid={!!errors.repoUrl} {...register('repoUrl', { required: '平台托管的应用必须有 Git 仓库地址' })} />
+                  <Input id="app-edit-repo" className="font-mono" aria-invalid={!!errors.repoUrl} {...register('repoUrl')} />
                 </Field>
                 <Field label="分支" htmlFor="app-edit-branch">
                   <Input id="app-edit-branch" className="font-mono" {...register('branch')} />
@@ -425,7 +451,7 @@ export function EditAppDialog({ app, pending, onClose, onSubmit }: { app: AppInf
                 hint={picked && picked.applicationId === appId ? `已选择：${picked.name}${picked.projectName ? `（${picked.projectName}）` : ''}` : '挂载的应用：构建配置在 Dokploy 侧维护'}
               >
                 <div className="flex flex-col gap-2 sm:flex-row">
-                  <Input id="app-edit-app" className="flex-1 font-mono" aria-invalid={!!errors.dokployApplicationId} {...register('dokployApplicationId', { required: '请输入 Application ID' })} />
+                  <Input id="app-edit-app" className="flex-1 font-mono" aria-invalid={!!errors.dokployApplicationId} {...register('dokployApplicationId')} />
                   <DokployAppPicker
                     value={appId}
                     onPick={(a) => {
@@ -455,7 +481,8 @@ export function EditAppDialog({ app, pending, onClose, onSubmit }: { app: AppInf
 
 /** 管理员挂载 Dokploy 上既有的 application（决策 27 的选择器只在这里用） */
 function MountAppDialog({ pending, onClose, onSubmit }: { pending: boolean; onClose: () => void; onSubmit: (v: MountAppRequest) => void }) {
-  const { register, handleSubmit, setValue, watch, formState: { errors } } = useForm<MountAppRequest>({
+  const { register, handleSubmit, setValue, watch, formState: { errors } } = useForm({
+    resolver: zodResolver(mountAppSchema),
     defaultValues: { slug: '', name: '', dokployApplicationId: '', repoUrl: '', description: '' },
   });
   const [picked, setPicked] = useState<DokployApplication | null>(null);
@@ -470,10 +497,10 @@ function MountAppDialog({ pending, onClose, onSubmit }: { pending: boolean; onCl
           <p className="text-sm text-muted-foreground">把 Dokploy 上已经存在的 application 登记到平台：平台只记 id，Git 源与构建配置仍在 Dokploy 侧维护，删除时也只解绑。创建即视为已授权部署。</p>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="标识（slug）" htmlFor="mount-slug" required error={errors.slug?.message}>
-              <Input id="mount-slug" placeholder="crm-tool" className="font-mono" aria-invalid={!!errors.slug} {...register('slug', { required: '请输入标识', pattern: rules.slug })} />
+              <Input id="mount-slug" placeholder="crm-tool" className="font-mono" aria-invalid={!!errors.slug} {...register('slug')} />
             </Field>
             <Field label="名称" htmlFor="mount-name" required error={errors.name?.message}>
-              <Input id="mount-name" placeholder="CRM 小工具" aria-invalid={!!errors.name} {...register('name', { required: '请输入名称' })} />
+              <Input id="mount-name" placeholder="CRM 小工具" aria-invalid={!!errors.name} {...register('name')} />
             </Field>
           </div>
           <Field
@@ -484,7 +511,7 @@ function MountAppDialog({ pending, onClose, onSubmit }: { pending: boolean; onCl
             hint={picked && picked.applicationId === appId ? `已选择：${picked.name}${picked.projectName ? `（${picked.projectName}）` : ''}` : '可从 Dokploy 搜索选择，或在应用详情里查到后手动填写'}
           >
             <div className="flex flex-col gap-2 sm:flex-row">
-              <Input id="mount-app" className="flex-1 font-mono" aria-invalid={!!errors.dokployApplicationId} {...register('dokployApplicationId', { required: '请输入 Application ID' })} />
+              <Input id="mount-app" className="flex-1 font-mono" aria-invalid={!!errors.dokployApplicationId} {...register('dokployApplicationId')} />
               <DokployAppPicker
                 value={appId}
                 onPick={(a) => {

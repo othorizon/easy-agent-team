@@ -4,6 +4,8 @@ import type { GithubAccountInfo, GithubAppInfo, GithubMemberInfo, GithubRole } f
 import { toast } from 'sonner';
 import { api, getToken } from '../api';
 import { Button } from './ui/button';
+import { Tip } from './ui/tooltip';
+import { formatDateTime } from '../lib/format';
 import { Badge } from './ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Confirm } from './confirm';
@@ -60,13 +62,13 @@ export function useGithubApp(slug: string) {
 /** 列表只显示仓库归属；使用独立缓存查询，不阻塞应用列表或推断查询失败的结果。 */
 export function GithubRepositoryScope({ slug }: { slug: string }) {
   const query = useGithubApp(slug);
-  if (query.isError) return <span title="GitHub 状态查询失败，可进入详情刷新">归属暂不可用</span>;
+  if (query.isError) return <Tip content="GitHub 状态查询失败，可进入详情刷新"><span>归属暂不可用</span></Tip>;
   if (!query.data) return <span>归属加载中…</span>;
   const d = query.data;
-  if (!d.enabled) return <span title="GitHub 集成未启用，仓库归属尚未重新核验">归属待核验 · GitHub 未启用</span>;
-  return <span title={d.error || (d.checkedAt ? `最近核验：${new Date(d.checkedAt).toLocaleString()}` : undefined)}>
+  if (!d.enabled) return <Tip content="GitHub 集成未启用，仓库归属尚未重新核验"><span>归属待核验 · GitHub 未启用</span></Tip>;
+  return <Tip content={d.error || (d.checkedAt ? `最近核验：${formatDateTime(d.checkedAt)}` : undefined)}><span>
     {d.scope === 'organization' ? 'EAT 组织仓库' : d.scope === 'outside' ? '非 EAT 组织仓库' : '仓库归属待核验'}
-  </span>;
+  </span></Tip>;
 }
 export function GithubAppSummary({ slug, compact = false, showOwner = true }: { slug: string; compact?: boolean; showOwner?: boolean }) {
   const query = useGithubApp(slug), cache = useQueryClient();
