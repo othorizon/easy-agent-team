@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Put, Query, Req, Res } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query, Req, Res } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { githubCollaboratorChangeSchema, type GithubCollaboratorChange, githubRoleSchema, githubSettingsSchema, githubSetupSchema, type GithubSetupRequest, type UpdateGithubSettings, type GithubRole } from '@eat/shared';
@@ -65,6 +65,11 @@ export class GithubController {
     // Nest sets 200 before this handler; Fastify otherwise reuses it instead of redirecting.
     return reply.redirect(`${loadConfig().publicUrl.replace(/\/$/, '')}/settings?section=github&github_setup=${result}`, 302);
   }
+  // The manifest registers an inactive webhook (GitHub wants a URL), yet GitHub still sends a `ping` when the
+  // App is created and on "Redeliver". EAT subscribes to no events and never acts on deliveries: acknowledge
+  // without reading the body, so the App's Recent Deliveries shows success instead of 404.
+  @Post('github/events') @Public() @HttpCode(204)
+  events() { /* Intentionally ignored. */ }
   @Get('github/setup/installation') @Public()
   async installationCallback(@Query('state') state: string, @Query('installation_id') installationId: string,
     @Query('setup_action') action: string, @Req() request: FastifyRequest, @Res() reply: FastifyReply) {

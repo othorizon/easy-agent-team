@@ -125,6 +125,15 @@ describe('administrator GitHub App setup and recovery', () => {
     expect(response.statusCode).toBe(302);
     expect(response.headers.location).toContain(target);
   });
+  it('acknowledges webhook deliveries such as the creation ping without authentication or side effects', async () => {
+    const before = await settings();
+    const response = await app.inject({ method: 'POST', url: '/api/github/events',
+      headers: { 'x-github-event': 'ping', 'content-type': 'application/json' },
+      payload: { zen: 'Non-blocking is better than blocking.', hook_id: 1, hook: { type: 'App', active: false, events: [] } } });
+    expect(response.statusCode).toBe(204); expect(response.body).toBe('');
+    expect((await app.inject({ method: 'POST', url: '/api/github/events', payload: '' })).statusCode).toBe(204);
+    expect(await settings()).toEqual(before);
+  });
   it('requires an EAT admin for every setup action', async () => {
     for (const endpoint of ['initialize', 'install', 'enabled']) {
       expect((await api('POST', `/api/settings/github/${endpoint}`, 'member', { enabled: true, organization: 'eat-org', name: 'EAT' })).status).toBe(403);

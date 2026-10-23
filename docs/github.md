@@ -12,6 +12,8 @@ GitHub 关联是可选能力，不替代 EAT 登录，也不修改 Dokploy 的 G
 4. 点击「安装到组织」，在 GitHub 选择指定组织和 **All repositories**，确认权限。安装回调核验 App 身份、组织 ID、权限和仓库范围，通过后保存 Installation ID 并启用接入。
 5. 普通 EAT 用户在个人中心关联自己的 GitHub 身份，不需要再安装 App。
 
+manifest 会登记一个**未启用**的 webhook（地址 `/api/github/events`，不订阅任何事件）。GitHub 仍会在创建 App 时发一次 `ping`，在 App 设置页 **Advanced → Recent Deliveries** 里能看到；EAT 对这个地址的任何请求一律回 204 并忽略内容，不做任何处理。2026-10-23 之前的版本没有这个路由，那次 `ping` 会显示 404，不影响使用；想看到成功状态可以点 Redeliver。
+
 创建与安装回调分别使用 30 分钟、一次性的 state 和 HttpOnly 浏览器随机值。服务端在回调前后检查发起管理员的角色、启用状态、原 EAT 会话和配置版本。EAT Token 和 App 密钥不会进入跳转 URL；私钥和 Client Secret 不会发送给浏览器。取消向导不改变已有配置。
 
 如果安装需要组织 Owner 审批，先在 GitHub 完成审批，再回 EAT「检查连接」并启用。安装成功但回调丢失时，「检查连接」可根据 App 和指定组织重新发现并核验安装，不必创建新 App。
