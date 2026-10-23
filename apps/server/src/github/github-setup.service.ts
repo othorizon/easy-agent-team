@@ -9,6 +9,10 @@ import { apiTokens, users, githubAccounts, githubOauthStates, githubRepositories
 import { GithubClient, GithubConfig, GithubError } from './github.client';
 import { GithubStore, GithubTx } from './github.store';
 
+const PRIVATE_APP = 'GitHub App 为私有：GitHub 只允许组织成员授权私有 App，尚未加入组织的用户点「关联 GitHub」会看到 404。' +
+  '请组织 Owner 在 GitHub 打开组织 Settings → Developer settings → GitHub Apps → 本 App 的 Edit → Advanced，点击 Make public，然后重新检查连接。' +
+  '公开只代表其他账户也能授权或安装该 App，不会获得本组织的任何权限。';
+
 type SetupSession = typeof githubSetupStates.$inferSelect;
 
 @Injectable()
@@ -48,7 +52,9 @@ export class GithubSetupService {
       name: input.name, url: this.base(), description: 'EAT 组织成员与应用仓库协作',
       redirect_url: `${this.base()}/api/github/setup/manifest`, callback_urls: [`${this.base()}/api/github/callback`],
       setup_url: `${this.base()}/api/github/setup/installation`, setup_on_update: true,
-      request_oauth_on_install: false, public: false,
+      // Must be public: GitHub only lets members of the owning organization authorize a private App, so
+      // users who are not yet in the organization (the people linking is for) get a 404 on the OAuth page.
+      request_oauth_on_install: false, public: true,
       hook_attributes: { url: `${this.base()}/api/github/events`, active: false },
       default_permissions: { members: 'write', administration: 'write', metadata: 'read' }, default_events: [],
     } };
@@ -128,6 +134,7 @@ export class GithubSetupService {
     if (!c) throw new BadRequestException('请先初始化 GitHub App 或保存高级配置');
     try {
       const app = await this.client.appInfo(c);
+      if (await this.client.isPublic(app.slug) === false) throw new GithubError(PRIVATE_APP);
       // Discover the actual installation, including recovery after a lost installation callback.
       const installationId = await this.client.findInstallation(c);
       if (!installationId) throw new GithubError('App 已创建，但尚未安装到组织或已被卸载，请安装到组织', false, 0, 'uninstalled');

@@ -874,3 +874,13 @@ easy-agent-team/
 - **关闭后**：网关不再往 HTML 注入 `/__eat/embed.js`（网页上看不到评论入口）；新建讨论与回复在服务层一律回 403 `SITE_COMMENTS_DISABLED`（控制台 / CLI / MCP 同一条路径）；已有讨论保留，可查看、解决、删除；控制台评论页签显示「评论已关闭」提示并隐藏发表与回复入口。重新开启即恢复，不丢数据。
 - **临时隐藏**：网页评论控件可以「暂时隐藏评论」——桌面悬停圆形入口出现左上角的小 ×，触屏（无悬停）走面板 `⋯` 菜单里的同名项；隐藏后短暂提示「评论已隐藏，刷新页面后恢复」再移除控件。状态只存在 embed 脚本的内存里，**刻意不写 localStorage / Cookie**，刷新即恢复；隐藏后 `send()` 不再向已移除的 iframe 发消息，避免页面 SPA 路由（被包装的 `history.pushState`）报错。
 - 不涉及 CLI 行为与指南，版本号不动。
+
+### 决策 85：GitHub App 改为公开，私有 App 检查连接不通过（2026-10-23）
+
+- **症状**：组织 Owner（同时是 EAT 管理员）在个人中心点「关联 GitHub」能看到授权页，其他用户点同一个按钮，GitHub 显示 404。
+- **根因**：向导的 manifest 写的是 `public: false`。GitHub 规定私有 App「只有所属组织的成员能授权」，而关联 GitHub 正是为了邀请尚未入组织的用户，所以除组织成员外的所有人都在 OAuth 授权页上 404，EAT 侧看不到任何错误。
+- **修复**：manifest 改为 `public: true`。`GithubSetupService.check()`（「检查连接」以及启用接入前的校验）新增 `GithubClient.isPublic(slug)`：以未登录方式请求 `GET /apps/{slug}`，2xx 判为公开，404 判为私有，限流、5xx、网络异常判为未知（`null`）。私有时检查失败，并写明到 GitHub 点 Make public 的路径，从而无法启用接入；未知时不阻断，因为未登录调用每个 IP 每小时只有 60 次，不能因限流把接入判死。
+- **公开的代价**：别的 GitHub 账户能授权或在自己的账户下安装这个 App，但拿不到本组织的任何权限。EAT 只认 `GET /orgs/{org}/installation` 找到的本组织 installation，安装回调必须带 EAT 签发的一次性 state；用户 token 也只能访问「App 已安装 ∩ 用户本人有权限」的资源。
+- **存量**：已创建的私有 App 无法通过 API 改可见性，只能由管理员在 GitHub 手动 Make public。系统设置页打开时会自动检查连接，管理员能直接看到提示。手动配置（高级设置）的 App 规则相同。
+- 只涉及服务端与文档，不涉及 CLI 与指南，版本号不变。
+

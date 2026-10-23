@@ -118,6 +118,15 @@ export class GithubClient {
       return { id: String(data.id), slug: String(data.slug) };
     } catch (e) { throw this.setupError(e, '无法读取 GitHub App，请检查连接和私钥'); }
   }
+  /** Unauthenticated `GET /apps/{slug}` answers only for public Apps. `null` = unknown (rate limit, network), never blocks. */
+  async isPublic(slug: string): Promise<boolean | null> {
+    try {
+      const response = await this.transport(`https://api.github.com/apps/${encodeURIComponent(slug)}`, { redirect: 'error',
+        headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'eat-server' } });
+      await response.body?.cancel();
+      return response.ok ? true : response.status === 404 ? false : null;
+    } catch { return null; }
+  }
   async findInstallation(c: GithubConfig): Promise<string | null> {
     try {
       const { data } = await (await this.app(c)).octokit.request('GET /orgs/{org}/installation', { org: c.organization });

@@ -36,6 +36,17 @@ describe('real Octokit transport and redacted errors', () => {
     expect(hits.map(h => h.url)).toEqual(['https://api.github.com/app', 'https://api.github.com/orgs/eat-org/installation']);
     for (const h of hits) expect(h.init.headers.authorization).toMatch(/^bearer /i);
   });
+  it('reads App visibility without credentials; rate limits and outages stay unknown', async () => {
+    for (const [status, expected] of [[200, true], [404, false], [403, null], [503, null]] as const) {
+      mockFetch(() => json({ slug: 'eat-app' }, status));
+      expect(await new GithubClient().isPublic('eat-app')).toBe(expected);
+      expect(hits[0].url).toBe('https://api.github.com/apps/eat-app');
+      expect(hits[0].init.headers.Authorization ?? hits[0].init.headers.authorization).toBeUndefined();
+      vi.restoreAllMocks();
+    }
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('fetch failed'));
+    expect(await new GithubClient().isPublic('eat-app')).toBeNull();
+  });
   it('does not confuse an uninstalled App, invalid credentials and a provider outage', async () => {
     mockFetch(() => json({ message: 'private detail' }, 404));
     expect(await new GithubClient().findInstallation(config)).toBeNull();

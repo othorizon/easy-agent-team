@@ -7,7 +7,7 @@ GitHub 关联是可选能力，不替代 EAT 登录，也不修改 Dokploy 的 G
 先部署增量迁移与代码，并将 `EAT_PUBLIC_URL` 设为用户和 GitHub 可访问的 EAT HTTPS 地址。管理员需要同时具有目标 GitHub 组织的 Owner 权限。
 
 1. 进入「系统设置 → GitHub 接入」，输入组织名称和 App 名称，点击「初始化 GitHub App」。
-2. 浏览器使用 GitHub App Manifest 跳转到该组织的 App 创建页面，确认名称并创建。权限、回调地址由 EAT 自动填写，webhook 关闭；这是创建 GitHub 集成身份，不是创建 EAT 业务应用。
+2. 浏览器使用 GitHub App Manifest 跳转到该组织的 App 创建页面，确认名称并创建。权限、回调地址由 EAT 自动填写，webhook 关闭，App 设为**公开**（见下方「App 必须公开」）；这是创建 GitHub 集成身份，不是创建 EAT 业务应用。
 3. GitHub 返回 EAT 后，服务端交换一次性 code，将 App ID、Client ID、Client Secret 和私钥加密保存。此时接入仍关闭。
 4. 点击「安装到组织」，在 GitHub 选择指定组织和 **All repositories**，确认权限。安装回调核验 App 身份、组织 ID、权限和仓库范围，通过后保存 Installation ID 并启用接入。
 5. 普通 EAT 用户在个人中心关联自己的 GitHub 身份，不需要再安装 App。
@@ -24,9 +24,17 @@ GitHub 关联是可选能力，不替代 EAT 登录，也不修改 Dokploy 的 G
 
 重新初始化只能使用原组织。不能借重新安装或初始化把现有账户和仓库授权关系转移到另一个组织。新 App 不会自动批量修改历史仓库权限。
 
+### App 必须公开
+
+GitHub 只允许**所属组织的成员**授权私有 App。而用户关联 GitHub 正是为了被邀请进组织，所以 App 若是私有的，尚未入组织的用户点「关联 GitHub」会在 GitHub 看到 404，只有已在组织里的人（例如组织 Owner）能看到授权页。
+
+- 向导创建的 App 默认公开。2026-10-23 之前用向导创建的 App 是私有的，需要手动改：在 GitHub 打开组织 **Settings → Developer settings → GitHub Apps**，找到本 App 点 **Edit → Advanced → Make public**。
+- 「检查连接」会以未登录方式请求 `GET https://api.github.com/apps/<slug>`，返回 404 即判定为私有，检查失败并给出上述步骤，无法启用接入。限流或网络异常时视为未知，不阻断。
+- 公开只表示其他 GitHub 账户也能看到、授权或在自己的账户下安装这个 App，不会获得本组织的任何权限。EAT 只使用本组织的 installation；其他账户的安装回调没有 EAT 签发的 state，会被拒绝。
+
 ## 高级设置：手动配置已有 App
 
-1. 在 GitHub 创建 GitHub App。Organization permissions 设置 **Members: Read and write**；Repository permissions 设置 **Administration: Read and write**，保留 Metadata 读取权限。
+1. 在 GitHub 创建 GitHub App。Organization permissions 设置 **Members: Read and write**；Repository permissions 设置 **Administration: Read and write**，保留 Metadata 读取权限。在 Advanced 中将 App 设为公开（Make public），否则组织外的用户无法授权关联。
 2. 将 App 安装到指定组织，选择 **All repositories**。无需为每个 EAT 用户安装 App，也无需开启 webhook。
 3. 将「高级设置」展示的 Authorization callback URL 配置到 GitHub App，路径为 `/api/github/callback`。Setup URL 设置为 `/api/github/setup/installation` 对应的完整地址；关闭安装时请求用户 OAuth 授权，开启安装更新后跳转 Setup URL。
 4. 展开「高级设置：手动配置已有 GitHub App」，填写组织名称、App ID、Client ID、Installation ID、Client Secret 和 PEM 私钥。密钥加密保存，读取接口只返回是否配置；留空保留原密钥。

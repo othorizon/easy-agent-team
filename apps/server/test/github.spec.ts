@@ -33,6 +33,7 @@ const client = {
   check: vi.fn(async () => '900'),
   appInfo: vi.fn(async (c: any) => ({ id: c.appId, slug: 'eat-app' })),
   findInstallation: vi.fn(async () => '2' as string | null),
+  isPublic: vi.fn(async () => true as boolean | null),
   convertManifest: vi.fn(async (_code: string) => ({ appId: '10', slug: 'new-eat-app', clientId: 'new-client', clientSecret: 'new-secret', privateKey: 'new-private', organization: 'eat-org', organizationId: '900' })),
   identity: vi.fn(async (_c: any, token?: string, id?: string) => identity(id ?? token ?? '102')),
   oauth: vi.fn(async (_c: any, p: any) => ({ access_token: p.code ?? '102', refresh_token: 'refresh', expires_in: 3600 })),
@@ -133,7 +134,7 @@ describe('administrator GitHub App setup and recovery', () => {
   it('builds a browser POST manifest without credentials and does not create or enable anything until callback', async () => {
     await db.delete(s.githubSettings); await db.delete(s.githubAccounts);
     const flow = await start();
-    expect(flow.response.body.manifest).toMatchObject({ public: false, request_oauth_on_install: false, setup_on_update: true,
+    expect(flow.response.body.manifest).toMatchObject({ public: true, request_oauth_on_install: false, setup_on_update: true,
       hook_attributes: { active: false }, default_permissions: { members: 'write', administration: 'write', metadata: 'read' } });
     expect(flow.response.body.manifest.redirect_url).toContain('/api/github/setup/manifest');
     expect(flow.response.body.manifest.setup_url).toContain('/api/github/setup/installation');
@@ -236,6 +237,18 @@ describe('administrator GitHub App setup and recovery', () => {
     expect((await api('POST', '/api/settings/github/check')).status).toBe(201);
     expect(await settings()).toMatchObject({ appId: before.appId, installationId: '99', connectionState: 'connected' });
     expect(client.convertManifest).not.toHaveBeenCalled();
+  });
+  it('rejects a private App because non-members cannot authorize it, and ignores an unknown visibility', async () => {
+    client.isPublic.mockResolvedValueOnce(false);
+    const r = await api('POST', '/api/settings/github/check');
+    expect(r.status).toBe(400); expect(r.body.message).toContain('Make public');
+    expect(client.isPublic).toHaveBeenLastCalledWith('eat-app');
+    expect(await settings()).toMatchObject({ appId: '1', connectionState: 'error' });
+    client.isPublic.mockResolvedValueOnce(false);
+    expect((await api('POST', '/api/settings/github/enabled', 'admin', { enabled: true })).status).toBe(400);
+    client.isPublic.mockResolvedValueOnce(null);
+    expect((await api('POST', '/api/settings/github/check')).status).toBe(201);
+    expect(await settings()).toMatchObject({ connectionState: 'connected', connectionError: '' });
   });
   it('reports App or credential unavailability without assuming deletion or replacing configuration', async () => {
     client.appInfo.mockRejectedValueOnce(new GithubError('App 或私钥失效', false, 0, 'app_unavailable'));
