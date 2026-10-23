@@ -783,3 +783,25 @@ describe('MCP 网关：SSRF 防护', () => {
     }
   });
 });
+
+
+describe('Private 环境的网关凭证边界', () => {
+  it('已有上游缓存也不能绕过环境的 private 模式', async () => {
+    upstreamMode.kind = 'json';
+    const url = await setupSubscribedConfig('svc-private-cache');
+    const first = await callGateway(url);
+    expect(first.status).toBe(200);
+    await first.text();
+    const changed = await api('PATCH', '/api/envs/mcp-upstream', {
+      token: adminToken, payload: { visibility: 'private' },
+    });
+    expect(changed.status).toBe(200);
+    try {
+      const denied = await callGateway(url);
+      expect(denied.status).toBe(502);
+      expect(await denied.text()).not.toContain('super-secret-upstream-token');
+    } finally {
+      await api('PATCH', '/api/envs/mcp-upstream', { token: adminToken, payload: { visibility: 'team' } });
+    }
+  });
+});

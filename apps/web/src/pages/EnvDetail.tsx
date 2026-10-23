@@ -1,4 +1,3 @@
-import { ResourceRequests } from '../components/resource-requests';
 import type {
   EnvironmentInfo,
   GrantInfo,
@@ -61,7 +60,9 @@ export function EnvDetailPage() {
   });
   const env = envQuery.data;
   // 管理权与服务端 canManage 同口径：Owner 或管理员
-  const canManage = !!me && !!env && (me.role === 'admin' || env.ownerId === me.id);
+  const canManage = !!me && !!env && (env.ownerId === me.id || (env.visibility !== 'private' && me.role === 'admin'));
+
+  const isPrivate = env?.visibility === 'private';
 
   const variables = useQuery({
     queryKey: ['vars', slug],
@@ -70,13 +71,13 @@ export function EnvDetailPage() {
   const grants = useQuery({
     queryKey: ['grants', slug],
     queryFn: () => api<GrantInfo[]>('GET', `/api/envs/${slug}/grants`),
-    enabled: canManage,
+    enabled: canManage && !isPrivate,
     retry: false,
   });
   const users = useQuery({
     queryKey: ['users'],
     queryFn: () => api<UserRow[]>('GET', '/api/users'),
-    enabled: canManage,
+    enabled: canManage && !isPrivate,
   });
 
   const invalidate = () => {
@@ -225,7 +226,7 @@ export function EnvDetailPage() {
       id: 'visibility',
       header: '对未授权成员',
       meta: { className: 'w-36', cellClassName: 'text-muted-foreground', hideBelow: 'lg' },
-      cell: ({ row: { original: row } }) => (row.visibleWithoutPermission ? '可见名称与备注' : '完全隐藏'),
+      cell: ({ row: { original: row } }) => (isPrivate ? '完全隐藏（Private）' : row.visibleWithoutPermission ? '可见名称与备注' : '完全隐藏'),
     },
     {
       accessorKey: 'version',
@@ -295,6 +296,10 @@ export function EnvDetailPage() {
     },
   ];
 
+  if (envQuery.isError) {
+    return <Empty text="环境不存在或无权访问" action={<Button variant="outline" asChild><Link to="/">返回环境列表</Link></Button>} />;
+  }
+
   return (
     <div className="space-y-5">
       <div>
@@ -310,6 +315,7 @@ export function EnvDetailPage() {
             <span className="inline-flex flex-wrap items-center gap-2">
               环境 <InlineCode className="text-lg">{slug}</InlineCode>
               {env?.name && <span>{env.name}</span>}
+              {isPrivate && <Badge variant="secondary">Private · 仅自己可见</Badge>}
               {isDbEnv && (
                 <Badge variant="secondary">
                   <Database />
@@ -358,7 +364,6 @@ export function EnvDetailPage() {
         />
       </div>
 
-      {env && <ResourceRequests type="env" resourceId={env.id}/>}
       <Card>
         <CardContent>
           <DataTable
@@ -373,7 +378,7 @@ export function EnvDetailPage() {
 
       {env && <OwnerCard env={env} me={me} canManage={canManage} />}
 
-      {canManage && (
+      {canManage && !isPrivate && (
         <Card>
           <CardContent>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -398,6 +403,7 @@ export function EnvDetailPage() {
       {editing !== null && (
         <VariableDialog
           editing={editing}
+          isPrivate={isPrivate}
           pending={upsert.isPending}
           onClose={() => setEditing(null)}
           onSubmit={(v) => upsert.mutate(v)}
@@ -530,7 +536,8 @@ function IconButton({
 function OwnerCard({ env, me, canManage }: { env: EnvironmentInfo; me: UserPublic | null; canManage: boolean }) {
   const isOwner = me?.id === env.ownerId;
   const isAdmin = me?.role === 'admin';
-  const abilities = ['读取全部变量的值，含敏感值', '新增、更新、删除变量', '授予或撤销其他成员的读取权限'];
+  const isPrivate = env.visibility === 'private';
+  const abilities = ['读取全部变量的值，含敏感值', '新增、更新、删除变量', ...(isPrivate ? [] : ['授予或撤销其他成员的读取权限'])];
   return (
     <Card>
       <CardContent className="space-y-4">
@@ -560,7 +567,7 @@ function OwnerCard({ env, me, canManage }: { env: EnvironmentInfo; me: UserPubli
         </div>
         <div className="space-y-2.5 text-sm">
           <p className="leading-relaxed text-foreground/80">
-            Owner 对整个环境拥有完整的读写权限，不需要出现在下面的授权名单里；平台管理员拥有同样的权限。
+            {isPrivate ? '此环境为 Private，仅 Owner 可见和使用，其他成员（含管理员）不可访问，不能向其他成员授权。' : 'Owner 对整个环境拥有完整的读写权限，不需要出现在下面的授权名单里；平台管理员拥有同样的权限。'}
           </p>
           <ul className="flex flex-wrap gap-x-5 gap-y-1.5 text-[13px] text-muted-foreground">
             {abilities.map((a) => (
@@ -570,7 +577,7 @@ function OwnerCard({ env, me, canManage }: { env: EnvironmentInfo; me: UserPubli
               </li>
             ))}
           </ul>
-          {env.source === 'db_assignment' && (
+          {env.source === 'db_assignment' && !isPrivate && (
             <p className="text-[13px] leading-relaxed text-muted-foreground">
               这个环境随数据库分配自动生成，申请人即 Owner；想让同事一起用这个库，把整个环境授权给对方即可。
             </p>
@@ -600,9 +607,9 @@ function EditEnvDialog({
   onClose: () => void;
   onSubmit: (v: UpdateEnvironmentRequest) => void;
 }) {
-  const { register, handleSubmit, formState: { errors } } = useForm({
-    resolver: zodResolver(createEnvironmentSchema.pick({ name: true, description: true })),
-    defaultValues: { name: env.name, description: env.description },
+  const { register, handleSubmit, control, formState: { errors } } = useForm({
+    resolver: zodResolver(createEnvironmentSchema.pick({ name: true, description: true, visibility: true })),
+    defaultValues: { name: env.name, description: env.description, visibility: env.visibility },
   });
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -617,6 +624,13 @@ function EditEnvDialog({
           <Field label="备注" htmlFor="env-edit-desc" hint="供人和 AI 理解这个环境的用途">
             <Textarea id="env-edit-desc" rows={2} {...register('description')} />
           </Field>
+          {env.ownerId === getStoredUser()?.id && (
+            <Field label="Private 模式" hint="开启后仅自己可见；已有读取授权会被撤销，待审批申请失效，所有变量对未授权成员隐藏。关闭后不会恢复旧授权和变量可见性。">
+              <Controller control={control} name="visibility" render={({ field }) => (
+                <Switch aria-label="Private 模式" checked={field.value === 'private'} onCheckedChange={(checked) => field.onChange(checked ? 'private' : 'team')} />
+              )} />
+            </Field>
+          )}
           <Button type="submit" loading={pending} className="w-full">
             保存
           </Button>
@@ -634,11 +648,13 @@ type VariableFormValues = z.output<typeof variableFormSchema>;
 
 function VariableDialog({
   editing,
+  isPrivate,
   pending,
   onClose,
   onSubmit,
 }: {
   editing: VariableMeta | 'new';
+  isPrivate: boolean;
   pending: boolean;
   onClose: () => void;
   onSubmit: (v: UpsertVariableRequest) => void;
@@ -647,13 +663,13 @@ function VariableDialog({
   const { register, handleSubmit, control, watch, formState: { errors } } = useForm({
     resolver: zodResolver(isNew ? newVariableFormSchema : variableFormSchema),
     defaultValues: isNew
-      ? { key: '', value: '', description: '', visibleWithoutPermission: true, secret: true }
+      ? { key: '', value: '', description: '', visibleWithoutPermission: !isPrivate, secret: true }
       : {
           key: editing.key,
           // 非敏感变量的当前值本就明文可见，编辑时直接带出
           value: editing.secret ? '' : (editing.value ?? ''),
           description: editing.description,
-          visibleWithoutPermission: editing.visibleWithoutPermission,
+          visibleWithoutPermission: !isPrivate && editing.visibleWithoutPermission,
           secret: editing.secret,
         },
   });
@@ -664,7 +680,7 @@ function VariableDialog({
     onSubmit({
       key: v.key,
       description: v.description,
-      visibleWithoutPermission: v.visibleWithoutPermission,
+      visibleWithoutPermission: !isPrivate && v.visibleWithoutPermission,
       secret: v.secret,
       ...(unchanged ? {} : { value: v.value }),
     });
@@ -726,12 +742,12 @@ function VariableDialog({
           </Field>
           <Field
             label="未授权成员可见"
-            hint="开启：没有读取权限的成员在清单里能看到变量名和备注（看不到值），知道该申请什么；关闭：对他们完全隐藏，连这个变量存在都看不到。"
+            hint={isPrivate ? 'Private 环境仅自己可见，不能为单个变量开启此选项。' : '开启：没有读取权限的成员在清单里能看到变量名和备注（看不到值），知道该申请什么；关闭：对他们完全隐藏，连这个变量存在都看不到。'}
           >
             <Controller
               control={control}
               name="visibleWithoutPermission"
-              render={({ field }) => <Switch checked={field.value} onCheckedChange={field.onChange} />}
+              render={({ field }) => <Switch aria-label="未授权成员可见" disabled={isPrivate} checked={!isPrivate && field.value} onCheckedChange={field.onChange} />}
             />
           </Field>
           <Button type="submit" loading={pending} className="w-full">

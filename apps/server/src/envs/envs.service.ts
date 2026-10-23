@@ -23,10 +23,11 @@ import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
 import { decryptSecret, encryptSecret } from '../common/crypto';
 import { DB, type Db } from '../db/db.module';
-import { dbAssignments, dbInstances, environments, envVariables, users, variableGrants } from '../db/schema';
+import { accessRequests, dbAssignments, dbInstances, environments, envVariables, users, variableGrants } from '../db/schema';
 
 type EnvRow = typeof environments.$inferSelect;
 type VarRow = typeof envVariables.$inferSelect;
+type EnvTransaction = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 const HOW_TO_REQUEST =
   '无读取权限。请通过 MCP 工具 request_access（或 CLI：eat env request）附理由发起权限申请，资源 Owner 批准后重试。';
@@ -40,23 +41,35 @@ export class EnvsService {
 
   // ---------- 基础 ----------
 
-  async getEnvBySlug(slug: string): Promise<EnvRow> {
+  async getEnvBySlug(slug: string, user: AuthUser): Promise<EnvRow> {
     const row = (
       await this.db.select().from(environments).where(eq(environments.slug, slug)).limit(1)
     )[0];
-    if (!row) throw new NotFoundException({ error: 'NOT_FOUND', message: `环境 ${slug} 不存在` });
+    if (!row || (row.visibility === 'private' && row.ownerId !== user.id)) throw new NotFoundException({ error: 'NOT_FOUND', message: `环境 ${slug} 不存在` });
     return row;
   }
 
-  /** 环境的管理权：Owner 或平台管理员 */
+  /** 私有环境仅 Owner；团队环境允许平台管理员管理。 */
   canManage(env: EnvRow, user: AuthUser): boolean {
-    return user.role === 'admin' || env.ownerId === user.id;
+    return env.ownerId === user.id || (env.visibility !== 'private' && user.role === 'admin');
   }
 
   private assertManage(env: EnvRow, user: AuthUser) {
     if (!this.canManage(env, user)) {
       throw new ForbiddenException({ error: 'FORBIDDEN', message: '仅环境 Owner 或管理员可执行此操作' });
     }
+  }
+
+  /** 与切换 private 共用环境行锁，避免旧表单或并发授权在收回权限后重新写入。 */
+  private async withManagedEnvironment<T>(user: AuthUser, slug: string, write: (tx: EnvTransaction, env: EnvRow) => Promise<T>): Promise<T> {
+    return this.db.transaction(async (tx) => {
+      const [env] = await tx.select().from(environments).where(eq(environments.slug, slug)).for('update');
+      if (!env || (env.visibility === 'private' && env.ownerId !== user.id)) {
+        throw new NotFoundException({ error: 'NOT_FOUND', message: `环境 ${slug} 不存在` });
+      }
+      this.assertManage(env, user);
+      return write(tx, env);
+    });
   }
 
   /** 用户在某环境下可读值的变量 id 集合（含环境级授权 → 返回 'ALL'） */
@@ -102,8 +115,8 @@ export class EnvsService {
     return links;
   }
 
-  /** 全部环境（不分页、不筛选，按 slug 排序）：清单在它上面筛，catalog 直接用 */
-  private async loadEnvironments(): Promise<EnvironmentInfo[]> {
+  /** 当前用户可见的环境（按 slug 排序）：先过滤权限，再搜索、计数和分页。 */
+  private async loadEnvironments(user: AuthUser): Promise<EnvironmentInfo[]> {
     const rows = await this.db
       .select({
         env: environments,
@@ -114,6 +127,7 @@ export class EnvsService {
       .from(environments)
       .innerJoin(users, eq(environments.ownerId, users.id))
       .leftJoin(envVariables, eq(envVariables.environmentId, environments.id))
+      .where(or(eq(environments.visibility, 'team'), eq(environments.ownerId, user.id)))
       .groupBy(environments.id, users.name, users.email)
       .orderBy(asc(environments.slug));
     const links = await this.dbAssignmentLinks();
@@ -122,6 +136,7 @@ export class EnvsService {
       slug: r.env.slug,
       name: r.env.name,
       description: r.env.description,
+      visibility: r.env.visibility,
       ownerId: r.env.ownerId,
       ownerName: r.ownerName,
       ownerEmail: r.ownerEmail,
@@ -137,8 +152,8 @@ export class EnvsService {
    * 先按关键词收窄、在这个集合上数两类来源各几条、最后才按 source 过滤——页签上的数字要回答
    * 「在当前搜索下切到那个页签会有几条」，source 自己不能参与计数（与 Skill 清单的 scope 计数同一思路）
    */
-  async listEnvironments(query: EnvListQuery): Promise<EnvListResult> {
-    const all = await this.loadEnvironments();
+  async listEnvironments(user: AuthUser, query: EnvListQuery): Promise<EnvListResult> {
+    const all = await this.loadEnvironments(user);
     const keyword = query.q?.toLowerCase() ?? '';
     const narrowed = keyword
       ? all.filter((e) =>
@@ -159,8 +174,8 @@ export class EnvsService {
   }
 
   /** 单个环境的信息（详情页用；清单已分页，靠翻清单找一条不可靠） */
-  async getEnvironment(slug: string): Promise<EnvironmentInfo> {
-    const env = await this.getEnvBySlug(slug);
+  async getEnvironment(user: AuthUser, slug: string): Promise<EnvironmentInfo> {
+    const env = await this.getEnvBySlug(slug, user);
     const [owner] = await this.db.select({ name: users.name, email: users.email }).from(users).where(eq(users.id, env.ownerId));
     const [{ variableCount }] = await this.db
       .select({ variableCount: count(envVariables.id) })
@@ -172,6 +187,7 @@ export class EnvsService {
       slug: env.slug,
       name: env.name,
       description: env.description,
+      visibility: env.visibility,
       ownerId: env.ownerId,
       ownerName: owner?.name ?? '(已删除)',
       ownerEmail: owner?.email ?? '',
@@ -191,26 +207,40 @@ export class EnvsService {
     if (exists.length > 0) throw new ConflictException({ error: 'CONFLICT', message: `环境 ${dto.slug} 已存在` });
     const [row] = await this.db
       .insert(environments)
-      .values({ slug: dto.slug, name: dto.name, description: dto.description, ownerId: user.id })
+      .values({ slug: dto.slug, name: dto.name, description: dto.description, visibility: dto.visibility, ownerId: user.id })
       .returning();
     await this.audit.record({ actorId: user.id, action: 'env.created', targetType: 'environment', targetId: row.id });
     return row;
   }
 
   async updateEnvironment(user: AuthUser, slug: string, dto: UpdateEnvironmentRequest) {
-    const env = await this.getEnvBySlug(slug);
+    const env = await this.getEnvBySlug(slug, user);
     this.assertManage(env, user);
-    const [row] = await this.db
-      .update(environments)
-      .set({ name: dto.name ?? env.name, description: dto.description ?? env.description })
-      .where(eq(environments.id, env.id))
-      .returning();
+    if (dto.visibility !== undefined && dto.visibility !== env.visibility && env.ownerId !== user.id) {
+      throw new ForbiddenException({ error: 'FORBIDDEN', message: '仅环境 Owner 可修改环境可见性' });
+    }
+    const row = await this.db.transaction(async (tx) => {
+      const [current] = await tx.select().from(environments).where(eq(environments.id, env.id)).for('update');
+      if (!current) throw new NotFoundException('环境不存在');
+      this.assertManage(current, user);
+      const [updated] = await tx.update(environments)
+        .set({ name: dto.name ?? current.name, description: dto.description ?? current.description, visibility: dto.visibility ?? current.visibility })
+        .where(eq(environments.id, env.id)).returning();
+      if (updated.visibility === 'private') {
+        await tx.update(envVariables).set({ visibleWithoutPermission: false }).where(eq(envVariables.environmentId, env.id));
+        const vars = tx.select({ id: envVariables.id }).from(envVariables).where(eq(envVariables.environmentId, env.id));
+        await tx.delete(variableGrants).where(or(eq(variableGrants.environmentId, env.id), inArray(variableGrants.variableId, vars)));
+        await tx.update(accessRequests).set({ status: 'invalid', decidedAt: new Date() })
+          .where(and(eq(accessRequests.environmentId, env.id), eq(accessRequests.status, 'pending')));
+      }
+      return updated;
+    });
     await this.audit.record({ actorId: user.id, action: 'env.updated', targetType: 'environment', targetId: env.id });
     return row;
   }
 
   async deleteEnvironment(user: AuthUser, slug: string) {
-    const env = await this.getEnvBySlug(slug);
+    const env = await this.getEnvBySlug(slug, user);
     this.assertManage(env, user);
     await this.db.delete(environments).where(eq(environments.id, env.id));
     await this.audit.record({ actorId: user.id, action: 'env.deleted', targetType: 'environment', targetId: env.id });
@@ -247,7 +277,7 @@ export class EnvsService {
    * 无权限且配置为不可见 → 不出现在清单。
    */
   async listVariables(user: AuthUser, slug: string): Promise<VariableMeta[]> {
-    const env = await this.getEnvBySlug(slug);
+    const env = await this.getEnvBySlug(slug, user);
     const vars = await this.db
       .select()
       .from(envVariables)
@@ -261,7 +291,7 @@ export class EnvsService {
 
   /** 全量清单（跨环境），供 CLI / MCP 认路 */
   async catalog(user: AuthUser) {
-    const envs = await this.loadEnvironments();
+    const envs = await this.loadEnvironments(user);
     const result = [];
     for (const env of envs) {
       const variables = await this.listVariables(user, env.slug);
@@ -271,74 +301,74 @@ export class EnvsService {
   }
 
   async upsertVariable(user: AuthUser, slug: string, dto: UpsertVariableRequest) {
-    const env = await this.getEnvBySlug(slug);
-    this.assertManage(env, user);
-    const existing = (
-      await this.db
-        .select()
-        .from(envVariables)
-        .where(and(eq(envVariables.environmentId, env.id), eq(envVariables.key, dto.key)))
-        .limit(1)
-    )[0];
-    // 敏感 → 只存加密列；非敏感 → 只存明文列（切换敏感性时清掉另一列）
-    const valueColumns = (secret: boolean, value: string) =>
-      secret ? { valueEncrypted: encryptSecret(value), valuePlain: null } : { valueEncrypted: null, valuePlain: value };
-    let row: VarRow;
-    if (existing) {
-      // 值缺省 = 保持当前值，只改备注 / 可见性 / 敏感标记，版本不动（版本只跟着值走）；
-      // 敏感标记翻转时得把现值搬到另一列，所以要先解出来再按新标记落盘
-      const valueChanged = dto.value !== undefined;
-      const columns =
-        !valueChanged && dto.secret === existing.secret
-          ? {}
-          : valueColumns(dto.secret, dto.value ?? this.readValue(existing));
-      [row] = await this.db
-        .update(envVariables)
-        .set({
-          ...columns,
-          secret: dto.secret,
-          description: dto.description,
-          visibleWithoutPermission: dto.visibleWithoutPermission,
-          version: valueChanged ? existing.version + 1 : existing.version,
-          updatedAt: new Date(),
-        })
-        .where(eq(envVariables.id, existing.id))
-        .returning();
-      await this.audit.record({
-        actorId: user.id,
-        action: 'variable.upserted',
-        targetType: 'env_variable',
-        targetId: row.id,
-        meta: { environment: env.slug, key: dto.key, version: row.version, valueChanged },
-      });
-    } else {
-      if (dto.value === undefined) {
-        throw new BadRequestException({ error: 'VALIDATION_FAILED', message: `变量 ${dto.key} 不存在，新增变量必须提供值` });
+    return this.withManagedEnvironment(user, slug, async (tx, env) => {
+      const existing = (
+        await tx
+          .select()
+          .from(envVariables)
+          .where(and(eq(envVariables.environmentId, env.id), eq(envVariables.key, dto.key)))
+          .limit(1)
+      )[0];
+      // 敏感 → 只存加密列；非敏感 → 只存明文列（切换敏感性时清掉另一列）
+      const valueColumns = (secret: boolean, value: string) =>
+        secret ? { valueEncrypted: encryptSecret(value), valuePlain: null } : { valueEncrypted: null, valuePlain: value };
+      let row: VarRow;
+      if (existing) {
+        // 值缺省 = 保持当前值，只改备注 / 可见性 / 敏感标记，版本不动（版本只跟着值走）；
+        // 敏感标记翻转时得把现值搬到另一列，所以要先解出来再按新标记落盘
+        const valueChanged = dto.value !== undefined;
+        const columns =
+          !valueChanged && dto.secret === existing.secret
+            ? {}
+            : valueColumns(dto.secret, dto.value ?? this.readValue(existing));
+        [row] = await tx
+          .update(envVariables)
+          .set({
+            ...columns,
+            secret: dto.secret,
+            description: dto.description,
+            visibleWithoutPermission: env.visibility === 'private' ? false : dto.visibleWithoutPermission,
+            version: valueChanged ? existing.version + 1 : existing.version,
+            updatedAt: new Date(),
+          })
+          .where(eq(envVariables.id, existing.id))
+          .returning();
+        await this.audit.record({
+          actorId: user.id,
+          action: 'variable.upserted',
+          targetType: 'env_variable',
+          targetId: row.id,
+          meta: { environment: env.slug, key: dto.key, version: row.version, valueChanged },
+        }, tx);
+      } else {
+        if (dto.value === undefined) {
+          throw new BadRequestException({ error: 'VALIDATION_FAILED', message: `变量 ${dto.key} 不存在，新增变量必须提供值` });
+        }
+        [row] = await tx
+          .insert(envVariables)
+          .values({
+            environmentId: env.id,
+            key: dto.key,
+            ...valueColumns(dto.secret, dto.value),
+            secret: dto.secret,
+            description: dto.description,
+            visibleWithoutPermission: env.visibility === 'private' ? false : dto.visibleWithoutPermission,
+          })
+          .returning();
+        await this.audit.record({
+          actorId: user.id,
+          action: 'variable.upserted',
+          targetType: 'env_variable',
+          targetId: row.id,
+          meta: { environment: env.slug, key: dto.key, version: row.version, valueChanged: true },
+        }, tx);
       }
-      [row] = await this.db
-        .insert(envVariables)
-        .values({
-          environmentId: env.id,
-          key: dto.key,
-          ...valueColumns(dto.secret, dto.value),
-          secret: dto.secret,
-          description: dto.description,
-          visibleWithoutPermission: dto.visibleWithoutPermission,
-        })
-        .returning();
-      await this.audit.record({
-        actorId: user.id,
-        action: 'variable.upserted',
-        targetType: 'env_variable',
-        targetId: row.id,
-        meta: { environment: env.slug, key: dto.key, version: row.version, valueChanged: true },
-      });
-    }
-    return this.toMeta(row, env.slug, true);
+      return this.toMeta(row, env.slug, true);
+    });
   }
 
   async deleteVariable(user: AuthUser, slug: string, key: string) {
-    const env = await this.getEnvBySlug(slug);
+    const env = await this.getEnvBySlug(slug, user);
     this.assertManage(env, user);
     const [row] = await this.db
       .delete(envVariables)
@@ -360,7 +390,7 @@ export class EnvsService {
    * 每次成功读取都落审计（secret.read）。
    */
   async pullValues(user: AuthUser, slug: string, keys: string[] | undefined, ip?: string): Promise<PullValuesResponse> {
-    const env = await this.getEnvBySlug(slug);
+    const env = await this.getEnvBySlug(slug, user);
     const allVars = await this.db
       .select()
       .from(envVariables)
@@ -417,7 +447,7 @@ export class EnvsService {
    * 而每次工具调用都写一条 secret.read 会把审计表冲掉，网关侧改为按配置粒度
    * 记一条 `mcp_gateway.credentials_resolved`。
    *
-   * 查不到的环境 / 变量静默跳过，由调用方决定怎么报（网关是拒掉整次请求）。
+   * 私有环境不能供共享网关使用；查不到的环境 / 变量静默跳过，由调用方决定怎么报（网关是拒掉整次请求）。
    * **除网关外不要调用它**：任何面向用户的取值都必须走 pullValues。
    */
   async readValuesForGateway(refs: Map<string, Set<string>>): Promise<Map<string, string>> {
@@ -426,7 +456,7 @@ export class EnvsService {
       const env = (
         await this.db.select().from(environments).where(eq(environments.slug, envSlug)).limit(1)
       )[0];
-      if (!env) continue;
+      if (!env || env.visibility === 'private') continue;
       const vars = await this.db
         .select()
         .from(envVariables)
@@ -445,7 +475,7 @@ export class EnvsService {
   // ---------- 授权 ----------
 
   async listGrants(user: AuthUser, slug: string) {
-    const env = await this.getEnvBySlug(slug);
+    const env = await this.getEnvBySlug(slug, user);
     this.assertManage(env, user);
     const varIds = this.db
       .select({ id: envVariables.id })
@@ -475,38 +505,41 @@ export class EnvsService {
   }
 
   async createGrant(user: AuthUser, slug: string, dto: CreateGrantRequest) {
-    const env = await this.getEnvBySlug(slug);
-    this.assertManage(env, user);
-    if (dto.variableId) {
-      const v = (
-        await this.db
-          .select({ id: envVariables.id })
-          .from(envVariables)
-          .where(and(eq(envVariables.id, dto.variableId), eq(envVariables.environmentId, env.id)))
-          .limit(1)
-      )[0];
-      if (!v) throw new NotFoundException({ error: 'NOT_FOUND', message: '变量不属于该环境' });
-    } else if (dto.environmentId !== env.id) {
-      throw new NotFoundException({ error: 'NOT_FOUND', message: 'environmentId 与路径环境不一致' });
-    }
-    const [row] = await this.db
-      .insert(variableGrants)
-      .values({
-        userId: dto.userId,
-        variableId: dto.variableId ?? null,
-        environmentId: dto.variableId ? null : env.id,
-        grantedBy: user.id,
-        expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
-      })
-      .returning();
-    await this.audit.record({
-      actorId: user.id,
-      action: 'grant.created',
-      targetType: 'variable_grant',
-      targetId: row.id,
-      meta: { environment: env.slug, userId: dto.userId, variableId: dto.variableId ?? null },
+    return this.withManagedEnvironment(user, slug, async (tx, env) => {
+      if (env.visibility === 'private') {
+        throw new BadRequestException({ error: 'VALIDATION_FAILED', message: '私有环境仅 Owner 可访问，不能向其他成员授权' });
+      }
+      if (dto.variableId) {
+        const v = (
+          await tx
+            .select({ id: envVariables.id })
+            .from(envVariables)
+            .where(and(eq(envVariables.id, dto.variableId), eq(envVariables.environmentId, env.id)))
+            .limit(1)
+        )[0];
+        if (!v) throw new NotFoundException({ error: 'NOT_FOUND', message: '变量不属于该环境' });
+      } else if (dto.environmentId !== env.id) {
+        throw new NotFoundException({ error: 'NOT_FOUND', message: 'environmentId 与路径环境不一致' });
+      }
+      const [row] = await tx
+        .insert(variableGrants)
+        .values({
+          userId: dto.userId,
+          variableId: dto.variableId ?? null,
+          environmentId: dto.variableId ? null : env.id,
+          grantedBy: user.id,
+          expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
+        })
+        .returning();
+      await this.audit.record({
+        actorId: user.id,
+        action: 'grant.created',
+        targetType: 'variable_grant',
+        targetId: row.id,
+        meta: { environment: env.slug, userId: dto.userId, variableId: dto.variableId ?? null },
+      }, tx);
+      return row;
     });
-    return row;
   }
 
   async revokeGrant(user: AuthUser, grantId: string) {

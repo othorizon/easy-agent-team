@@ -617,3 +617,109 @@ describe('环境清单分页 / 筛选、单个环境详情、更新变量不带�
     expect(missing.status).toBe(400);
   });
 });
+
+describe('Private 环境：环境权限优先于变量可见性和授权', () => {
+  let privateEnvId: string;
+  let adminId: string;
+  let requestId: string;
+
+  it('成员可创建 private 环境，新增和修改变量都强制对未授权成员隐藏', async () => {
+    adminId = (await api('GET', '/api/auth/whoami', { token: adminToken })).body.id;
+    const created = await api('POST', '/api/envs', {
+      token: memberToken, payload: { slug: 'private-env', name: '个人环境', visibility: 'private' },
+    });
+    expect(created.status).toBe(201);
+    privateEnvId = created.body.id;
+    const added = await api('POST', '/api/envs/private-env/variables', {
+      token: memberToken, payload: { key: 'PERSONAL', value: 'private-value', secret: false, visibleWithoutPermission: true },
+    });
+    expect(added.status).toBe(201);
+    expect(added.body.visibleWithoutPermission).toBe(false);
+    const updated = await api('POST', '/api/envs/private-env/variables', {
+      token: memberToken, payload: { key: 'PERSONAL', visibleWithoutPermission: true, secret: false },
+    });
+    expect(updated.body.visibleWithoutPermission).toBe(false);
+    const values = await api('POST', '/api/envs/private-env/values', { token: memberToken, payload: {} });
+    expect(values.body.values).toEqual({ PERSONAL: 'private-value' });
+    const detail = await api('GET', '/api/envs/private-env', { token: memberToken });
+    expect(detail.body.visibility).toBe('private');
+  });
+
+  it('管理员不能通过详情、变量、读值、编辑、删除、授权绕过 private，清单和计数也不暴露', async () => {
+    const attempts = [
+      ['GET', '/api/envs/private-env'],
+      ['GET', '/api/envs/private-env/variables'],
+      ['GET', '/api/envs/private-env/grants'],
+      ['POST', '/api/envs/private-env/values', { keys: ['PERSONAL'] }],
+      ['POST', '/api/envs/private-env/variables', { key: 'OTHER', value: 'x' }],
+      ['PATCH', '/api/envs/private-env', { visibility: 'team' }],
+      ['DELETE', '/api/envs/private-env/variables/PERSONAL'],
+      ['DELETE', '/api/envs/private-env'],
+      ['POST', '/api/envs/private-env/grants', { userId: adminId, environmentId: privateEnvId }],
+      ['POST', '/api/access-requests', { environmentSlug: 'private-env', keys: ['PERSONAL'], reason: '测试' }],
+    ] as const;
+    for (const [method, url, payload] of attempts) {
+      expect((await api(method, url, { token: adminToken, payload })).status, url).toBe(404);
+    }
+    const list = await api('GET', '/api/envs?q=private-env', { token: adminToken });
+    expect(list.body).toMatchObject({ items: [], total: 0, counts: { manual: 0, db_assignment: 0 } });
+    const catalog = await api('GET', '/api/catalog', { token: adminToken });
+    expect(catalog.body.some((r: any) => r.environment.id === privateEnvId)).toBe(false);
+    const audit = await api('GET', '/api/audit', { token: adminToken });
+    expect(audit.status).toBe(200);
+    expect(audit.body.some((r: any) => r.targetId === privateEnvId || r.meta?.environment === 'private-env')).toBe(false);
+    const ownList = await api('GET', '/api/envs?q=private-env', { token: memberToken });
+    expect(ownList.body.total).toBe(1);
+    expect((await api('POST', '/api/envs/private-env/grants', {
+      token: memberToken, payload: { userId: adminId, environmentId: privateEnvId },
+    })).status).toBe(400);
+  });
+
+  it('切换 private 会关闭变量可见性、撤销旧授权并使待审批申请失效，切回也不恢复旧权限', async () => {
+    const created = await api('POST', '/api/envs', {
+      token: adminToken, payload: { slug: 'privacy-transition', name: '切换环境' },
+    });
+    expect(created.body.visibility).toBe('team');
+    const added = await api('POST', '/api/envs/privacy-transition/variables', {
+      token: adminToken, payload: { key: 'SHARED', value: 'before-private' },
+    });
+    for (const target of [{ environmentId: created.body.id }, { variableId: added.body.id }]) {
+      expect((await api('POST', '/api/envs/privacy-transition/grants', {
+        token: adminToken, payload: { userId: memberId, ...target },
+      })).status).toBe(201);
+    }
+    const request = await api('POST', '/api/access-requests', {
+      token: memberToken, payload: { environmentSlug: 'privacy-transition', keys: ['SHARED'], reason: '测试切换' },
+    });
+    requestId = request.body.id;
+    expect((await api('PATCH', '/api/envs/privacy-transition', {
+      token: adminToken, payload: { visibility: 'private' },
+    })).status).toBe(200);
+    expect((await api('GET', '/api/envs/privacy-transition', { token: memberToken })).status).toBe(404);
+    expect((await api('POST', '/api/envs/privacy-transition/values', { token: memberToken, payload: {} })).status).toBe(404);
+    expect((await api('GET', '/api/envs/privacy-transition/grants', { token: adminToken })).body).toEqual([]);
+    expect((await api('GET', '/api/envs/privacy-transition/variables', { token: adminToken })).body[0].visibleWithoutPermission).toBe(false);
+    expect((await api('GET', `/api/access-requests/${requestId}`, { token: adminToken })).body.status).toBe('invalid');
+    expect((await api('GET', `/api/access-requests/${requestId}`, { token: memberToken })).status).toBe(404);
+    const mine = await api('GET', '/api/access-requests/mine', { token: memberToken });
+    expect(mine.body.some((r: any) => r.id === requestId)).toBe(false);
+    const unified = await api('GET', `/api/requests?scope=mine&sourceId=${requestId}&status=all`, { token: memberToken });
+    expect(unified.status).toBe(200);
+    expect(unified.body.items).toEqual([]);
+    await api('PATCH', '/api/envs/privacy-transition', { token: adminToken, payload: { visibility: 'team' } });
+    expect((await api('GET', '/api/envs/privacy-transition/variables', { token: memberToken })).body).toEqual([]);
+    expect((await api('POST', '/api/envs/privacy-transition/values', { token: memberToken, payload: { keys: ['SHARED'] } })).body.values).toEqual({});
+  });
+
+  it('普通成员的 private 环境不会出现在管理员审批清单中，管理员不能替 Owner 改可见性', async () => {
+    await api('PATCH', '/api/envs/private-env', { token: memberToken, payload: { visibility: 'team' } });
+    expect((await api('PATCH', '/api/envs/private-env', { token: adminToken, payload: { visibility: 'private' } })).status).toBe(403);
+    const request = await api('POST', '/api/access-requests', {
+      token: adminToken, payload: { environmentSlug: 'private-env', keys: ['PERSONAL'], reason: '测试审批可见性' },
+    });
+    await api('PATCH', '/api/envs/private-env', { token: memberToken, payload: { visibility: 'private' } });
+    expect((await api('GET', `/api/access-requests/${request.body.id}`, { token: adminToken })).status).toBe(404);
+    const history = await api('GET', `/api/requests?scope=history&sourceId=${request.body.id}&status=all`, { token: adminToken });
+    expect(history.body.items).toEqual([]);
+  });
+});

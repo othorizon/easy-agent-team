@@ -38,13 +38,13 @@ export class EnvsController {
 
   /** 清单：分页信封 + 关键词 / 来源筛选（决策 39） */
   @Get('envs')
-  listEnvironments(@Query(new ZodValidationPipe(envListQuerySchema)) query: EnvListQuery) {
-    return this.envs.listEnvironments(query);
+  listEnvironments(@Query(new ZodValidationPipe(envListQuerySchema)) query: EnvListQuery, @CurrentUser() user: AuthUser) {
+    return this.envs.listEnvironments(user, query);
   }
 
   @Get('envs/:slug')
-  getEnvironment(@Param('slug') slug: string) {
-    return this.envs.getEnvironment(slug);
+  getEnvironment(@Param('slug') slug: string, @CurrentUser() user: AuthUser) {
+    return this.envs.getEnvironment(user, slug);
   }
 
   @Post('envs')

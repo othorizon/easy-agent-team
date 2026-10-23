@@ -255,7 +255,6 @@ export class McpGatewayService implements OnModuleInit, OnModuleDestroy {
   async resolveUpstream(config: ConfigRow): Promise<UpstreamTarget> {
     const stamp = config.updatedAt.getTime();
     const cached = this.upstreamCache.get(config.id);
-    if (cached && cached.stamp === stamp && cached.expiresAt > Date.now()) return cached.target;
 
     const refs = new Map<string, Set<string>>();
     const collect = (value: string) => {
@@ -285,6 +284,8 @@ export class McpGatewayService implements OnModuleInit, OnModuleDestroy {
       // 引用的变量被删了/环境没了：拒掉整次请求，而不是拿着占位符去打上游
       throw new UpstreamRejected('这个服务的凭证配置不完整，请联系配置负责人');
     }
+    // 环境可能在缓存期间改为 private；先重新校验引用，再复用上游缓存。
+    if (cached && cached.stamp === stamp && cached.expiresAt > Date.now()) return cached.target;
     const url = await assertSafeUpstream(rawUrl);
     const target: UpstreamTarget = { url, headers };
 

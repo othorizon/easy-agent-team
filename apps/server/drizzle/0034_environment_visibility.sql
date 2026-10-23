@@ -1,0 +1,1 @@
+ALTER TABLE "environment" ADD COLUMN "visibility" text DEFAULT 'team' NOT NULL;

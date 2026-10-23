@@ -59,6 +59,11 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
         LEFT JOIN "user" a ON a.id=r.decided_by WHERE r.id=$1`,
         [event.request_id],
       );
+      if (r.type === 'env' && (await c.query("SELECT 1 FROM environment WHERE id=$1 AND visibility='private'", [r.resource_id])).rowCount) {
+        await c.query(`UPDATE approval_notification SET state='skipped' WHERE id=$1`, [event.id]);
+        await c.query('COMMIT');
+        return true;
+      }
       const submitted = ['submitted', 'reminder'].includes(event.event);
       if (submitted && r.status !== 'pending') {
         await c.query(`UPDATE approval_notification SET state='skipped' WHERE id=$1`, [event.id]);

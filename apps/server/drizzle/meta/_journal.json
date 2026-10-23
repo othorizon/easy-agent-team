@@ -239,6 +239,13 @@
       "when": 1792886400000,
       "tag": "0033_folio_comments_toggle",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1792886400001,
+      "tag": "0034_environment_visibility",
+      "breakpoints": true
     }
   ]
 }

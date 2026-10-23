@@ -6,7 +6,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { and, count, desc, eq, inArray, ne, type SQL } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, ne, or, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type {
   AccessRequestHistoryQuery,
@@ -30,6 +30,7 @@ type JoinedRow = {
   requesterName: string | null;
   environmentSlug: string | null;
   environmentOwnerId: string | null;
+  environmentVisibility: string | null;
   deciderName: string | null;
 };
 
@@ -52,6 +53,7 @@ export class AccessRequestsService {
         requesterName: requester.name,
         environmentSlug: environments.slug,
         environmentOwnerId: environments.ownerId,
+        environmentVisibility: environments.visibility,
         deciderName: decider.name,
       })
       .from(accessRequests)
@@ -85,11 +87,16 @@ export class AccessRequestsService {
 
   /** 审批范围：管理员见全部，其他人只见自己 Own 的环境上的申请（inbox 与历史共用同一条规则） */
   private approverScope(user: AuthUser): SQL | undefined {
-    return user.role === 'admin' ? undefined : eq(environments.ownerId, user.id);
+    return user.role === 'admin' ? this.visibleScope(user) : eq(environments.ownerId, user.id);
+  }
+
+  private visibleScope(user: AuthUser) {
+    return or(eq(environments.visibility, 'team'), eq(environments.ownerId, user.id));
   }
 
   async create(user: AuthUser, dto: CreateAccessRequest): Promise<AccessRequestInfo> {
-    const env = await this.envs.getEnvBySlug(dto.environmentSlug);
+    const env = await this.envs.getEnvBySlug(dto.environmentSlug, user);
+    if (env.visibility === 'private') throw new BadRequestException('私有环境不支持权限申请');
     // 只允许申请真实存在的变量，避免拼错 key 的无效申请
     const vars = await this.db
       .select({ key: envVariables.key })
@@ -124,7 +131,7 @@ export class AccessRequestsService {
   /** 我发起的申请 */
   async listMine(user: AuthUser): Promise<AccessRequestInfo[]> {
     const rows = await this.joined()
-      .where(eq(accessRequests.requesterId, user.id))
+      .where(and(eq(accessRequests.requesterId, user.id), this.visibleScope(user)))
       .orderBy(desc(accessRequests.createdAt))
       .limit(100);
     return rows.map((r) => this.toInfo(r));
@@ -174,6 +181,7 @@ export class AccessRequestsService {
   async get(user: AuthUser, id: string): Promise<AccessRequestInfo> {
     const row = await this.loadOne(id);
     if (!row) throw new NotFoundException({ error: 'NOT_FOUND', message: '申请不存在' });
+    if (row.environmentVisibility === 'private' && row.environmentOwnerId !== user.id) throw new NotFoundException('申请不存在');
     const involved =
       row.req.requesterId === user.id || user.role === 'admin' || row.environmentOwnerId === user.id;
     if (!involved) throw new ForbiddenException({ error: 'FORBIDDEN', message: '无权查看该申请' });
@@ -192,12 +200,15 @@ export class AccessRequestsService {
       await this.db.select().from(environments).where(eq(environments.id, row.environmentId)).limit(1)
     )[0];
     if (!env) throw new NotFoundException({ error: 'NOT_FOUND', message: '环境已删除' });
+    if (env.visibility === 'private') throw new ConflictException('环境已设为私有，不能审批授权');
     if (!(user.role === 'admin' || env.ownerId === user.id)) {
       throw new ForbiddenException({ error: 'FORBIDDEN', message: '仅环境 Owner 或管理员可审批' });
     }
 
     const grantExpiresAt = dto.grantExpiresAt ? new Date(dto.grantExpiresAt) : null;
     await this.db.transaction(async (tx) => {
+      const [currentEnv] = await tx.select().from(environments).where(eq(environments.id, env.id)).for('update');
+      if (!currentEnv || currentEnv.visibility === 'private') throw new ConflictException('环境已删除或设为私有');
       const [current] = await tx.select().from(accessRequests).where(eq(accessRequests.id, id)).for('update');
       if (!current || current.status !== 'pending') throw new ConflictException('申请已被处理');
       if (dto.decision === 'approved') {

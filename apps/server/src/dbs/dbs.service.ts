@@ -7,7 +7,7 @@ import {
   Logger,
   NotFoundException,
 } from "@nestjs/common";
-import { and, count, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, count, desc, eq, inArray, ne, or } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import type {
   CreateDbAssignmentRequest,
@@ -161,7 +161,7 @@ export class DbsService {
   // ---------- 分配 ----------
 
   /** 一批记录 → 契约对象：实例 / 用户 / 环境各查一次，不逐行回表 */
-  private async toInfos(rows: AssignmentRow[]): Promise<DbAssignmentInfo[]> {
+  private async toInfos(user: AuthUser, rows: AssignmentRow[]): Promise<DbAssignmentInfo[]> {
     if (rows.length === 0) return [];
     const uniq = (ids: Array<string | null>) => [
       ...new Set(ids.filter((id): id is string => !!id)),
@@ -191,7 +191,7 @@ export class DbsService {
             await this.db
               .select({ id: environments.id, slug: environments.slug })
               .from(environments)
-              .where(inArray(environments.id, envIds))
+              .where(and(inArray(environments.id, envIds), or(eq(environments.visibility, 'team'), eq(environments.ownerId, user.id))))
           ).map((e) => [e.id, e.slug])
         : [],
     );
@@ -227,8 +227,8 @@ export class DbsService {
     });
   }
 
-  private async toInfo(row: AssignmentRow): Promise<DbAssignmentInfo> {
-    return (await this.toInfos([row]))[0];
+  private async toInfo(user: AuthUser, row: AssignmentRow): Promise<DbAssignmentInfo> {
+    return (await this.toInfos(user, [row]))[0];
   }
 
   async createAssignment(
@@ -276,7 +276,7 @@ export class DbsService {
       targetId: row.id,
       meta: { dbName: dto.dbName },
     });
-    return this.toInfo(row);
+    return this.toInfo(user, row);
   }
 
   // 已删除的分配不再出现在列表里（记录保留在库中供审计追溯）
@@ -292,17 +292,17 @@ export class DbsService {
         ),
       )
       .orderBy(desc(dbAssignments.createdAt));
-    return this.toInfos(rows);
+    return this.toInfos(user, rows);
   }
 
-  async listAll(): Promise<DbAssignmentInfo[]> {
+  async listAll(user: AuthUser): Promise<DbAssignmentInfo[]> {
     const rows = await this.db
       .select()
       .from(dbAssignments)
       .where(ne(dbAssignments.status, "deleted"))
       .orderBy(desc(dbAssignments.createdAt))
       .limit(200);
-    return this.toInfos(rows);
+    return this.toInfos(user, rows);
   }
 
   private async getAssignment(id: string): Promise<AssignmentRow> {
@@ -330,7 +330,7 @@ export class DbsService {
         message: "仅申请人或管理员可查看该分配",
       });
     }
-    return this.toInfo(row);
+    return this.toInfo(user, row);
   }
 
   /** 批准：在实例上真实建库建号，并把凭证生成为环境（Owner=申请人） */
@@ -405,7 +405,7 @@ export class DbsService {
         })
         .where(eq(dbAssignments.id, id));
       this.logger.warn(`建库失败(${row.dbName}): ${message}`);
-      return this.toInfo(await this.getAssignment(id));
+      return this.toInfo(user, await this.getAssignment(id));
     }
 
     // 凭证 → 环境（复用环境变量的授权/拉取/审计通道），Owner=申请人便于自助共享
@@ -463,7 +463,7 @@ export class DbsService {
       targetId: id,
       meta: { dbName: row.dbName, environment: slug },
     });
-    return this.toInfo(await this.getAssignment(id));
+    return this.toInfo(user, await this.getAssignment(id));
   }
 
   async reject(user: AuthUser, id: string): Promise<DbAssignmentInfo> {
@@ -483,7 +483,7 @@ export class DbsService {
       targetType: "db_assignment",
       targetId: id,
     });
-    return this.toInfo(await this.getAssignment(id));
+    return this.toInfo(user, await this.getAssignment(id));
   }
 
   /** 禁用账号（可恢复）：ALTER ROLE NOLOGIN + 断开现有连接 */
@@ -506,7 +506,7 @@ export class DbsService {
       targetType: "db_assignment",
       targetId: id,
     });
-    return this.toInfo(await this.getAssignment(id));
+    return this.toInfo(user, await this.getAssignment(id));
   }
 
   async enable(user: AuthUser, id: string): Promise<DbAssignmentInfo> {
@@ -522,7 +522,7 @@ export class DbsService {
       .update(dbAssignments)
       .set({ status: "active", decidedBy: user.id, updatedAt: new Date() })
       .where(eq(dbAssignments.id, id));
-    return this.toInfo(await this.getAssignment(id));
+    return this.toInfo(user, await this.getAssignment(id));
   }
 
   /** 删除（仅记录级，决策 13）：标记 deleted 并删除凭证环境；实例上的数据库与账号不做物理删除，需管理员在实例上手动清理 */
@@ -568,6 +568,6 @@ export class DbsService {
       targetId: id,
       meta: { dbName: row.dbName, physicalDrop: false },
     });
-    return this.toInfo(await this.getAssignment(id));
+    return this.toInfo(user, await this.getAssignment(id));
   }
 }

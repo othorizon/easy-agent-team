@@ -1,5 +1,5 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import type {
   CreateTemplateRequest,
   SetTemplateItemsRequest,
@@ -32,8 +32,9 @@ export class TemplatesService {
         const [m] = await this.db.select({ slug: mcpConfigs.slug, name: mcpConfigs.name }).from(mcpConfigs).where(eq(mcpConfigs.id, item.itemId));
         if (m) ({ slug, name } = m);
       } else {
-        const [e] = await this.db.select({ slug: environments.slug, name: environments.name }).from(environments).where(eq(environments.id, item.itemId));
-        if (e) ({ slug, name } = e);
+        const [e] = await this.db.select({ slug: environments.slug, name: environments.name }).from(environments).where(and(eq(environments.id, item.itemId), eq(environments.visibility, 'team')));
+        if (!e) continue;
+        ({ slug, name } = e);
       }
       out.push({ itemType: item.itemType, itemId: item.itemId, slug, name });
     }
@@ -91,7 +92,7 @@ export class TemplatesService {
       const ids = dto.items.filter((i) => i.itemType === type).map((i) => i.itemId);
       if (ids.length === 0) continue;
       const table = type === 'skill' ? skills : type === 'mcp_config' ? mcpConfigs : environments;
-      const found = await this.db.select({ id: table.id }).from(table).where(inArray(table.id, ids));
+      const found = await this.db.select({ id: table.id }).from(table).where(and(inArray(table.id, ids), type === 'environment' ? eq(environments.visibility, 'team') : undefined));
       if (found.length !== new Set(ids).size) {
         throw new BadRequestException({ error: 'NOT_FOUND', message: `存在无效的 ${type} 引用` });
       }

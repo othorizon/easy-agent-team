@@ -5,7 +5,7 @@ import { ArrowRight, Database, Plus, Search } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { createEnvironmentSchema } from '@eat/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
@@ -14,6 +14,8 @@ import { Empty } from '../components/empty';
 import { Field } from '../components/form';
 import { PageHeader } from '../components/page-header';
 import { Pagination } from '../components/pagination';
+import { Badge } from '../components/ui/badge';
+import { Switch } from '../components/ui/switch';
 import { Button } from '../components/ui/button';
 import { Tip } from '../components/ui/tooltip';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
@@ -99,7 +101,7 @@ export function EnvsPage() {
     <div className="space-y-5">
       <PageHeader
         title="环境变量"
-        description="环境是变量的分组（如「内部服务」「第三方 SaaS」）。变量默认对全员可见 key 与备注，值需要授权才能读取；数据库分配生成的凭证环境单独归在「数据库」页签。"
+        description="环境是变量的分组（如「内部服务」「第三方 SaaS」）。团队环境中的变量默认对全员可见 key 与备注，值需要授权才能读取；Private 环境仅自己可见。数据库分配生成的凭证环境单独归在「数据库」页签。"
         actions={
           <Button onClick={() => setCreating(true)}>
             <Plus />
@@ -188,6 +190,7 @@ function EnvRow({ env, isMine }: { env: EnvironmentInfo; isMine: boolean }) {
           >
             {env.name}
           </Link>
+          {env.visibility === 'private' && <Badge variant="secondary">Private · 仅自己可见</Badge>}
           <span className="font-mono text-[12.5px] text-muted-foreground">{env.slug}</span>
         </div>
         {env.description ? (
@@ -263,9 +266,9 @@ function CreateEnvDialog({
   onClose: () => void;
   onSubmit: (v: CreateEnvironmentRequest) => void;
 }) {
-  const { register, handleSubmit, formState: { errors } } = useForm({
+  const { register, handleSubmit, control, formState: { errors } } = useForm({
     resolver: zodResolver(createEnvironmentSchema),
-    defaultValues: { slug: '', name: '', description: '' },
+    defaultValues: { slug: '', name: '', description: '', visibility: 'team' },
   });
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -288,6 +291,11 @@ function CreateEnvDialog({
           </Field>
           <Field label="备注" htmlFor="env-desc" hint="供人和 AI 理解这个环境的用途">
             <Textarea id="env-desc" rows={2} placeholder="公司内部服务相关的密钥与配置" {...register('description')} />
+          </Field>
+          <Field label="Private 模式" hint="仅环境 Owner 可见和使用，其他成员（含管理员）不可访问；变量不能单独设为未授权成员可见。">
+            <Controller control={control} name="visibility" render={({ field }) => (
+              <Switch aria-label="Private 模式" checked={field.value === 'private'} onCheckedChange={(checked) => field.onChange(checked ? 'private' : 'team')} />
+            )} />
           </Field>
           <Button type="submit" loading={pending} className="w-full">
             创建

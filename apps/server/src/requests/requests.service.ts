@@ -27,8 +27,9 @@ import { AppsService } from '../deploy/apps.service';
 // Current resource owners, not a stale snapshot, decide who may approve/read.
 const OWNER = `CASE r.type WHEN 'env' THEN coalesce((SELECT owner_id FROM environment WHERE id=r.resource_id),r.owner_id)
  WHEN 'mcp' THEN coalesce((SELECT owner_id FROM mcp_config WHERE id=r.resource_id),r.owner_id) ELSE NULL END`;
-const SCOPE = `(r.requester_id=$1 OR $2='admin' OR ${OWNER}=$1)`;
-const APPROVER = `($2='admin' OR ${OWNER}=$1)`;
+const ENV_VISIBLE = `(r.type<>'env' OR NOT EXISTS(SELECT 1 FROM environment WHERE id=r.resource_id AND visibility='private' AND owner_id<>$1))`;
+const SCOPE = `(${ENV_VISIBLE} AND (r.requester_id=$1 OR $2='admin' OR ${OWNER}=$1))`;
+const APPROVER = `(${ENV_VISIBLE} AND ($2='admin' OR ${OWNER}=$1))`;
 const SELECT = `SELECT r.*,coalesce(u.name,'已删除用户') requester_name,d.name decided_by_name,
  ${APPROVER} can_approve,
  CASE r.type WHEN 'env' THEN EXISTS(SELECT 1 FROM environment WHERE id=r.resource_id)
@@ -108,6 +109,7 @@ export class RequestsService {
       .query(`WITH invalidated AS (UPDATE approval_request r SET status='invalid',closed_reason=CASE
         WHEN NOT EXISTS(SELECT 1 FROM "user" WHERE id=r.requester_id AND status='active') THEN '申请人已停用或删除'
         WHEN type='env' AND NOT EXISTS(SELECT 1 FROM environment WHERE id=r.resource_id) THEN '环境已删除'
+        WHEN type='env' AND EXISTS(SELECT 1 FROM environment WHERE id=r.resource_id AND visibility='private') THEN '环境已设为私有'
         WHEN type='env' THEN '申请的变量已删除或变化'
         WHEN type='mcp' THEN 'MCP 配置已删除'
         WHEN type='db' THEN '数据库实例已删除'
@@ -115,7 +117,7 @@ export class RequestsService {
         WHEN NOT EXISTS(SELECT 1 FROM app WHERE id=r.resource_id) THEN '应用已删除'
         ELSE '应用已更换仓库' END,decided_at=now()
       WHERE status='pending' AND (NOT EXISTS(SELECT 1 FROM "user" WHERE id=r.requester_id AND status='active')
-      OR (type='env' AND (NOT EXISTS(SELECT 1 FROM environment WHERE id=r.resource_id) OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(r.details->'keys') requested(key) WHERE NOT EXISTS(SELECT 1 FROM env_variable v WHERE v.environment_id=r.resource_id AND v.key=requested.key))))
+      OR (type='env' AND (EXISTS(SELECT 1 FROM environment WHERE id=r.resource_id AND visibility='private') OR NOT EXISTS(SELECT 1 FROM environment WHERE id=r.resource_id) OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(r.details->'keys') requested(key) WHERE NOT EXISTS(SELECT 1 FROM env_variable v WHERE v.environment_id=r.resource_id AND v.key=requested.key))))
       OR (type='mcp' AND NOT EXISTS(SELECT 1 FROM mcp_config WHERE id=r.resource_id))
       OR (type='db' AND NOT EXISTS(SELECT 1 FROM db_instance WHERE id=r.resource_id))
       OR (type='oss' AND NOT EXISTS(SELECT 1 FROM oss_space WHERE id=r.resource_id))
@@ -132,6 +134,7 @@ export class RequestsService {
     };
     const filters = [
       '$2::text IS NOT NULL',
+      ENV_VISIBLE,
       q.scope === 'mine' ? 'r.requester_id=$1' : q.scope === 'resource' ? SCOPE : APPROVER,
       q.scope === 'history'
         ? `NOT EXISTS(SELECT 1 FROM approval_request newer WHERE newer.group_key=r.group_key AND newer.round>r.round AND newer.status<>'pending')`

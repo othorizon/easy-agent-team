@@ -11,8 +11,12 @@ export const variableKeySchema = z
 
 // ---------- 环境 ----------
 
+export const environmentVisibilitySchema = z.enum(['team', 'private']);
+export type EnvironmentVisibility = z.infer<typeof environmentVisibilitySchema>;
+
 export const createEnvironmentSchema = z.object({
   slug: slugSchema,
+  visibility: environmentVisibilitySchema.default('team'),
   name: z.string().min(1).max(100),
   description: z.string().max(2000).default(''),
 });
@@ -39,6 +43,7 @@ export const environmentSchema = z.object({
   slug: z.string(),
   name: z.string(),
   description: z.string(),
+  visibility: environmentVisibilitySchema,
   ownerId: z.string(),
   ownerName: z.string(),
   ownerEmail: z.string(),

@@ -421,6 +421,7 @@ export const deviceAuths = pgTable(
 );
 
 export const environments = pgTable('environment', {
+  visibility: text('visibility', { enum: ['team', 'private'] }).notNull().default('team'),
   id: uuid('id').primaryKey().defaultRandom(),
   slug: text('slug').notNull().unique(),
   name: text('name').notNull(),

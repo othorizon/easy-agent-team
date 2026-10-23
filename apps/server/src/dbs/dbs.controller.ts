@@ -45,8 +45,8 @@ export class DbsController {
 
   @Get('assignments')
   @Roles('admin')
-  all() {
-    return this.dbs.listAll();
+  all(@CurrentUser() user: AuthUser) {
+    return this.dbs.listAll(user);
   }
 
   /** 详情（申请人或管理员）；`assignments/mine` 是静态段，路由器优先匹配它，不会被这里吃掉 */
