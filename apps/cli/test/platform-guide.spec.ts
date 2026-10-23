@@ -42,6 +42,8 @@ describe('内置平台指南的按需加载结构', () => {
     expect(ref('llm-api')).toContain('eat llm key export --out');
     expect(ref('llm-api')).toContain('apiBaseUrl');
     expect(ref('environment')).toContain('request_access');
+    expect(ref('environment')).toContain('eat env run');
+    expect(ref('environment')).toContain('--dry-run');
     expect(ref('databases')).toContain('eat db list');
     expect(ref('applications')).toContain('DEPLOY_NOT_APPROVED');
     expect(ref('folio')).toContain('用户已经选择');

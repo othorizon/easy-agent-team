@@ -4,7 +4,19 @@ import { Command } from 'commander';
 import { CLI_VERSION, LOG_TAIL_DEFAULT, SKILL_LIST_MAX_PAGE_SIZE } from '@eat/shared';
 import { ApiError, formatErrorDetails } from './client.js';
 import { login, logout, whoami } from './commands/auth.js';
-import { envList, envPull, envRequest, envRequests } from './commands/env.js';
+import {
+  envCreate,
+  envDelete,
+  envList,
+  envPull,
+  envPush,
+  envRequest,
+  envRequests,
+  envRun,
+  envSet,
+  envUnset,
+  envUpdate,
+} from './commands/env.js';
 import { askCreate, askDelete, askList, askReply, askResolve, askShow, askTargets } from './commands/ask.js';
 import { dbInstances, dbList, dbRequest } from './commands/db.js';
 import {
@@ -54,16 +66,70 @@ registerRequestCommands(program);
 registerFolioCommands(program);
 registerLlmCommands(program);
 
-const env = program.command('env').description('环境变量：查清单、拉取值、申请权限');
+const env = program.command('env').description('环境变量：建环境、写变量、推送 / 拉取、注入运行、申请权限');
 env.command('list [environment]').description('列出可见的环境与变量（key + 备注 + 权限状态）').action(envList);
 env
+  .command('create <slug>')
+  .description('新建环境（你是 Owner）；之后用 eat env set / push 写入变量')
+  .option('--name <name>', '显示名称（默认同 slug）')
+  .option('--description <text>', '环境说明（AI 会读，写清楚这组变量是干嘛的）')
+  .option('--private', '私有环境：只有自己可见，不能授权给他人')
+  .action(envCreate);
+env
+  .command('update <slug>')
+  .description('修改环境的名称 / 说明 / 可见性（Owner 或管理员；可见性只有 Owner 能改）')
+  .option('--name <name>', '显示名称')
+  .option('--description <text>', '环境说明')
+  .option('--visibility <team|private>', '改为 private 会撤销其他成员的全部读取授权、作废待审批申请')
+  .action(envUpdate);
+env
+  .command('delete <slug>')
+  .description('删除环境及其全部变量与读取授权（不可恢复）')
+  .option('--yes', '确认删除')
+  .action(envDelete);
+env
+  .command('set <environment> <key>')
+  .description('新增或更新一个变量（有则改、无则建）；不给值 = 只改元信息，没写的元信息保持原值')
+  .option('--value <value>', '变量值（会留在 shell 历史里，敏感值建议用 --value-file）')
+  .option('--value-file <path>', '从文件读值，- 表示标准输入（证书等多行值；去掉一个结尾换行）')
+  .option('--description <text>', '备注：这个变量的作用（AI 会读）')
+  .option('--secret', '标为敏感：加密存储、读取落审计（新增时的默认）')
+  .option('--no-secret', '标为非敏感：明文存储，有读取权限者在平台直接可见')
+  .option('--hidden', '对没有读取权限的成员隐藏（连变量名都看不到）')
+  .option('--no-hidden', '对没有读取权限的成员可见名称与备注（看不到值；新增时的默认）')
+  .action(envSet);
+env
+  .command('unset <environment> <keys...>')
+  .description('删除变量（连同它们的读取授权）')
+  .action(envUnset);
+env
+  .command('push <environment>')
+  .description('把 dotenv / JSON 文件推送到环境：默认只增改同名 key，--prune 时删除文件里没有的 key')
+  .option('--file <file>', '要推送的文件（默认 .env；- 表示标准输入）')
+  .option('--prune', '全量覆盖：删除平台上有、文件里没有的变量（连同其读取授权）')
+  .option('--dry-run', '只列出 key 级差异，不写入')
+  .option('--no-secret', '本次新建的变量标为非敏感（已存在变量的敏感标记不动）')
+  .action(envPush);
+env
   .command('pull <environment>')
-  .description('拉取有权限的变量值，默认写入 ./.env（同名文件不是 eat 写的会中止，不覆盖）')
+  .description('拉取有权限的变量值，默认写入 ./.env（同名文件不是 eat 写的会中止；--merge 合并进去）')
   .option('--keys <keys>', '仅拉取指定 Key（逗号分隔）')
   .option('--out <file>', '输出文件（默认 .env）')
+  .option('--merge', '合并进已有文件：同名 key 改值、新 key 追加，其余内容原样保留（改了别人文件里的值会先备份）')
   .option('--print', '打印到标准输出而不写文件')
+  .option('--format <format>', '配合 --print：dotenv（默认）/ shell（export 语句，可 eval）/ json')
   .option('--force', '覆盖不是 eat 生成的同名文件（覆盖前自动备份为 <file>.bak-<时间戳>）')
   .action(envPull);
+env
+  .command('run <environments> <command...>')
+  .usage('<environment>[,<environment>...] [--keys A,B] -- <command...>')
+  .description(
+    '把环境变量注入子进程后运行命令（命令写在 -- 之后）：值不落盘，退出码透传；平台值覆盖当前 shell 的同名变量，多个环境后者覆盖前者',
+  )
+  .option('--keys <keys>', '仅注入指定 Key（逗号分隔）；有拿不到的就不启动命令')
+  // 命令自带的选项（node -e、npm --prefix…）不放在 -- 之后会被当成 eat 的选项报错，补一句出路
+  .showHelpAfterError('提示：要运行的命令写在 -- 之后，例如 eat env run my-env -- node -e "…"')
+  .action(envRun);
 env
   .command('request <environment> <keys...>')
   .description('对无权限的变量发起权限申请')

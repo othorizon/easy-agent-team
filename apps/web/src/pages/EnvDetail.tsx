@@ -640,8 +640,11 @@ function EditEnvDialog({
   );
 }
 
-/** 表单里值始终是字符串（输入框），「留空 = 保持当前值」在提交时再转换成契约里的缺省 */
-const variableFormSchema = upsertVariableSchema.extend({ value: upsertVariableSchema.shape.value.unwrap() });
+/**
+ * 表单里每个字段都有值（契约里可缺省是给 CLI 只改一项用的），控制台始终提交全量元信息；
+ * 值是输入框字符串，「留空 = 保持当前值」在提交时再转换成契约里的缺省
+ */
+const variableFormSchema = upsertVariableSchema.required();
 /** 新增变量值必填（服务端同样拒绝缺省值） */
 const newVariableFormSchema = variableFormSchema.refine((v) => v.value !== '', { path: ['value'], message: '请输入值' });
 type VariableFormValues = z.output<typeof variableFormSchema>;

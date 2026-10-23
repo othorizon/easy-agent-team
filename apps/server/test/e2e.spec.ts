@@ -618,6 +618,118 @@ describe('环境清单分页 / 筛选、单个环境详情、更新变量不带�
   });
 });
 
+describe('CLI 写入：只改值不重置元信息、批量导入（eat env set / push）', () => {
+  const vars = async () =>
+    Object.fromEntries(
+      ((await api('GET', '/api/envs/push-env/variables', { token: adminToken })).body as Array<Record<string, unknown>>).map((v) => [v.key, v]),
+    );
+  const pull = async (keys: string[]) =>
+    (await api('POST', '/api/envs/push-env/values', { token: adminToken, payload: { keys } })).body.values;
+
+  it('只带值更新：备注 / 敏感标记 / 可见性保持原值；值相同不递增版本；回执说明新建还是更新', async () => {
+    await api('POST', '/api/envs', { token: adminToken, payload: { slug: 'push-env', name: '推送环境' } });
+    const created = await api('POST', '/api/envs/push-env/variables', {
+      token: adminToken,
+      payload: { key: 'HIDDEN_HOST', value: 'a.internal', description: '隐藏的服务地址', visibleWithoutPermission: false, secret: false },
+    });
+    expect(created.body).toMatchObject({ created: true, valueChanged: true, version: 1 });
+
+    const valueOnly = await api('POST', '/api/envs/push-env/variables', {
+      token: adminToken,
+      payload: { key: 'HIDDEN_HOST', value: 'b.internal' },
+    });
+    expect(valueOnly.body).toMatchObject({
+      created: false,
+      valueChanged: true,
+      version: 2,
+      description: '隐藏的服务地址',
+      visibleWithoutPermission: false,
+      secret: false,
+      value: 'b.internal',
+    });
+    // 隐藏的变量没有因为一次只改值的更新而对成员可见
+    expect((await api('GET', '/api/envs/push-env/variables', { token: memberToken })).body).toEqual([]);
+
+    const same = await api('POST', '/api/envs/push-env/variables', {
+      token: adminToken,
+      payload: { key: 'HIDDEN_HOST', value: 'b.internal' },
+    });
+    expect(same.body).toMatchObject({ created: false, valueChanged: false, version: 2 });
+
+    const fresh = await api('POST', '/api/envs/push-env/variables', {
+      token: adminToken,
+      payload: { key: 'API_KEY', value: 'k1' },
+    });
+    expect(fresh.body).toMatchObject({ created: true, secret: true, description: '', visibleWithoutPermission: true, version: 1 });
+  });
+
+  it('导入默认只增改：已存在变量只改值、元信息不动，值相同不升版本；预演不写入；回执不含任何值', async () => {
+    const payload = { values: { HIDDEN_HOST: 'b.internal', API_KEY: 'k2', NEW_ONE: 'n1', NEW_TWO: 'n2' } };
+    const dry = await api('POST', '/api/envs/push-env/variables/import', { token: adminToken, payload: { ...payload, dryRun: true } });
+    expect(dry.status).toBe(201);
+    expect(dry.body).toEqual({
+      environment: 'push-env',
+      dryRun: true,
+      prune: false,
+      added: ['NEW_ONE', 'NEW_TWO'],
+      changed: ['API_KEY'],
+      unchanged: 1,
+      removed: [],
+      kept: [],
+    });
+    expect(Object.keys(await vars()).sort()).toEqual(['API_KEY', 'HIDDEN_HOST']);
+
+    const real = await api('POST', '/api/envs/push-env/variables/import', {
+      token: adminToken,
+      payload: { values: { API_KEY: 'k2', NEW_ONE: 'n1', NEW_TWO: 'n2' }, secret: false },
+    });
+    expect(real.body).toMatchObject({ dryRun: false, added: ['NEW_ONE', 'NEW_TWO'], changed: ['API_KEY'], unchanged: 0, kept: ['HIDDEN_HOST'] });
+    const after = await vars();
+    expect(after.API_KEY).toMatchObject({ version: 2, secret: true });
+    expect(after.HIDDEN_HOST).toMatchObject({ version: 2, secret: false, visibleWithoutPermission: false, description: '隐藏的服务地址' });
+    // secret=false 只作用于本次新建的变量
+    expect(after.NEW_ONE).toMatchObject({ version: 1, secret: false, value: 'n1', visibleWithoutPermission: true });
+    expect(await pull(['API_KEY', 'HIDDEN_HOST'])).toEqual({ API_KEY: 'k2', HIDDEN_HOST: 'b.internal' });
+
+    const again = await api('POST', '/api/envs/push-env/variables/import', { token: adminToken, payload: { values: { API_KEY: 'k2' } } });
+    expect(again.body).toMatchObject({ added: [], changed: [], unchanged: 1 });
+    expect((await vars()).API_KEY).toMatchObject({ version: 2 });
+  });
+
+  it('prune 删掉没提供的 key（连同变量级授权）；预演只列出将删除的；空导入加 prune 被拒', async () => {
+    const newTwo = (await vars()).NEW_TWO as { id: string };
+    const grant = await api('POST', '/api/envs/push-env/grants', { token: adminToken, payload: { userId: memberId, variableId: newTwo.id } });
+    expect(grant.status).toBe(201);
+
+    const payload = { values: { API_KEY: 'k3', NEW_ONE: 'n1' }, prune: true };
+    const dry = await api('POST', '/api/envs/push-env/variables/import', { token: adminToken, payload: { ...payload, dryRun: true } });
+    expect(dry.body).toMatchObject({ prune: true, changed: ['API_KEY'], unchanged: 1, removed: ['HIDDEN_HOST', 'NEW_TWO'], kept: [] });
+    expect(Object.keys(await vars())).toHaveLength(4);
+
+    const real = await api('POST', '/api/envs/push-env/variables/import', { token: adminToken, payload });
+    expect(real.body.removed).toEqual(['HIDDEN_HOST', 'NEW_TWO']);
+    expect(Object.keys(await vars()).sort()).toEqual(['API_KEY', 'NEW_ONE']);
+    const grants = (await api('GET', '/api/envs/push-env/grants', { token: adminToken })).body as Array<{ variableKey: string | null }>;
+    expect(grants.filter((g) => g.variableKey === 'NEW_TWO')).toEqual([]);
+
+    const empty = await api('POST', '/api/envs/push-env/variables/import', { token: adminToken, payload: { values: {}, prune: true } });
+    expect(empty.status).toBe(400);
+    expect(Object.keys(await vars())).toHaveLength(2);
+  });
+
+  it('非法 key 整批拒绝；非 Owner / 管理员不能导入', async () => {
+    const bad = await api('POST', '/api/envs/push-env/variables/import', {
+      token: adminToken,
+      payload: { values: { GOOD: '1', '1BAD': '2' } },
+    });
+    expect(bad.status).toBe(400);
+    expect((await vars()).GOOD).toBeUndefined();
+
+    const forbidden = await api('POST', '/api/envs/push-env/variables/import', { token: memberToken, payload: { values: { X: '1' } } });
+    expect(forbidden.status).toBe(403);
+  });
+});
+
 describe('环境清单的读取状态与「我的 / 可读取」范围', () => {
   it('每行标注当前用户的读取能力与待审批申请；scope 筛选生效，两个维度的计数互不参与', async () => {
     const make = async (token: string, slug: string, keys: string[]) => {

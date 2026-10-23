@@ -112,21 +112,30 @@ export type EnvListResult = z.infer<typeof envListResultSchema>;
 
 // ---------- 变量 ----------
 
+/** 单个变量值的上限：upsert 与批量导入共用 */
+export const VARIABLE_VALUE_MAX_LENGTH = 65536;
+
+/**
+ * 新增或更新一个变量。除 key 外都可缺省 = 保持原值（新增时取默认值）——
+ * CLI `eat env set` 只改值时不带元信息，若缺省就重置，会把备注清空、非敏感改回敏感、
+ * 隐藏的变量变成人人可见（暴露变量的存在）。控制台每次都传全量，不受影响。
+ */
 export const upsertVariableSchema = z.object({
   key: variableKeySchema,
   /**
    * 新增时必填；更新时可缺省 = 保持当前值不变、版本不递增——只想改备注 / 可见性 / 敏感标记时，
-   * 敏感变量的值控制台本就拿不到，不能逼着重填一遍
+   * 敏感变量的值控制台本就拿不到，不能逼着重填一遍。传入的值与现值相同也不递增版本
    */
-  value: z.string().max(65536).optional(),
-  description: z.string().max(2000).default(''),
+  value: z.string().max(VARIABLE_VALUE_MAX_LENGTH).optional(),
+  /** 新增时默认空 */
+  description: z.string().max(2000).optional(),
   /**
    * 没有读取权限的成员能否在清单里看到这个变量——看到的只有名称与备注，值永远看不到。
-   * 默认可见：让 AI 能"看见清单、看懂用途"，知道该申请什么；关闭则对他们完全隐藏，连变量存在都不知道。
+   * 新增时默认可见：让 AI 能"看见清单、看懂用途"，知道该申请什么；关闭则对他们完全隐藏，连变量存在都不知道。
    */
-  visibleWithoutPermission: z.boolean().default(true),
-  /** 是否敏感（默认敏感）。只影响存储与展示：敏感值加密存储、控制台打码；非敏感值明文存储、有权限者在平台直接明文可见。读值授权模型两者一致 */
-  secret: z.boolean().default(true),
+  visibleWithoutPermission: z.boolean().optional(),
+  /** 是否敏感（新增时默认敏感）。只影响存储与展示：敏感值加密存储、控制台打码；非敏感值明文存储、有权限者在平台直接明文可见。读值授权模型两者一致 */
+  secret: z.boolean().optional(),
 });
 export type UpsertVariableRequest = z.infer<typeof upsertVariableSchema>;
 
@@ -145,6 +154,50 @@ export const variableMetaSchema = z.object({
   updatedAt: z.string(),
 });
 export type VariableMeta = z.infer<typeof variableMetaSchema>;
+
+/** upsert 的回执：在清单条目之外说明这次是新建还是更新、值有没有变 */
+export const upsertVariableResultSchema = variableMetaSchema.extend({
+  created: z.boolean(),
+  valueChanged: z.boolean(),
+});
+export type UpsertVariableResult = z.infer<typeof upsertVariableResultSchema>;
+
+/** 批量导入一次最多多少个 key：够放下一份正常的 .env，又不至于一次事务锁太久 */
+export const ENV_IMPORT_MAX_KEYS = 500;
+
+/**
+ * 批量导入（`eat env push`）：只改值——已存在变量的备注 / 敏感标记 / 可见性一律不动，值相同的不升版本。
+ * 默认只增改；prune=true 时再删掉平台上有、本次没提供的 key，让环境与文件一致。
+ * 删变量会连同它的变量级授权一起删掉，所以破坏性的方向必须显式开启。
+ */
+export const importVariablesSchema = z.object({
+  values: z
+    .record(variableKeySchema, z.string().max(VARIABLE_VALUE_MAX_LENGTH))
+    .refine((v) => Object.keys(v).length <= ENV_IMPORT_MAX_KEYS, {
+      message: `一次最多导入 ${ENV_IMPORT_MAX_KEYS} 个变量`,
+    }),
+  prune: z.boolean().default(false),
+  /** 只算差异、不写入 */
+  dryRun: z.boolean().default(false),
+  /** 本次新建的变量是否敏感（默认敏感）；已存在变量的敏感标记不动 */
+  secret: z.boolean().default(true),
+});
+export type ImportVariablesRequest = z.infer<typeof importVariablesSchema>;
+
+/** 导入结果只有 key，不回传任何值 */
+export const importVariablesResultSchema = z.object({
+  environment: z.string(),
+  dryRun: z.boolean(),
+  prune: z.boolean(),
+  added: z.array(z.string()),
+  changed: z.array(z.string()),
+  unchanged: z.number(),
+  /** prune 时删除（预演时为将要删除）的 key */
+  removed: z.array(z.string()),
+  /** 不 prune 时：平台上有、本次没提供而保留下来的 key——加 prune 前先看清会删什么 */
+  kept: z.array(z.string()),
+});
+export type ImportVariablesResult = z.infer<typeof importVariablesResultSchema>;
 
 /** 拉取值：可指定 keys，缺省拉取该环境下有权限的全部变量 */
 export const pullValuesRequestSchema = z.object({

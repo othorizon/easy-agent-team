@@ -3,7 +3,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { EAT_MARKER, isEatGenerated, stripEatHeader, writeEnvFile } from '../src/dotenv-file.js';
+import { EAT_MARKER, isEatGenerated, mergeEnvFile, stripEatHeader, writeEnvFile } from '../src/dotenv-file.js';
+import { parseEnvText } from '../src/dotenv-format.js';
 
 let dir: string;
 const file = (name = '.env'): string => path.join(dir, name);
@@ -119,5 +120,90 @@ describe('stripEatHeader：pull → push 往返不把标记推回平台', () => 
   it('不是 eat 写的内容一个字不动（用户自己的注释要留着）', () => {
     const text = '# 我的注释\nA=1\n';
     expect(stripEatHeader(text)).toBe(text);
+  });
+});
+
+describe('mergeEnvFile：pull --merge 合并进已有文件', () => {
+  const merge = (values: Record<string, string>) =>
+    mergeEnvFile({ file: file(), values: Object.entries(values), command: 'eat env pull demo' });
+
+  it('同名 key 原地改值、新 key 追加到末尾，其余行与注释一字不动；不加 eat 标记', () => {
+    const mine = '# 我的本地配置\nexport DB_HOST=localhost\nLOCAL_ONLY=keep  # 留着\n\nAPI_URL=old\n\n';
+    fs.writeFileSync(file(), mine);
+    const r = merge({ API_URL: 'https://new', TOKEN: 'a b', DB_HOST: 'localhost' });
+    expect(r).toMatchObject({ written: true, created: false });
+    expect(r.diff).toEqual({ added: ['TOKEN'], changed: ['API_URL'], removed: [], unchanged: 1 });
+    const out = read();
+    expect(out.startsWith('# 我的本地配置\nexport DB_HOST=localhost\nLOCAL_ONLY=keep  # 留着\n\nAPI_URL=https://new\n')).toBe(true);
+    expect(out).toMatch(/\n\n# 以下由 eat env pull demo 追加 @ [^\n]+\nTOKEN='a b'\n$/);
+    expect(isEatGenerated(file())).toBe(false);
+    expect(Object.fromEntries(parseEnvText(out).values)).toEqual({
+      DB_HOST: 'localhost',
+      LOCAL_ONLY: 'keep',
+      API_URL: 'https://new',
+      TOKEN: 'a b',
+    });
+  });
+
+  it('改了别人文件里已有的值先备份；只追加新 key 不备份', () => {
+    fs.writeFileSync(file(), 'A=1\n');
+    expect(merge({ B: '2' }).backup).toBeNull();
+    const before = read();
+    const r = merge({ A: 'changed' });
+    expect(r.backup).toBeTruthy();
+    expect(fs.readFileSync(r.backup as string, 'utf8')).toBe(before);
+  });
+
+  it('eat 写的文件合并时不备份，原有标记保留', () => {
+    writeEnvFile({ file: file(), content: 'A=1', command: 'eat env pull demo' });
+    const r = merge({ A: '2', B: '3' });
+    expect(r.backup).toBeNull();
+    expect(isEatGenerated(file())).toBe(true);
+    expect(fs.readdirSync(dir)).toEqual(['.env']);
+  });
+
+  it('值全都一致时不动文件', () => {
+    fs.writeFileSync(file(), 'A=1\nB="x y"\n');
+    const mtime = fs.statSync(file()).mtimeMs;
+    const r = merge({ A: '1', B: 'x y' });
+    expect(r).toMatchObject({ written: false, backup: null });
+    expect(r.diff).toMatchObject({ added: [], changed: [], unchanged: 2 });
+    expect(fs.statSync(file()).mtimeMs).toBe(mtime);
+  });
+
+  it('多行值整段替换；同名出现多次时改最后一处（dotenv 取最后一次）', () => {
+    fs.writeFileSync(file(), 'PEM="line1\nline2"\nA=first\nA=second\nZ=end\n');
+    merge({ PEM: 'new\npem', A: 'third' });
+    const p = parseEnvText(read());
+    expect(p.values.get('PEM')).toBe('new\npem');
+    expect(read()).toContain('A=first\nA=third\nZ=end');
+  });
+
+  it('保留 CRLF 换行风格', () => {
+    fs.writeFileSync(file(), 'A=1\r\nB=2\r\n');
+    merge({ B: '3', C: '4' });
+    expect(read()).toMatch(/^A=1\r\nB=3\r\n\r\n# 以下由 [^\r\n]+\r\nC=4\r\n$/);
+  });
+
+  it('引号没闭合时中止，文件不动', () => {
+    const broken = 'A=1\nB="open\nC=3\n';
+    fs.writeFileSync(file(), broken);
+    expect(() => merge({ A: '2' })).toThrow(/第 2 行.*已中止合并/);
+    expect(read()).toBe(broken);
+  });
+
+  it('文件不存在时就是一次普通写入（带标记）', () => {
+    const r = merge({ A: '1' });
+    expect(r.created).toBe(true);
+    expect(isEatGenerated(file())).toBe(true);
+  });
+});
+
+describe('writeEnvFile 中止时给 env pull 多一条 --merge 出路', () => {
+  it('mergeHint 时提示 --merge', () => {
+    fs.writeFileSync(file(), 'LOCAL_ONLY=keep\n');
+    expect(() => writeEnvFile({ file: file(), content: 'A=1', command: 'eat env pull demo', mergeHint: true })).toThrow(
+      /eat env pull demo --merge/,
+    );
   });
 });

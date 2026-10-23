@@ -8,6 +8,7 @@ import {
   createGrantSchema,
   decideAccessRequestSchema,
   envListQuerySchema,
+  importVariablesSchema,
   pullValuesRequestSchema,
   updateEnvironmentSchema,
   upsertVariableSchema,
@@ -17,6 +18,7 @@ import {
   type CreateGrantRequest,
   type DecideAccessRequest,
   type EnvListQuery,
+  type ImportVariablesRequest,
   type PullValuesRequest,
   type UpdateEnvironmentRequest,
   type UpsertVariableRequest,
@@ -89,6 +91,16 @@ export class EnvsController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.envs.upsertVariable(user, slug, body);
+  }
+
+  /** 批量导入（`eat env push`）：默认只增改，prune 时删掉没提供的 key；只回 key 级差异 */
+  @Post('envs/:slug/variables/import')
+  importVariables(
+    @Param('slug') slug: string,
+    @Body(new ZodValidationPipe(importVariablesSchema)) body: ImportVariablesRequest,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.envs.importVariables(user, slug, body);
   }
 
   @Delete('envs/:slug/variables/:key')

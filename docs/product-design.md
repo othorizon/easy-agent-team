@@ -234,6 +234,7 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 - 环境示例：`公司内部服务`、`测试数据库`、`第三方 SaaS`；
 - 环境有 Owner（创建者），Owner 和 Admin 可管理环境（编辑名称/备注、删除）与变量、授权；Owner 的权限不来自授权名单——控制台环境详情页在授权名单上方有一张 Owner 卡片把这层关系说清楚（§10 决策 39）；
 - 环境有**来源**（`source`：手工创建 `manual` / 数据库分配生成 `db_assignment`），控制台清单按来源分「常规 / 数据库」两个页签，默认常规；清单接口 `GET /api/envs` 为分页信封 `{items,total,page,pageSize,counts}` + `q`/`source` 筛选，单个环境走 `GET /api/envs/:slug`（§10 决策 39）；清单另有「全部 / 我的 / 可读取」范围筛选（`scope` + `scopeCounts`），每行标注当前用户的读取状态（可管理 / 全部可读 / 部分可读 / 申请中 / 未授权，`access` / `readableCount` / `pendingRequest`，§10 决策 88）；
+- CLI 可以直接建环境、写变量（`eat env create / update / delete / set / unset / push`），以环境变量的形式使用值（`eat env run`、`eat env pull --print --format shell`）、合并进本地 `.env`（`eat env pull --merge`）（§10 决策 89）；更新变量时**没传的元信息保持原值**（备注 / 敏感标记 / 未授权可见，新增时才取默认），传入的值与现值相同不递增版本；
 - 更新变量时 `value` 可缺省 = 保持当前值、版本不递增，只改备注 / 可见性 / 敏感标记——敏感变量的值控制台本就拿不到，不能逼着重填；有管理权者（Owner / 管理员）可在控制台点「眼睛」临时查看敏感值，走的就是正式拉取接口、照常落 `secret.read` 审计（§10 决策 39）；
 - **非敏感变量**（§10 决策 23）：服务地址、端口这类配置可标记为非敏感——**只改变存储与展示、不改变授权模型**：值明文存储（`value_plain`），**有读取权限者**在清单里直接看到明文值（控制台明文展示可复制、CLI/MCP 清单含 `value`），无需再走「拉取」；无权限者与敏感变量一样只见 key+备注、取值需申请授权。非敏感值读取不落审计、不进密钥指纹清单。敏感性可在更新时切换。
 
@@ -457,7 +458,11 @@ CLI 与本机 MCP Server 同一个产物分发（平台自托管下载：类 Uni
 | `eat skill export <slug> [--out <dir>] [--force]` | 把可见的 skill 下载成本地目录（SKILL.md + 附属文件，不写 `.eat-meta.json`，可直接编辑后 push）（§3.2.3） |
 | `eat skill push <dir>` | 把本地已有 skill 上传纳管（首次创建、再次推送出新版本）；**不自动订阅**，作者要本地留一份自行 subscribe（决策 34） |
 | `eat env list [env]` | 列出可见环境与变量清单（key + 备注 + 权限状态） |
-| `eat env pull <env> [--out <f>] [--print] [--force]` | 拉取有权限的变量值，默认写入 `.env`；同名文件不是 eat 生成的则中止不覆盖，`--force` 覆盖前自动备份（决策 63） |
+| `eat env create <slug> [--name] [--description] [--private]` / `eat env update <slug> [--name] [--description] [--visibility team\|private]` / `eat env delete <slug> --yes` | 建环境（自己是 Owner）/ 改名称、说明、可见性 / 删除（连同变量与授权）（决策 89） |
+| `eat env set <env> <KEY> [--value <v>\|--value-file <f\|->] [--description] [--secret\|--no-secret] [--hidden\|--no-hidden]` / `eat env unset <env> <KEY...>` | 新增或更新一个变量（有则改、无则建；没写的元信息保持原值，值的来源必须显式给出）/ 删除变量（决策 89） |
+| `eat env push <env> [--file <f\|->] [--prune] [--dry-run] [--no-secret]` | 把 dotenv / JSON 文件推送到环境：默认只增改同名 key、只改值不动元信息；`--prune` 删除文件里没有的 key；只回 key 级差异（决策 89） |
+| `eat env pull <env> [--out <f>] [--merge] [--print [--format dotenv\|shell\|json]] [--force]` | 拉取有权限的变量值，默认写入 `.env`；同名文件不是 eat 生成的则中止不覆盖，`--force` 覆盖前自动备份（决策 63）；`--merge` 合并进已有文件（决策 89） |
+| `eat env run <env>[,<env>...] [--keys] -- <命令>` | 把变量注入子进程后运行命令，值不落盘、退出码透传（决策 89） |
 | `eat env request <env>/<KEY> --reason "..."` | 发起权限申请 |
 | `eat ask create / show / list / reply / delete` | 发起求助、查看回复、追问、删除（仅求助者/管理员）；按 ID 操作的子命令都接受 8 位短 ID 前缀（决策 25） |
 | `eat app create <slug> --repo <url> --build dockerfile\|static [...]` | 自助创建应用：平台在 Dokploy 上建 application 并绑 Git 源 / SSH key / 构建方式（`--branch`、`--dockerfile`、`--context`、`--port`、`--publish-dir`、`--spa`、`--description`）（决策 31）；管理员配了域名后缀时自动分配 `<slug>.<后缀>` 并打印访问地址（决策 32） |
@@ -909,3 +914,16 @@ easy-agent-team/
 - **范围筛选**：`GET /api/envs` 加 `scope=all|mine|readable`（`mine` = 我是 Owner；`readable` = `access` 不是 `none`，所以包含我的），信封加 `scopeCounts {all,mine,readable}`。来源页签与范围是两个正交维度，各自的数字都在「关键词 + 另一个维度」筛过的集合上数、自己不参与——因此 `counts`（来源计数）现在会随 `scope` 变化。
 - **控制台**：来源保持实心页签，范围用描边分段（决策 43 的做法），搜索框挪到右侧、窄屏置顶；行右侧的大号变量数换成读取状态（可管理 / 全部可读 / 可读 1 / 4 / 申请中 / 未授权 / 暂无变量，悬停有说明）+ 变量数，窄屏并进元信息行；可读的行悬停出现「复制拉取命令」（`eat env pull <slug>`，手机上不放）；整行可点进详情（选中文字时不跳）；空清单按页签与范围分别给出下一步（清除搜索 / 新建环境 / 去申请数据库）。
 - 新字段进了共享契约，CLI 产物里只多了未被运行时使用的 schema 定义，行为不变，CLI 版本不升（与决策 87 同一判断）；MCP `list_env_variables`（走 `/api/catalog`）的返回会自然带上读取状态，AI 不用逐个试拉就知道该申请什么。
+
+### 决策 89：CLI 建环境、写变量、按文件推送、注入运行（2026-10-23）
+
+- **命令**：`eat env create / update / delete`（环境本身，服务端接口原本就有）；`eat env set / unset`（单个变量）；`eat env push`（整份文件 → 平台）；`eat env pull --merge` 与 `--print --format dotenv|shell|json`（平台 → 本地）；`eat env run <env>[,<env>...] -- <命令>`（以环境变量形式使用）。命令形态参考 Vercel CLI 65 与 Wrangler 4 的实际命令定义：eat 的「环境」更像 Wrangler 的 secrets store 而不是 Vercel 的 production / preview，所以环境作位置参数。
+- **`set` 有则改、无则建**（同 `wrangler secret put`），不学 Vercel 拆 `add` / `update`：AI 重试天然幂等。值的来源必须显式给出——`--value`（会留在 shell 历史里，只适合非敏感短值）/ `--value-file <文件>` / `--value-file -`（stdin）；不学两家「没给值就读 stdin 或弹提示」，那要靠 TTY 判断（决策 26 / 54 已定不做），而 Agent 的 stdin 可能一直开着，隐式去读会挂住。
+- **upsert 契约改为「没传的元信息保持原值」**：`description` / `secret` / `visibleWithoutPermission` 原先带 `.default()`，控制台每次传全量所以没暴露；CLI 只改值时会把备注清空、非敏感改回敏感、**隐藏的变量变成对所有人可见**（暴露变量的存在）。现在都可缺省，新增时才取默认；传入的值与现值相同不递增版本（控制台原本就在前端这么判断非敏感值，敏感值它拿不到）。回执加 `created` / `valueChanged`。思路同决策 44。
+- **`push` 默认只增改同名 key，`--prune` 才删除文件里没有的 key**（同 `wrangler secret bulk` 的默认），与 `eat app env push` 的整体覆盖不同：应用 env 在部署后台就是一段文本，整体替换没有损失；这里每个变量带着备注、敏感标记和**变量级授权**，删掉再建回来授权就没了，所以破坏性的方向必须显式写出。只改值——已存在变量的元信息不动，新建的默认敏感（`--no-secret` 只作用于本次新建的），值相同的不升版本。新接口 `POST /api/envs/:slug/variables/import`：差异在服务端比（值不回传，比较不算读取、不落 `secret.read`），整批一个事务，最多 500 个 key，审计 `variable.imported` 只记 key；空导入加 prune 直接拒绝（否则等于清空环境）。CLI 端非法行带行号整批拒绝（静默少推几个 key 比推送失败更难发现），文件内容以 `{` 开头按 JSON 解析（同 wrangler，但不支持「写 null 表示删除」，删除一个意图一条路），`--file -` 读 stdin；不管哪种模式都列出「平台有、文件没有」的 key，加 `--prune` 前先看清会删什么。
+- **pull → push 往返值不变**：shared 的 `parseDotenv` 刻意不反转义、不认多行（它只给应用 env 做 key 级比较），推送若沿用它，含换行或引号的值会被改坏。CLI 另写一份严格解析（`apps/cli/src/dotenv-format.ts`）：双引号按 JSON 转义还原（与 docker compose 一致；不认识的转义如 `\d` 原样保留），单引号 / 反引号字面量，三种引号都可跨行，引号未闭合是致命错误。`pull` 的值输出顺带改为：简单值裸写，单行且不含单引号的用单引号（各家解析器都按字面量处理，不会被 compose 当成 `$变量` 展开、反斜杠不会被重复解释），其余用 JSON 风格双引号。
+- **`pull --merge`**：同名 key 在原位置改值（多次出现时改最后一处，dotenv 取最后一次）、新 key 追加到末尾并加一行注释，其余行与注释原样保留，保留 CRLF；**不往首行加 eat 标记**——否则下次不带 `--merge` 的 pull 会把这个混着手写内容的文件当成 eat 的、整份覆盖掉；改了别人文件里已有的值先备份（决策 63 的原则），只追加不备份；值全一致时不动文件；引号未闭合时中止。`writeEnvFile` 中止时给 `eat env pull` 多一条 `--merge` 出路。
+- **`run`**：值只注入子进程，不落盘、不进 shell 历史，透传退出码（被信号杀掉按 128 + 信号值）并转发终止信号，照常落读取审计。**平台值覆盖当前 shell 的同名变量**，被覆盖的 key 名打到 stderr——Vercel 的 `env run` 相反（shell > 本地文件 > 平台），但 eat 的环境是点名要的，静默用了 shell 里残留的那个更难查。多个环境逗号分隔、后者覆盖前者；`--keys` 有拿不到的、或点名的环境一个都读不到时不启动命令。命令写在 `--` 之后（commander 的 passThroughOptions 会把写在环境名之后的 `--keys` 也吞给子进程，不用）；漏写 `--` 时报错附一句出路。Windows 上把 argv 拼成命令行交给 cmd，`npm` / `pnpm` 这类 `.cmd` 才找得到。
+- **`delete` 必须 `--yes`**（同 `eat app delete`）；`update --visibility private` 后打印服务端顺带做的事（撤销授权、作废待审批申请）。
+- **MCP 本期不跟**：`run` / `--merge` / `--value-file` 都是本地概念；让 AI 经 MCP 写值意味着密钥要过一遍模型上下文，是否给远程 AI 写入能力另议。
+- CLI 升 0.12.0、指南升 39（环境变量主题补写入命令与 `--prune` 先预演的约束）。

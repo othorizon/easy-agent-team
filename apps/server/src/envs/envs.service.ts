@@ -15,9 +15,12 @@ import type {
   EnvironmentInfo,
   EnvListQuery,
   EnvListResult,
+  ImportVariablesRequest,
+  ImportVariablesResult,
   PullValuesResponse,
   UpdateEnvironmentRequest,
   UpsertVariableRequest,
+  UpsertVariableResult,
   VariableMeta,
 } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
@@ -365,7 +368,12 @@ export class EnvsService {
     return result;
   }
 
-  async upsertVariable(user: AuthUser, slug: string, dto: UpsertVariableRequest) {
+  /** 敏感 → 只存加密列；非敏感 → 只存明文列（切换敏感性时清掉另一列） */
+  private valueColumns(secret: boolean, value: string) {
+    return secret ? { valueEncrypted: encryptSecret(value), valuePlain: null } : { valueEncrypted: null, valuePlain: value };
+  }
+
+  async upsertVariable(user: AuthUser, slug: string, dto: UpsertVariableRequest): Promise<UpsertVariableResult> {
     return this.withManagedEnvironment(user, slug, async (tx, env) => {
       const existing = (
         await tx
@@ -374,61 +382,132 @@ export class EnvsService {
           .where(and(eq(envVariables.environmentId, env.id), eq(envVariables.key, dto.key)))
           .limit(1)
       )[0];
-      // 敏感 → 只存加密列；非敏感 → 只存明文列（切换敏感性时清掉另一列）
-      const valueColumns = (secret: boolean, value: string) =>
-        secret ? { valueEncrypted: encryptSecret(value), valuePlain: null } : { valueEncrypted: null, valuePlain: value };
       let row: VarRow;
+      let valueChanged: boolean;
       if (existing) {
-        // 值缺省 = 保持当前值，只改备注 / 可见性 / 敏感标记，版本不动（版本只跟着值走）；
+        // 没传的元信息保持原值（CLI `eat env set` 只改值时不带它们）。
+        // 值缺省或与现值相同 = 保持当前值，版本不动（版本只跟着值走）；
         // 敏感标记翻转时得把现值搬到另一列，所以要先解出来再按新标记落盘
-        const valueChanged = dto.value !== undefined;
+        const secret = dto.secret ?? existing.secret;
+        valueChanged = dto.value !== undefined && dto.value !== this.readValue(existing);
         const columns =
-          !valueChanged && dto.secret === existing.secret
+          !valueChanged && secret === existing.secret
             ? {}
-            : valueColumns(dto.secret, dto.value ?? this.readValue(existing));
+            : this.valueColumns(secret, valueChanged ? dto.value! : this.readValue(existing));
         [row] = await tx
           .update(envVariables)
           .set({
             ...columns,
-            secret: dto.secret,
-            description: dto.description,
-            visibleWithoutPermission: env.visibility === 'private' ? false : dto.visibleWithoutPermission,
+            secret,
+            description: dto.description ?? existing.description,
+            visibleWithoutPermission:
+              env.visibility === 'private' ? false : (dto.visibleWithoutPermission ?? existing.visibleWithoutPermission),
             version: valueChanged ? existing.version + 1 : existing.version,
             updatedAt: new Date(),
           })
           .where(eq(envVariables.id, existing.id))
           .returning();
-        await this.audit.record({
-          actorId: user.id,
-          action: 'variable.upserted',
-          targetType: 'env_variable',
-          targetId: row.id,
-          meta: { environment: env.slug, key: dto.key, version: row.version, valueChanged },
-        }, tx);
       } else {
         if (dto.value === undefined) {
           throw new BadRequestException({ error: 'VALIDATION_FAILED', message: `变量 ${dto.key} 不存在，新增变量必须提供值` });
         }
+        const secret = dto.secret ?? true;
+        valueChanged = true;
         [row] = await tx
           .insert(envVariables)
           .values({
             environmentId: env.id,
             key: dto.key,
-            ...valueColumns(dto.secret, dto.value),
-            secret: dto.secret,
-            description: dto.description,
-            visibleWithoutPermission: env.visibility === 'private' ? false : dto.visibleWithoutPermission,
+            ...this.valueColumns(secret, dto.value),
+            secret,
+            description: dto.description ?? '',
+            visibleWithoutPermission: env.visibility === 'private' ? false : (dto.visibleWithoutPermission ?? true),
           })
           .returning();
+      }
+      await this.audit.record({
+        actorId: user.id,
+        action: 'variable.upserted',
+        targetType: 'env_variable',
+        targetId: row.id,
+        meta: { environment: env.slug, key: dto.key, version: row.version, valueChanged },
+      }, tx);
+      return { ...this.toMeta(row, env.slug, true), created: !existing, valueChanged };
+    });
+  }
+
+  /**
+   * 批量导入（`eat env push`）。差异在服务端比：值不回传给调用方、也不算一次读取（不落 secret.read）。
+   * 只改值，已存在变量的元信息不动；整批一个事务，预演只比较、不写入。
+   */
+  async importVariables(user: AuthUser, slug: string, dto: ImportVariablesRequest): Promise<ImportVariablesResult> {
+    const incoming = Object.entries(dto.values);
+    if (incoming.length === 0 && dto.prune) {
+      throw new BadRequestException({
+        error: 'VALIDATION_FAILED',
+        message: '没有提供任何变量，prune 会清空整个环境，已拒绝',
+      });
+    }
+    return this.withManagedEnvironment(user, slug, async (tx, env) => {
+      const current = await tx.select().from(envVariables).where(eq(envVariables.environmentId, env.id));
+      const byKey = new Map(current.map((v) => [v.key, v]));
+      const added: string[] = [];
+      const changed: string[] = [];
+      let unchanged = 0;
+      for (const [key, value] of incoming) {
+        const existing = byKey.get(key);
+        if (!existing) added.push(key);
+        else if (this.readValue(existing) !== value) changed.push(key);
+        else unchanged++;
+      }
+      const missing = current.map((v) => v.key).filter((k) => !(k in dto.values));
+      const result: ImportVariablesResult = {
+        environment: env.slug,
+        dryRun: dto.dryRun,
+        prune: dto.prune,
+        added: added.sort(),
+        changed: changed.sort(),
+        unchanged,
+        removed: dto.prune ? missing.sort() : [],
+        kept: dto.prune ? [] : missing.sort(),
+      };
+      if (dto.dryRun) return result;
+
+      if (added.length > 0) {
+        await tx.insert(envVariables).values(
+          added.map((key) => ({
+            environmentId: env.id,
+            key,
+            ...this.valueColumns(dto.secret, dto.values[key]),
+            secret: dto.secret,
+            description: '',
+            visibleWithoutPermission: env.visibility !== 'private',
+          })),
+        );
+      }
+      for (const key of changed) {
+        const existing = byKey.get(key)!;
+        await tx
+          .update(envVariables)
+          .set({ ...this.valueColumns(existing.secret, dto.values[key]), version: existing.version + 1, updatedAt: new Date() })
+          .where(eq(envVariables.id, existing.id));
+      }
+      if (result.removed.length > 0) {
+        // 变量级授权随外键级联删除，与单个删除（deleteVariable）一致
+        await tx
+          .delete(envVariables)
+          .where(and(eq(envVariables.environmentId, env.id), inArray(envVariables.key, result.removed)));
+      }
+      if (added.length + changed.length + result.removed.length > 0) {
         await this.audit.record({
           actorId: user.id,
-          action: 'variable.upserted',
-          targetType: 'env_variable',
-          targetId: row.id,
-          meta: { environment: env.slug, key: dto.key, version: row.version, valueChanged: true },
+          action: 'variable.imported',
+          targetType: 'environment',
+          targetId: env.id,
+          meta: { environment: env.slug, added: result.added, changed: result.changed, removed: result.removed, prune: dto.prune },
         }, tx);
       }
-      return this.toMeta(row, env.slug, true);
+      return result;
     });
   }
 
