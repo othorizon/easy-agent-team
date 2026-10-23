@@ -7,7 +7,7 @@ import { githubSettings } from '../db/schema';
 export type GithubConfig = typeof githubSettings.$inferSelect;
 export class GithubError extends Error {
   constructor(message: string, readonly retryable = false, readonly retryAfter = 0,
-    readonly connectionState: 'uninstalled' | 'app_unavailable' | 'error' = 'error') { super(message); }
+    readonly connectionState: 'uninstalled' | 'app_unavailable' | 'private' | 'error' = 'error') { super(message); }
 }
 export class GithubWaiting extends Error {}
 export const roleRank = (role: string) => ['none', 'read', 'triage', 'write', 'maintain', 'admin'].indexOf(role);

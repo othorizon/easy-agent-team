@@ -243,7 +243,7 @@ describe('administrator GitHub App setup and recovery', () => {
     const r = await api('POST', '/api/settings/github/check');
     expect(r.status).toBe(400); expect(r.body.message).toContain('Make public');
     expect(client.isPublic).toHaveBeenLastCalledWith('eat-app');
-    expect(await settings()).toMatchObject({ appId: '1', connectionState: 'error' });
+    expect(await settings()).toMatchObject({ appId: '1', connectionState: 'private' });
     client.isPublic.mockResolvedValueOnce(false);
     expect((await api('POST', '/api/settings/github/enabled', 'admin', { enabled: true })).status).toBe(400);
     client.isPublic.mockResolvedValueOnce(null);

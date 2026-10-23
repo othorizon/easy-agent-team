@@ -15,7 +15,7 @@ export const githubSetupSchema = z.object({
   replaceExisting: z.boolean().default(false),
 });
 export type GithubSetupRequest = z.infer<typeof githubSetupSchema>;
-export type GithubConnectionState = 'unconfigured' | 'app_ready' | 'connected' | 'uninstalled' | 'app_unavailable' | 'error';
+export type GithubConnectionState = 'unconfigured' | 'app_ready' | 'connected' | 'uninstalled' | 'app_unavailable' | 'private' | 'error';
 export interface GithubSetupStart {
   url: string;
   manifest: Record<string, unknown>;

@@ -29,16 +29,16 @@ GitHub 关联是可选能力，不替代 EAT 登录，也不修改 Dokploy 的 G
 GitHub 只允许**所属组织的成员**授权私有 App。而用户关联 GitHub 正是为了被邀请进组织，所以 App 若是私有的，尚未入组织的用户点「关联 GitHub」会在 GitHub 看到 404，只有已在组织里的人（例如组织 Owner）能看到授权页。
 
 - 向导创建的 App 默认公开。2026-10-23 之前用向导创建的 App 是私有的，需要手动改：在 GitHub 打开组织 **Settings → Developer settings → GitHub Apps**，找到本 App 点 **Edit → Advanced → Make public**。
-- 「检查连接」会以未登录方式请求 `GET https://api.github.com/apps/<slug>`，返回 404 即判定为私有，检查失败并给出上述步骤，无法启用接入。限流或网络异常时视为未知，不阻断。
+- 「检查连接」会以未登录方式请求 `GET https://api.github.com/apps/<slug>`，返回 404 即判定为私有，连接状态记为「App 为私有」，无法启用接入；页面给出直达该 App Advanced 设置页的按钮。限流或网络异常时视为未知，不阻断。
 - 公开只表示其他 GitHub 账户也能看到、授权或在自己的账户下安装这个 App，不会获得本组织的任何权限。EAT 只使用本组织的 installation；其他账户的安装回调没有 EAT 签发的 state，会被拒绝。
 
 ## 高级设置：手动配置已有 App
 
 1. 在 GitHub 创建 GitHub App。Organization permissions 设置 **Members: Read and write**；Repository permissions 设置 **Administration: Read and write**，保留 Metadata 读取权限。在 Advanced 中将 App 设为公开（Make public），否则组织外的用户无法授权关联。
 2. 将 App 安装到指定组织，选择 **All repositories**。无需为每个 EAT 用户安装 App，也无需开启 webhook。
-3. 将「高级设置」展示的 Authorization callback URL 配置到 GitHub App，路径为 `/api/github/callback`。Setup URL 设置为 `/api/github/setup/installation` 对应的完整地址；关闭安装时请求用户 OAuth 授权，开启安装更新后跳转 Setup URL。
-4. 展开「高级设置：手动配置已有 GitHub App」，填写组织名称、App ID、Client ID、Installation ID、Client Secret 和 PEM 私钥。密钥加密保存，读取接口只返回是否配置；留空保留原密钥。
-5. 先保持接入关闭，保存并执行「检查已保存的连接」，再启用。已有绑定或授权记录时，不允许在手动配置中更换组织或 App；可轮换密钥，同一 App 的新 Installation ID 必须通过组织核验。更换 App 使用上方的重新初始化流程。
+3. 将「高级设置」展示的 Callback URL（即 Authorization callback URL，输入框右侧可一键复制） 配置到 GitHub App，路径为 `/api/github/callback`。Setup URL 设置为 `/api/github/setup/installation` 对应的完整地址；关闭安装时请求用户 OAuth 授权，开启安装更新后跳转 Setup URL。
+4. 展开「高级设置：手动配置已有 App」，填写组织名称、App ID、Client ID、Installation ID、Client Secret 和 PEM 私钥。密钥加密保存，读取接口只返回是否配置；留空保留原密钥。
+5. 保存配置（保存不改变接入的启用状态），再在上方「连接状态」点「检查连接」，通过后点「启用接入」。已有绑定或授权记录时，不允许在手动配置中更换组织或 App；可轮换密钥，同一 App 的新 Installation ID 必须通过组织核验。更换 App 使用上方的重新初始化流程。
 6. 后端需要 HTTPS 访问 `github.com` 和 `api.github.com`。App 私钥、用户 token、refresh token 和浏览器授权随机值不得进入日志或代码仓库。
 
 ## 用户与组织

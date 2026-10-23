@@ -879,8 +879,17 @@ easy-agent-team/
 
 - **症状**：组织 Owner（同时是 EAT 管理员）在个人中心点「关联 GitHub」能看到授权页，其他用户点同一个按钮，GitHub 显示 404。
 - **根因**：向导的 manifest 写的是 `public: false`。GitHub 规定私有 App「只有所属组织的成员能授权」，而关联 GitHub 正是为了邀请尚未入组织的用户，所以除组织成员外的所有人都在 OAuth 授权页上 404，EAT 侧看不到任何错误。
-- **修复**：manifest 改为 `public: true`。`GithubSetupService.check()`（「检查连接」以及启用接入前的校验）新增 `GithubClient.isPublic(slug)`：以未登录方式请求 `GET /apps/{slug}`，2xx 判为公开，404 判为私有，限流、5xx、网络异常判为未知（`null`）。私有时检查失败，并写明到 GitHub 点 Make public 的路径，从而无法启用接入；未知时不阻断，因为未登录调用每个 IP 每小时只有 60 次，不能因限流把接入判死。
+- **修复**：manifest 改为 `public: true`。`GithubSetupService.check()`（「检查连接」以及启用接入前的校验）新增 `GithubClient.isPublic(slug)`：以未登录方式请求 `GET /apps/{slug}`，2xx 判为公开，404 判为私有，限流、5xx、网络异常判为未知（`null`）。私有时检查失败，连接状态记为新增的 `private`（`GithubConnectionState`），从而无法启用接入；未知时不阻断，因为未登录调用每个 IP 每小时只有 60 次，不能因限流把接入判死。
 - **公开的代价**：别的 GitHub 账户能授权或在自己的账户下安装这个 App，但拿不到本组织的任何权限。EAT 只认 `GET /orgs/{org}/installation` 找到的本组织 installation，安装回调必须带 EAT 签发的一次性 state；用户 token 也只能访问「App 已安装 ∩ 用户本人有权限」的资源。
 - **存量**：已创建的私有 App 无法通过 API 改可见性，只能由管理员在 GitHub 手动 Make public。系统设置页打开时会自动检查连接，管理员能直接看到提示。手动配置（高级设置）的 App 规则相同。
 - 只涉及服务端与文档，不涉及 CLI 与指南，版本号不变。
+
+### 决策 86：GitHub 接入设置页重排（2026-10-23）
+
+- **与其他设置分类保持一致**：改用 `SettingsGroup` 分组和两列字段网格，连接状态与启用状态的徽标移到 `SettingsSection` 页头。顺序：连接状态 → 高级设置（折叠）→ 待处理的仓库撤权 → 重新初始化（折叠，App 不可用时默认展开）。原先「重新初始化」夹在主流程卡片中间，现在移到页面最底部。
+- **三步进度带状态**：已完成步骤显示绿勾，当前步骤高亮，未开始的步骤置灰（原先只是三个灰块，文案随状态变化）。
+- **主按钮随阶段变化**：待安装时是「安装到组织」，已连接、未启用时是「启用接入」，连接出错时是「检查连接」；不满足条件的「启用接入」用 `Tip` 说明原因。「关闭接入」需二次确认。
+- **报错**：统一用带图标的提示框。连接状态为 `private` 时单独展示：说明原因，并提供「打开 GitHub App 设置」按钮（直达 `/organizations/<org>/settings/apps/<slug>/advanced`）和「已改为公开，重新检查」按钮。
+- **其他**：组织、App、Installation ID、最近核验改为信息卡，组织和 App 名称可点击跳转到 GitHub；时间改用 `formatDateTime`（原先是 `toLocaleString`，违反决策 49）；打开页面时的自动检查不再弹「检查通过」提示；高级设置改为 RHF + `zodResolver(githubSettingsSchema)`（决策 83），去掉与上方重复的启用复选框和「检查已保存的连接」，保存时沿用当前启用状态，回调地址可一键复制；撤权状态只在本分类可见时轮询。
+- 只改控制台和 shared 的类型，CLI 行为不变，版本号不变。
 

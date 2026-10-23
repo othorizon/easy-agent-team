@@ -134,7 +134,7 @@ export class GithubSetupService {
     if (!c) throw new BadRequestException('请先初始化 GitHub App 或保存高级配置');
     try {
       const app = await this.client.appInfo(c);
-      if (await this.client.isPublic(app.slug) === false) throw new GithubError(PRIVATE_APP);
+      if (await this.client.isPublic(app.slug) === false) throw new GithubError(PRIVATE_APP, false, 0, 'private');
       // Discover the actual installation, including recovery after a lost installation callback.
       const installationId = await this.client.findInstallation(c);
       if (!installationId) throw new GithubError('App 已创建，但尚未安装到组织或已被卸载，请安装到组织', false, 0, 'uninstalled');
