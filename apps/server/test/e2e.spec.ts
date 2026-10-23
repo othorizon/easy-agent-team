@@ -618,6 +618,75 @@ describe('环境清单分页 / 筛选、单个环境详情、更新变量不带�
   });
 });
 
+describe('环境清单的读取状态与「我的 / 可读取」范围', () => {
+  it('每行标注当前用户的读取能力与待审批申请；scope 筛选生效，两个维度的计数互不参与', async () => {
+    const make = async (token: string, slug: string, keys: string[]) => {
+      await api('POST', '/api/envs', { token, payload: { slug, name: slug, description: '' } });
+      for (const key of keys) {
+        await api('POST', `/api/envs/${slug}/variables`, { token, payload: { key, value: 'x' } });
+      }
+      const vars = await api('GET', `/api/envs/${slug}/variables`, { token });
+      return Object.fromEntries(vars.body.map((v: { key: string; id: string }) => [v.key, v.id]));
+    };
+    const a = await make(adminToken, 'scope-env-a', ['A1', 'A2', 'A3']);
+    const b = await make(adminToken, 'scope-env-b', ['B1']);
+    await make(adminToken, 'scope-env-c', ['C1', 'C2']);
+    await make(adminToken, 'scope-env-d', ['D1']);
+    await make(memberToken, 'scope-env-mine', []);
+    const envC = await api('GET', '/api/envs/scope-env-c', { token: adminToken });
+
+    await api('POST', '/api/envs/scope-env-a/grants', { token: adminToken, payload: { userId: memberId, variableId: a.A1 } });
+    await api('POST', '/api/envs/scope-env-b/grants', { token: adminToken, payload: { userId: memberId, variableId: b.B1 } });
+    await api('POST', '/api/envs/scope-env-c/grants', { token: adminToken, payload: { userId: memberId, environmentId: envC.body.id } });
+    const req = await api('POST', '/api/access-requests', {
+      token: memberToken,
+      payload: { environmentSlug: 'scope-env-d', keys: ['D1'], reason: '要用' },
+    });
+    expect(req.status).toBe(201);
+
+    const all = await api('GET', '/api/envs?q=scope-env', { token: memberToken });
+    const bySlug = Object.fromEntries(all.body.items.map((e: { slug: string }) => [e.slug, e]));
+    expect(bySlug['scope-env-a']).toMatchObject({ access: 'partial', readableCount: 1, variableCount: 3, pendingRequest: false });
+    // 每个变量都单独授权过 = 全部可读
+    expect(bySlug['scope-env-b']).toMatchObject({ access: 'all', readableCount: 1 });
+    expect(bySlug['scope-env-c']).toMatchObject({ access: 'all', readableCount: 2 });
+    expect(bySlug['scope-env-d']).toMatchObject({ access: 'none', readableCount: 0, pendingRequest: true });
+    expect(bySlug['scope-env-mine']).toMatchObject({ access: 'manage', readableCount: 0 });
+    expect(all.body.scopeCounts).toEqual({ all: 5, mine: 1, readable: 4 });
+    expect(all.body.counts).toEqual({ manual: 5, db_assignment: 0 });
+
+    const mine = await api('GET', '/api/envs?q=scope-env&scope=mine', { token: memberToken });
+    expect(mine.body.items.map((e: { slug: string }) => e.slug)).toEqual(['scope-env-mine']);
+    expect(mine.body.total).toBe(1);
+    // 页签计数跟着范围走，范围计数不随自己变
+    expect(mine.body.counts).toEqual({ manual: 1, db_assignment: 0 });
+    expect(mine.body.scopeCounts).toEqual({ all: 5, mine: 1, readable: 4 });
+
+    const readable = await api('GET', '/api/envs?q=scope-env&scope=readable', { token: memberToken });
+    expect(readable.body.items.map((e: { slug: string }) => e.slug)).toEqual([
+      'scope-env-a',
+      'scope-env-b',
+      'scope-env-c',
+      'scope-env-mine',
+    ]);
+
+    // 来源筛到没有的那一类时，范围计数一起归零
+    const dbOnly = await api('GET', '/api/envs?q=scope-env&source=db_assignment', { token: memberToken });
+    expect(dbOnly.body.scopeCounts).toEqual({ all: 0, mine: 0, readable: 0 });
+
+    // 详情接口给出同样的读取状态
+    const detail = await api('GET', '/api/envs/scope-env-a', { token: memberToken });
+    expect(detail.body).toMatchObject({ access: 'partial', readableCount: 1, pendingRequest: false });
+
+    // 管理员能管理全部团队环境
+    const adminView = await api('GET', '/api/envs?q=scope-env&scope=readable', { token: adminToken });
+    expect(adminView.body.total).toBe(5);
+    expect(adminView.body.items.every((e: { access: string }) => e.access === 'manage')).toBe(true);
+
+    expect((await api('GET', '/api/envs?scope=weird', { token: memberToken })).status).toBe(400);
+  });
+});
+
 describe('Private 环境：环境权限优先于变量可见性和授权', () => {
   let privateEnvId: string;
   let adminId: string;

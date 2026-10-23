@@ -96,3 +96,5 @@ Folio 评论开关（决策 84）：`site.comments_enabled`（迁移 0033，默�
 GitHub App 必须公开（决策 85）：私有 GitHub App 只有所属组织的成员能授权，未入组织的用户点「关联 GitHub」会得到 404，只有组织 Owner 能正常授权。manifest 改为 `public: true`；「检查连接」用未登录的 `GET /apps/{slug}` 判定可见性，返回 404 视为私有并阻止启用，未知时不阻断。存量的私有 App 需管理员在 GitHub 的 Advanced 中点 Make public（连接状态记为 `private`，设置页提供直达按钮）。只动服务端，版本号不变。GitHub 接入设置页已按其他设置分类的分组样式重排（决策 86）：主按钮随阶段变化，进度条带完成态，打开页面时的自动检查不弹提示，高级设置改为 zod 表单。
 
 应用列表排序与所有者筛选（决策 87）：`AppInfo.lastDeployedAt` 取平台 `deployment` 表中该应用最新一行的 `created_at`（清单接口一次 GROUP BY 批量取出），在部署后台侧直接触发的部署不计入。`/apps` 支持按最近部署（默认）/ 名称 / 创建时间排序，「全部」页签可按所有者筛选，均在前端完成并同步到 URL。CLI 产物行为不变，版本号不动。
+
+环境清单读取状态与范围筛选（决策 88）：`EnvironmentInfo` 加 `access`（manage/all/partial/none）、`readableCount`、`pendingRequest`，口径与 `accessibleSet` 一致，清单一次查授权与待审批申请再逐行套用；`GET /api/envs` 加 `scope=all|mine|readable` 与 `scopeCounts`，来源计数现在随 scope 变（两个维度各自只在另一维度筛过的集合上数）。控制台：页签 + 描边分段 + 右侧搜索，行右侧是读取状态，可读的行悬停复制 `eat env pull <slug>`，整行可点。CLI 产物只多未使用的 schema 定义，版本不升。

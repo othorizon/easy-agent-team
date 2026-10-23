@@ -10,6 +10,7 @@ import { and, asc, count, eq, gt, inArray, isNotNull, isNull, or } from 'drizzle
 import type {
   CreateEnvironmentRequest,
   CreateGrantRequest,
+  EnvironmentAccess,
   EnvironmentDbAssignment,
   EnvironmentInfo,
   EnvListQuery,
@@ -28,6 +29,7 @@ import { accessRequests, dbAssignments, dbInstances, environments, envVariables,
 type EnvRow = typeof environments.$inferSelect;
 type VarRow = typeof envVariables.$inferSelect;
 type EnvTransaction = Parameters<Parameters<Db['transaction']>[0]>[0];
+type EnvAccessInfo = Pick<EnvironmentInfo, 'access' | 'readableCount' | 'pendingRequest'>;
 
 const HOW_TO_REQUEST =
   '无读取权限。请通过 MCP 工具 request_access（或 CLI：eat env request）附理由发起权限申请，资源 Owner 批准后重试。';
@@ -89,6 +91,54 @@ export class EnvsService {
     return new Set(grants.filter((g) => g.variableId).map((g) => g.variableId!));
   }
 
+  /**
+   * 一次查出当前用户在所有环境上的读值能力，供清单逐行标注（口径与 accessibleSet 一致：
+   * 能管理 → 全部；环境级授权 → 全部；否则数变量级授权），外加自己待审批的申请落在哪些环境上
+   */
+  private async accessResolver(user: AuthUser): Promise<(env: EnvRow, variableCount: number) => EnvAccessInfo> {
+    const now = new Date();
+    const grants = await this.db
+      .select({
+        environmentId: variableGrants.environmentId,
+        variableId: variableGrants.variableId,
+        variableEnvId: envVariables.environmentId,
+      })
+      .from(variableGrants)
+      .leftJoin(envVariables, eq(envVariables.id, variableGrants.variableId))
+      .where(
+        and(
+          eq(variableGrants.userId, user.id),
+          or(isNull(variableGrants.expiresAt), gt(variableGrants.expiresAt, now)),
+        ),
+      );
+    const envGrants = new Set<string>();
+    const varGrants = new Map<string, Set<string>>();
+    for (const g of grants) {
+      if (g.environmentId) envGrants.add(g.environmentId);
+      else if (g.variableId && g.variableEnvId) {
+        const set = varGrants.get(g.variableEnvId) ?? new Set<string>();
+        set.add(g.variableId);
+        varGrants.set(g.variableEnvId, set);
+      }
+    }
+    const pending = await this.db
+      .select({ environmentId: accessRequests.environmentId })
+      .from(accessRequests)
+      .where(and(eq(accessRequests.requesterId, user.id), eq(accessRequests.status, 'pending')));
+    const pendingEnvs = new Set(pending.map((r) => r.environmentId));
+
+    return (env, variableCount) => {
+      const pendingRequest = pendingEnvs.has(env.id);
+      if (this.canManage(env, user)) return { access: 'manage', readableCount: variableCount, pendingRequest };
+      if (envGrants.has(env.id)) return { access: 'all', readableCount: variableCount, pendingRequest };
+      const readableCount = varGrants.get(env.id)?.size ?? 0;
+      // 每个变量都单独授权过，对用户来说和环境级授权没有区别
+      const access: EnvironmentAccess =
+        readableCount === 0 ? 'none' : readableCount >= variableCount ? 'all' : 'partial';
+      return { access, readableCount, pendingRequest };
+    };
+  }
+
   // ---------- 环境 CRUD ----------
 
   /**
@@ -131,6 +181,7 @@ export class EnvsService {
       .groupBy(environments.id, users.name, users.email)
       .orderBy(asc(environments.slug));
     const links = await this.dbAssignmentLinks();
+    const accessOf = await this.accessResolver(user);
     return rows.map((r) => ({
       id: r.env.id,
       slug: r.env.slug,
@@ -143,14 +194,15 @@ export class EnvsService {
       source: r.env.source,
       dbAssignment: links.get(r.env.id) ?? null,
       variableCount: Number(r.variableCount),
+      ...accessOf(r.env, Number(r.variableCount)),
       createdAt: r.env.createdAt.toISOString(),
     }));
   }
 
   /**
-   * 清单：关键词 → 计数 → 来源筛选 → 分页（决策 39）。
-   * 先按关键词收窄、在这个集合上数两类来源各几条、最后才按 source 过滤——页签上的数字要回答
-   * 「在当前搜索下切到那个页签会有几条」，source 自己不能参与计数（与 Skill 清单的 scope 计数同一思路）
+   * 清单：关键词 → 计数 → 来源 / 范围筛选 → 分页（决策 39）。
+   * 来源（页签）与范围（全部 / 我的 / 可读取）是两个正交维度，各自的数字回答「在当前搜索和另一个维度下，
+   * 切过去会有几条」——所以每个维度只在另一个维度筛过的集合上数，自己不参与计数（与 Skill 清单的 scope 计数同一思路）
    */
   async listEnvironments(user: AuthUser, query: EnvListQuery): Promise<EnvListResult> {
     const all = await this.loadEnvironments(user);
@@ -160,9 +212,19 @@ export class EnvsService {
           `${e.slug}\n${e.name}\n${e.description}\n${e.dbAssignment?.dbName ?? ''}`.toLowerCase().includes(keyword),
         )
       : all;
+    const inScope = (e: EnvironmentInfo, scope: EnvListQuery['scope']) =>
+      scope === 'all' || (scope === 'mine' ? e.ownerId === user.id : e.access !== 'none');
+    const inSource = (e: EnvironmentInfo) => query.source === 'all' || e.source === query.source;
+
     const counts = { manual: 0, db_assignment: 0 };
-    for (const e of narrowed) counts[e.source] += 1;
-    const filtered = query.source === 'all' ? narrowed : narrowed.filter((e) => e.source === query.source);
+    for (const e of narrowed) if (inScope(e, query.scope)) counts[e.source] += 1;
+    const scopeCounts = { all: 0, mine: 0, readable: 0 };
+    for (const e of narrowed) {
+      if (!inSource(e)) continue;
+      for (const scope of ['all', 'mine', 'readable'] as const) if (inScope(e, scope)) scopeCounts[scope] += 1;
+    }
+
+    const filtered = narrowed.filter((e) => inSource(e) && inScope(e, query.scope));
     const start = (query.page - 1) * query.pageSize;
     return {
       items: filtered.slice(start, start + query.pageSize),
@@ -170,6 +232,7 @@ export class EnvsService {
       page: query.page,
       pageSize: query.pageSize,
       counts,
+      scopeCounts,
     };
   }
 
@@ -182,6 +245,7 @@ export class EnvsService {
       .from(envVariables)
       .where(eq(envVariables.environmentId, env.id));
     const links = await this.dbAssignmentLinks();
+    const accessOf = await this.accessResolver(user);
     return {
       id: env.id,
       slug: env.slug,
@@ -194,6 +258,7 @@ export class EnvsService {
       source: env.source,
       dbAssignment: links.get(env.id) ?? null,
       variableCount: Number(variableCount),
+      ...accessOf(env, Number(variableCount)),
       createdAt: env.createdAt.toISOString(),
     };
   }

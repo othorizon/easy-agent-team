@@ -38,6 +38,13 @@ export const environmentDbAssignmentSchema = z.object({
 });
 export type EnvironmentDbAssignment = z.infer<typeof environmentDbAssignmentSchema>;
 
+/**
+ * 当前用户对这个环境的读值能力（清单行右侧的状态、「可读取」筛选都看它）：
+ * manage = Owner 或管理员，全部可读也可改；all = 环境级授权；partial = 部分变量授权；none = 一个都读不了
+ */
+export const environmentAccessSchema = z.enum(['manage', 'all', 'partial', 'none']);
+export type EnvironmentAccess = z.infer<typeof environmentAccessSchema>;
+
 export const environmentSchema = z.object({
   id: z.string(),
   slug: z.string(),
@@ -51,6 +58,11 @@ export const environmentSchema = z.object({
   /** source=db_assignment 时指向生成它的分配记录；分配记录已不存在（实例被删等）时为 null */
   dbAssignment: environmentDbAssignmentSchema.nullable(),
   variableCount: z.number(),
+  access: environmentAccessSchema,
+  /** 当前用户能读值的变量数；manage / all 时等于 variableCount */
+  readableCount: z.number(),
+  /** 当前用户在这个环境上有待审批的权限申请——清单上显示「申请中」，免得重复申请 */
+  pendingRequest: z.boolean(),
   createdAt: z.string(),
 });
 export type EnvironmentInfo = z.infer<typeof environmentSchema>;
@@ -63,11 +75,16 @@ export const ENV_LIST_DEFAULT_PAGE_SIZE = 20;
 export const envListSourceSchema = z.enum(['all', 'manual', 'db_assignment']);
 export type EnvListSource = z.infer<typeof envListSourceSchema>;
 
+/** 清单按与我的关系筛选：mine = 我是 Owner；readable = 我至少能读一个变量的值（access 不是 none） */
+export const envListScopeSchema = z.enum(['all', 'mine', 'readable']);
+export type EnvListScope = z.infer<typeof envListScopeSchema>;
+
 /** GET /api/envs 的查询串（数值从 query 来，用 coerce） */
 export const envListQuerySchema = z.object({
   /** 关键词：匹配 slug / 名称 / 备注 / 关联库名，大小写不敏感 */
   q: z.string().trim().max(100).optional(),
   source: envListSourceSchema.default('all'),
+  scope: envListScopeSchema.default('all'),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(ENV_LIST_MAX_PAGE_SIZE).default(ENV_LIST_DEFAULT_PAGE_SIZE),
 });
@@ -79,10 +96,16 @@ export const envListResultSchema = z.object({
   total: z.number(),
   page: z.number(),
   pageSize: z.number(),
-  /** 两类来源各有几条：关键词已应用、source 不参与——回答「切到那个页签会有几条」 */
+  /** 两类来源各有几条：关键词与 scope 已应用、source 不参与——回答「切到那个页签会有几条」 */
   counts: z.object({
     manual: z.number(),
     db_assignment: z.number(),
+  }),
+  /** 各范围各有几条：关键词与 source 已应用、scope 不参与 */
+  scopeCounts: z.object({
+    all: z.number(),
+    mine: z.number(),
+    readable: z.number(),
   }),
 });
 export type EnvListResult = z.infer<typeof envListResultSchema>;
