@@ -33,6 +33,7 @@ import { Field } from '../components/form';
 import { PageHeader } from '../components/page-header';
 import { PAGE_SIZE_OPTIONS, Pagination } from '../components/pagination';
 import { Segmented } from '../components/segmented';
+import { Combobox } from '../components/combobox';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Tip } from '../components/ui/tooltip';
@@ -42,6 +43,7 @@ import { TableSkeleton } from '../components/ui/skeleton';
 import { Switch } from '../components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { formatDateTime, formatRelativeTime } from '../lib/format';
 import { useQueryParams } from '../lib/use-query-params';
 import { z } from '../lib/zod';
 
@@ -55,6 +57,21 @@ export function ApprovalBadge({ a }: { a: AppInfo }) {
   return <Badge variant="warning">{a.approvalRequestedAt ? '待授权 · 有部署请求' : '待授权部署'}</Badge>;
 }
 
+type AppSort = 'deployed' | 'name' | 'created';
+const SORT_OPTIONS: { value: AppSort; label: string }[] = [
+  { value: 'deployed', label: '最近部署' },
+  { value: 'name', label: '名称' },
+  { value: 'created', label: '创建时间' },
+];
+const nameCollator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+const newestFirst = (a: string | null, b: string | null) => (b ?? '').localeCompare(a ?? '');
+const APP_COMPARATORS: Record<AppSort, (a: AppInfo, b: AppInfo) => number> = {
+  // 没经平台部署过的排在最后，同为空时按创建时间新到旧
+  deployed: (a, b) => newestFirst(a.lastDeployedAt, b.lastDeployedAt) || newestFirst(a.createdAt, b.createdAt),
+  name: (a, b) => nameCollator.compare(a.name, b.name) || a.slug.localeCompare(b.slug),
+  created: (a, b) => newestFirst(a.createdAt, b.createdAt),
+};
+
 export function AppsPage() {
   const queryClient = useQueryClient();
   const location = useLocation();
@@ -63,9 +80,10 @@ export function AppsPage() {
   const isAdmin = me?.role === 'admin';
   const [creating, setCreating] = useState(false);
   const [mounting, setMounting] = useState(false);
-  const [params, setParams] = useQueryParams({ scope: 'mine', q: '', filter: 'all', page: '1', pageSize: '20' });
+  const [params, setParams] = useQueryParams({ scope: 'mine', q: '', filter: 'all', sort: 'deployed', owner: '', page: '1', pageSize: '20' });
   const scope = params.scope === 'all' ? 'all' : 'mine';
   const filter = ['ready', 'pending', 'unavailable'].includes(params.filter) ? params.filter : 'all';
+  const sort: AppSort = SORT_OPTIONS.some(o => o.value === params.sort) ? params.sort as AppSort : 'deployed';
   const requestedPage = Number(params.page);
   const pageSize = PAGE_SIZE_OPTIONS.includes(Number(params.pageSize)) ? Number(params.pageSize) : 20;
 
@@ -99,7 +117,15 @@ export function AppsPage() {
   const myApps = allApps.filter(a => a.ownerId === me?.id || a.members.some(m => m.userId === me?.id));
   const scopedApps = scope === 'mine' ? myApps : allApps;
   const matching = scopedApps.filter((a) => a.name.toLowerCase().includes(keyword) || a.slug.toLowerCase().includes(keyword));
-  const filtered = matching.filter(a => filter === 'all' || deploymentAccess(a) === filter);
+  // 所有者筛选只在「全部」里有意义；「我的」里忽略 URL 上残留的值
+  const ownerOptions = [...new Map(allApps.map(a => [a.ownerId, a.ownerName])).entries()]
+    .map(([id, name]) => ({ id, name, count: allApps.filter(a => a.ownerId === id).length }))
+    .sort((a, b) => Number(b.id === me?.id) - Number(a.id === me?.id) || nameCollator.compare(a.name, b.name));
+  const owner = scope === 'all' && ownerOptions.some(o => o.id === params.owner) ? params.owner : '';
+  const filtered = matching
+    .filter(a => (filter === 'all' || deploymentAccess(a) === filter) && (!owner || a.ownerId === owner))
+    .sort(APP_COMPARATORS[sort]);
+  const filtering = !!keyword || filter !== 'all' || !!owner;
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const page = Math.min(pageCount, Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1);
   const rows = filtered.slice((page - 1) * pageSize, page * pageSize);
@@ -144,16 +170,27 @@ export function AppsPage() {
           </div>
         </div>
         <TabsContent value={scope} className="mt-4 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-            <span>{scope === 'mine' ? '我创建或加入的应用' : '全部应用'}</span>
-            {apps.data && <span className="tabular-nums">{filtered.length} 个应用</span>}
+          <div className="flex flex-col gap-2 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+            <span>{scope === 'mine' ? '我创建或加入的应用' : '全部应用'}{apps.data && <span className="tabular-nums"> · {filtered.length} 个</span>}</span>
+            <div className="flex min-w-0 gap-2">
+              {scope === 'all' && <Combobox className="h-8 min-w-0 flex-1 text-xs sm:w-44 sm:flex-none" value={owner}
+                onChange={value => setParams({ owner: value, page: '1' })} placeholder="按所有者筛选" searchPlaceholder="搜索所有者"
+                groups={[{ options: [{ value: '', label: '全部所有者', hint: String(allApps.length) },
+                  ...ownerOptions.map(o => ({ value: o.id, label: o.id === me?.id ? `${o.name}（我）` : o.name, hint: String(o.count) }))] }]} />}
+              <Select value={sort} onValueChange={value => setParams({ sort: value, page: '1' })}>
+                <SelectTrigger className="h-8 w-36 shrink-0 text-xs" aria-label="排序方式"><span className="text-muted-foreground">排序：</span><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {SORT_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           {apps.isLoading ? <TableSkeleton /> : apps.isError ? (
             <Empty text="应用列表加载失败" action={<Button variant="outline" onClick={() => void apps.refetch()}>重试</Button>} />
           ) : rows.length === 0 ? (
             <div className="rounded-xl border bg-card"><Empty
-              text={keyword || filter !== 'all' ? '没有符合条件的应用' : scope === 'mine' ? '暂无我创建或加入的应用' : '暂无应用'}
-              action={keyword || filter !== 'all' ? <Button variant="outline" onClick={() => setParams({ q: '', filter: 'all', page: '1' })}>清除筛选</Button> : scope === 'mine' ? <Button variant="outline" onClick={() => setParams({ scope: 'all', page: '1' })}>查看全部应用</Button> : undefined}
+              text={filtering ? '没有符合条件的应用' : scope === 'mine' ? '暂无我创建或加入的应用' : '暂无应用'}
+              action={filtering ? <Button variant="outline" onClick={() => setParams({ q: '', filter: 'all', owner: '', page: '1' })}>清除筛选</Button> : scope === 'mine' ? <Button variant="outline" onClick={() => setParams({ scope: 'all', page: '1' })}>查看全部应用</Button> : undefined}
             /></div>
           ) : (
             <div className="overflow-hidden rounded-xl border bg-card">
@@ -161,7 +198,7 @@ export function AppsPage() {
                 <span>应用</span><span>仓库与分支</span><span>我的身份</span><span>部署权限</span><span />
               </div>
               <ul className="divide-y" aria-label="应用列表">
-                {rows.map(a => <AppListRow key={a.id} app={a} userId={me?.id} isAdmin={isAdmin} showOwner={scope === 'all'} from={location.pathname + location.search} />)}
+                {rows.map(a => <AppListRow key={a.id} app={a} userId={me?.id} isAdmin={isAdmin} showOwner={scope === 'all'} time={sort === 'created' ? 'created' : 'deployed'} from={location.pathname + location.search} />)}
               </ul>
             </div>
           )}
@@ -194,7 +231,7 @@ function repositoryName(raw: string): string {
   }
 }
 
-function AppListRow({ app: a, userId, isAdmin, showOwner, from }: { app: AppInfo; userId?: string; isAdmin: boolean; showOwner: boolean; from: string }) {
+function AppListRow({ app: a, userId, isAdmin, showOwner, time, from }: { app: AppInfo; userId?: string; isAdmin: boolean; showOwner: boolean; time: 'deployed' | 'created'; from: string }) {
   const mine = a.ownerId === userId;
   const joined = a.members.some(m => m.userId === userId);
   const relationship = mine ? '我创建' : joined ? '我加入' : isAdmin ? '管理员访问' : '未加入';
@@ -206,7 +243,11 @@ function AppListRow({ app: a, userId, isAdmin, showOwner, from }: { app: AppInfo
       className="group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-4 px-5 py-5 outline-none transition-colors hover:bg-muted/25 focus-visible:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_6rem_6rem_1rem] lg:gap-6 lg:py-6">
       <div className="col-span-2 min-w-0 lg:col-span-1">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5"><span className="break-words text-sm font-semibold">{a.name}</span><span className="break-all font-mono text-[10px] text-muted-foreground">{a.slug}</span></div>
-        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"><span>{a.managed ? '平台创建' : '挂载应用'}</span><span aria-hidden className="text-muted-foreground/50">·</span><span>{!a.managed ? '构建由部署后台管理' : a.buildType === 'dockerfile' ? 'Dockerfile' : a.buildType === 'static' ? '静态站点' : '构建方式待核验'}</span></div>
+        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"><span>{a.managed ? '平台创建' : '挂载应用'}</span><span aria-hidden className="text-muted-foreground/50">·</span><span>{!a.managed ? '构建由部署后台管理' : a.buildType === 'dockerfile' ? 'Dockerfile' : a.buildType === 'static' ? '静态站点' : '构建方式待核验'}</span>
+          {time === 'created'
+            ? <><span aria-hidden className="text-muted-foreground/50">·</span><Tip content={formatDateTime(a.createdAt)}><span>创建于 {formatRelativeTime(a.createdAt)}</span></Tip></>
+            : a.lastDeployedAt && <><span aria-hidden className="text-muted-foreground/50">·</span><Tip content={formatDateTime(a.lastDeployedAt)}><span>部署于 {formatRelativeTime(a.lastDeployedAt)}</span></Tip></>}
+        </div>
       </div>
       <div className="col-span-2 min-w-0 lg:col-span-1">
         <Tip content={repository}><p className="break-all font-mono text-xs text-muted-foreground lg:truncate">{repository}</p></Tip>

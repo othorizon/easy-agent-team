@@ -9,7 +9,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, max, sql } from 'drizzle-orm';
 import type {
   AppEnv,
   AppEnvChange,
@@ -32,7 +32,7 @@ import {
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
 import { DB, type Db } from '../db/db.module';
-import { appMembers, apps, users } from '../db/schema';
+import { appMembers, apps, deployments, users } from '../db/schema';
 import type { DokployClient } from './dokploy.client';
 import { DokploySettingsService } from './dokploy-settings.service';
 
@@ -106,7 +106,23 @@ export class AppsService {
     return new Map(rows.map((r) => [r.id, r.name]));
   }
 
-  async toAppInfo(row: AppRow, user: AuthUser): Promise<AppInfo> {
+  /**
+   * 最近一次经平台触发的部署时间（按 app_id 聚合，走 deployment_app_idx）。
+   * 只统计平台元数据：在部署后台侧直接触发的部署要逐个应用调接口才拿得到，清单上不做。
+   */
+  private async lastDeployedAt(appIds?: string[]): Promise<Map<string, Date>> {
+    if (appIds?.length === 0) return new Map();
+    const rows = await this.db
+      .select({ appId: deployments.appId, at: max(deployments.createdAt) })
+      .from(deployments)
+      .where(appIds ? inArray(deployments.appId, appIds) : undefined)
+      .groupBy(deployments.appId);
+    return new Map(rows.flatMap((r) => (r.at ? [[r.appId, r.at] as const] : [])));
+  }
+
+  /** lastDeployed 由清单一次性批量传入；单个应用不传时自己查 */
+  async toAppInfo(row: AppRow, user: AuthUser, lastDeployed?: Map<string, Date>): Promise<AppInfo> {
+    const deployedAt = (lastDeployed ?? (await this.lastDeployedAt([row.id]))).get(row.id);
     const names = await this.userNames([row.ownerId, row.approvedBy]);
     const members = await this.db
       .select({ userId: appMembers.userId, name: users.name })
@@ -140,13 +156,15 @@ export class AppsService {
       approvedByName: row.approvedBy ? (names.get(row.approvedBy) ?? '(已删除)') : null,
       approvedAt: row.approvedAt?.toISOString() ?? null,
       approvalRequestedAt: row.approvalRequestedAt?.toISOString() ?? null,
+      lastDeployedAt: deployedAt?.toISOString() ?? null,
       createdAt: row.createdAt.toISOString(),
     };
   }
 
   async listApps(user: AuthUser): Promise<AppInfo[]> {
     const rows = await this.db.select().from(apps).orderBy(asc(apps.slug));
-    return Promise.all(rows.map((r) => this.toAppInfo(r, user)));
+    const lastDeployed = await this.lastDeployedAt();
+    return Promise.all(rows.map((r) => this.toAppInfo(r, user, lastDeployed)));
   }
 
   private async assertSlugFree(slug: string): Promise<void> {

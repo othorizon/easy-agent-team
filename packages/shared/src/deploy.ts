@@ -279,6 +279,8 @@ export const appInfoSchema = z.object({
   approvedAt: z.string().nullable(),
   /** 最近一次因未授权被拒的部署尝试；null = 没人试过。控制台据此显示「待授权」 */
   approvalRequestedAt: z.string().nullable(),
+  /** 最近一次经平台触发部署的时间；没经平台部署过为 null（在部署后台侧直接触发的不计入） */
+  lastDeployedAt: z.string().nullable(),
   createdAt: z.string(),
 });
 export type AppInfo = z.infer<typeof appInfoSchema>;

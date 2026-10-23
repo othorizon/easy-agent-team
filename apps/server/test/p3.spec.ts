@@ -797,6 +797,19 @@ describe('部署门禁与部署记录（决策 30）', () => {
     await pool.end();
   });
 
+  it('应用清单带最近一次经平台部署的时间，没部署过的为 null', async () => {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const { rows } = await pool.query(`select a.slug, max(d.created_at) as at from app a left join deployment d on d.app_id = a.id group by a.slug`);
+    await pool.end();
+    const expected = new Map(rows.map((r: { slug: string; at: Date | null }) => [r.slug, r.at ? r.at.toISOString() : null]));
+    // 刚才那次控制台部署被挪到了 5 小时前，最近一次应是更早那条 cli 触发的
+    expect(expected.get('crm-tool')).toBeTruthy();
+    const list = await api('GET', '/api/apps', { token: ownerToken });
+    expect(list.status).toBe(200);
+    for (const app of list.body) expect(app.lastDeployedAt).toBe(expected.get(app.slug));
+    expect(list.body.some((a: { lastDeployedAt: string | null }) => a.lastDeployedAt === null)).toBe(true);
+  });
+
   it('排队阶段：从 Dokploy 的部署队列里看到自己刚触发的那次，别的应用不串味', async () => {
     mockQueue = [
       { data: { applicationId: crmAppId, titleLog: 'eat · 组员 · crm-tool', descriptionLog: `eat:${metaId}` }, state: 'waiting', timestamp: Date.now() },
