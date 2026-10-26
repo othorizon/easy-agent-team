@@ -2,6 +2,8 @@
  * Dokploy API 客户端（挂载式：平台不自建部署系统）。
  * 端点基于 Dokploy REST API（x-api-key 认证）：
  *   POST {apiUrl}/application.deploy   { applicationId, title?, description? }（决策 30）
+ *   POST {apiUrl}/application.killBuild   { applicationId } → 中断构建（⚠ 实为整台服务器 pkill，见 killBuild，决策 90）
+ *   POST {apiUrl}/application.cleanQueues { applicationId } → 撤下该应用排队中的部署（决策 90）
  *   GET  {apiUrl}/application.one?applicationId=...  → { appName }（找容器用）
  *   GET  {apiUrl}/project.all          （只读；连通性测试、应用清单、项目/环境清单都用它）
  *   GET  {apiUrl}/sshKey.allForApps    → 组织内的 SSH key（只有 id 与名字，决策 31）
@@ -157,6 +159,23 @@ export class DokployClient {
    * 防御式解析：形状对不上的条目直接跳过，不让一个异常条目毁掉整张清单。
    */
   async listApplications(): Promise<DokployApplication[]> {
+    const apps: DokployApplication[] = [];
+    for (const { raw, applicationId, projectName } of await this.projectApplications()) {
+      apps.push({
+        applicationId,
+        name: typeof raw.name === 'string' ? raw.name : applicationId,
+        appName: typeof raw.appName === 'string' ? raw.appName : '',
+        projectName,
+        description: typeof raw.description === 'string' ? raw.description : '',
+      });
+    }
+    return apps;
+  }
+
+  /** project.all 里的全部 application 行（两种挂法都认，见 listApplications），带上分组名 */
+  private async projectApplications(): Promise<
+    Array<{ raw: Record<string, unknown>; applicationId: string; projectName: string }>
+  > {
     const res = await fetch(`${this.base}/project.all`, {
       headers: this.headers(),
       signal: AbortSignal.timeout(15_000),
@@ -166,19 +185,13 @@ export class DokployClient {
     }
     const json: unknown = await res.json();
     if (!Array.isArray(json)) return [];
-    const apps: DokployApplication[] = [];
+    const out: Array<{ raw: Record<string, unknown>; applicationId: string; projectName: string }> = [];
     const collect = (list: unknown, projectName: string): void => {
       if (!Array.isArray(list)) return;
       for (const raw of list as Array<Record<string, unknown>>) {
         const applicationId = raw?.applicationId;
         if (typeof applicationId !== 'string' || applicationId === '') continue;
-        apps.push({
-          applicationId,
-          name: typeof raw.name === 'string' ? raw.name : applicationId,
-          appName: typeof raw.appName === 'string' ? raw.appName : '',
-          projectName,
-          description: typeof raw.description === 'string' ? raw.description : '',
-        });
+        out.push({ raw, applicationId, projectName });
       }
     };
     for (const project of json as DokployProjectRow[]) {
@@ -192,7 +205,7 @@ export class DokployClient {
         }
       }
     }
-    return apps;
+    return out;
   }
 
   /**
@@ -210,6 +223,39 @@ export class DokployClient {
     if (!res.ok) {
       throw new Error(`部署后台部署触发失败（HTTP ${res.status}）: ${(await res.text()).slice(0, 300)}`);
     }
+  }
+
+  // ---------- 停止部署（决策 90） ----------
+
+  /**
+   * 中断正在构建的部署。⚠ Dokploy 的实现是在应用所在服务器上执行 `pkill -2 -f "docker build"`——
+   * **不分应用**，那台服务器上此刻在构建的都会被中断（v0.30.10 真机复现过：对已经构建完的应用 A 调用，
+   * 被中断的是同一时刻正在构建的应用 B）。所以调用方必须先确认没有别的应用在构建（DeployService.stop）。
+   *
+   * 匹配的是命令行里带 `docker build` 的进程：Dokploy 把「拉代码 + 构建」拼成一条 `sh -c` 执行，
+   * 镜像构建开始前发出的信号只会被这个 shell 记下，等它手头那一步跑完才失败收场（拉代码时发的，拉完就停；
+   * 赶上 docker build 刚要启动的空档，就得等整个镜像构建跑完）——所以要重发到真正停下为止。
+   *
+   * 看着更对口的两个端点都用不上：deployment.killProcess 要构建记录上有 pid（只有定时任务才记），
+   * application.cancelDeployment 只在 Dokploy 云版可用（自托管一律回 400）。
+   */
+  async killBuild(applicationId: string): Promise<void> {
+    await this.postAction('application.killBuild', { applicationId }, '中断部署后台构建失败');
+  }
+
+  /** 撤下这个应用在部署队列里还没开始的部署（只动这个应用的，正在构建的那次不受影响） */
+  async cleanQueues(applicationId: string): Promise<void> {
+    await this.postAction('application.cleanQueues', { applicationId }, '撤下部署后台排队中的部署失败');
+  }
+
+  /**
+   * 部署后台上此刻处于「构建中」的应用（application.applicationStatus=running，队列开始处理时置上）。
+   * Dokploy 重启时只把构建记录改成 cancelled、不回改这个字段，所以它可能残留——调用方要再核对构建记录。
+   */
+  async buildingApplicationIds(): Promise<string[]> {
+    return (await this.projectApplications())
+      .filter(({ raw }) => raw.applicationStatus === 'running')
+      .map(({ applicationId }) => applicationId);
   }
 
   // ---------- 构建日志 / 运行日志（决策 28） ----------
@@ -557,6 +603,20 @@ export class DokployClient {
       return (text ? JSON.parse(text) : undefined) as T;
     } catch {
       throw new Error(`Dokploy ${endpoint} 返回格式无效`);
+    }
+  }
+
+  /** 没有响应体的写操作；端点不存在（老版本 Dokploy）单独说明，别让人以为是网络问题 */
+  private async postAction(endpoint: string, body: unknown, failNote: string): Promise<void> {
+    const res = await fetch(`${this.base}/${endpoint}`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (res.status === 404) throw new Error(`${failNote}：部署后台版本过旧，不支持该操作`);
+    if (!res.ok) {
+      throw new Error(`${failNote}（HTTP ${res.status}）: ${(await res.text()).slice(0, 300)}`);
     }
   }
 

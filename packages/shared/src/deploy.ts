@@ -343,6 +343,8 @@ export type TriggerDeployRequest = z.infer<typeof triggerDeploySchema>;
  * 另有两个平台补充的状态：
  *   queued    = 已提交给 Dokploy、还在它的部署队列里排队，构建记录尚未建出；
  *   archived  = Dokploy 已按「每个应用只留最近 10 条」把构建记录清理掉，只剩平台侧元数据。
+ * cancelled 还包括在平台上被停止的部署（决策 90）：Dokploy 把被中断的构建记成 error、
+ * 排队中撤下的没有构建记录，平台按元数据上的停止标记显示为 cancelled（platform.stoppedByName 是谁停的）。
  */
 export const deploymentStatusSchema = z.enum(['queued', 'running', 'done', 'error', 'cancelled', 'archived']);
 export type DeploymentStatus = z.infer<typeof deploymentStatusSchema>;
@@ -371,6 +373,12 @@ export const deploymentMetaSchema = z.object({
   claim: z.enum(['tagged', 'inferred', 'none']),
   /** 平台侧触发时间；Dokploy 构建记录自己的时间在外层 createdAt */
   triggeredAt: z.string(),
+  /**
+   * 谁在平台上停止了这次部署（决策 90）；没停过为 null。停止生效后外层 status 显示为 cancelled；
+   * status 仍是 running 说明停止信号已发出、构建还没停下来。
+   */
+  stoppedByName: z.string().nullable(),
+  stoppedAt: z.string().nullable(),
 });
 export type DeploymentMeta = z.infer<typeof deploymentMetaSchema>;
 
@@ -404,6 +412,23 @@ export const deploymentsQuerySchema = z.object({
     .transform((v) => v === '' || v === 'true' || v === '1'),
 });
 export type DeploymentsQuery = z.infer<typeof deploymentsQuerySchema>;
+
+/**
+ * 停止部署的结果（决策 90）。停的是「这个应用当前进行中的部署」而不是指定某一次：
+ * 部署后台一个应用同一时刻只跑一次构建，排队中的也只能按应用整体撤下。
+ *   running = 正在构建的那次怎么样了：stopped=已中断；finished=停止信号到达前已跑完（没被中断）；
+ *             still_running=信号已发出、等到超时构建仍没停（多半卡在拉代码等镜像构建之前的步骤，
+ *             通常会在当前步骤结束后失败收场，稍后再查）；none=当时没有在构建
+ *   dequeued = 从部署队列里撤下的、还没开始构建的部署数
+ */
+export const stopDeployResultSchema = z.object({
+  appSlug: z.string(),
+  running: z.enum(['stopped', 'finished', 'still_running', 'none']),
+  dequeued: z.number().int().nonnegative(),
+  /** 受影响的部署记录（停止后的最新状态） */
+  deployments: z.array(deploymentInfoSchema),
+});
+export type StopDeployResult = z.infer<typeof stopDeployResultSchema>;
 
 // ---------- 构建日志 / 运行日志（决策 28） ----------
 

@@ -1,8 +1,8 @@
 import { ResourceRequests } from '../components/resource-requests';
-import type { AppEnv, AppEnvChange, AppEnvTarget, AppInfo, BuildLogsResult, DeploymentInfo, RunLogsResult, UpdateAppRequest } from '@eat/shared';
+import type { AppEnv, AppEnvChange, AppEnvTarget, AppInfo, BuildLogsResult, DeploymentInfo, RunLogsResult, StopDeployResult, UpdateAppRequest } from '@eat/shared';
 import { APP_BUILD_TYPE_LABEL, APP_ENV_TARGET_LABEL, githubRepoWebUrl } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Check, ExternalLink, GitBranch, Pencil, Plus, RefreshCw, Rocket, Search, ShieldCheck, ShieldOff, Trash2, Users } from 'lucide-react';
+import { ArrowLeft, Check, CircleStop, ExternalLink, GitBranch, Pencil, Plus, RefreshCw, Rocket, Search, ShieldCheck, ShieldOff, Trash2, Users } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -43,13 +43,24 @@ const DEPLOYMENT_COLUMNS: DataTableColumn<DeploymentInfo>[] = [
     id: 'error',
     header: '备注',
     meta: { cellClassName: 'text-muted-foreground' },
-    cell: ({ row: { original: d } }) => (
-      <Tip content={d.error}>
-        <span className="block max-w-80 truncate">{d.error ?? '—'}</span>
-      </Tip>
-    ),
+    cell: ({ row: { original: d } }) => {
+      const note = d.error ?? stopNote(d);
+      return (
+        <Tip content={note}>
+          <span className="block max-w-80 truncate">{note ?? '—'}</span>
+        </Tip>
+      );
+    },
   },
 ];
+
+/** 在平台上停止过的部署：谁停的；信号已发出但构建还在跑时如实说明（决策 90） */
+function stopNote(d: DeploymentInfo): string | null {
+  const p = d.platform;
+  if (!p?.stoppedAt) return null;
+  if (d.status === 'running') return `${p.stoppedByName} 已请求停止，构建还没停下`;
+  return d.status === 'cancelled' ? `${p.stoppedByName} 于 ${formatDateTime(p.stoppedAt)} 手动停止` : null;
+}
 
 function OriginCell({ d }: { d: DeploymentInfo }) {
   if (!d.platform) return <Badge variant="destructive">部署后台</Badge>;
@@ -315,6 +326,7 @@ function EnvEditor({ app, initialTarget, onClose }: { app: AppInfo; initialTarge
 type LogKind = 'build' | 'run';
 
 function Deployments({ app }: { app: AppInfo }) {
+  const cache = useQueryClient();
   const [logsOf, setLogsOf] = useState<LogKind | null>(null);
   /** 默认只看 Dokploy 上还留着的（每个应用最近 10 次），打开看平台侧完整历史（决策 30） */
   const [allHistory, setAllHistory] = useState(false);
@@ -322,6 +334,28 @@ function Deployments({ app }: { app: AppInfo }) {
     queryKey: ['deployments', app.slug, allHistory],
     queryFn: () => api<DeploymentInfo[]>('GET', `/api/apps/${app.slug}/deployments${allHistory ? '?all=1' : ''}`),
     refetchInterval: 10_000,
+  });
+  const inProgress = (deployments.data ?? []).some((d) => d.status === 'queued' || d.status === 'running');
+  /** 停的是这个应用进行中的全部部署（决策 90）：服务端要等构建真正停下，可能十几秒 */
+  const stop = useMutation({
+    mutationFn: () => api<StopDeployResult>('POST', `/api/apps/${app.slug}/deploy/stop`),
+    onSuccess: (r) => {
+      if (r.running === 'still_running') {
+        toast.warning('已发出停止信号，但构建还没停下：多半还在拉取代码，通常会在当前步骤结束后失败收场，稍后再看');
+      } else {
+        const parts = [
+          r.running === 'stopped' && '已中断正在进行的构建',
+          r.running === 'finished' && '构建在停止前已经完成，没有被中断',
+          r.dequeued > 0 && `已撤下 ${r.dequeued} 次排队中的部署`,
+        ].filter(Boolean);
+        toast.success(parts.join('，'));
+      }
+      void cache.invalidateQueries({ queryKey: ['deployments', app.slug] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof ApiError ? err.message : '停止失败');
+      void cache.invalidateQueries({ queryKey: ['deployments', app.slug] });
+    },
   });
   return (
     <div>
@@ -334,6 +368,19 @@ function Deployments({ app }: { app: AppInfo }) {
           {/* 日志可能带出构建期注入的密钥，与部署同权限（服务端也这么校验） */}
           {app.isMember && (
             <>
+              {(inProgress || stop.isPending) && (
+                <Confirm
+                  title={`停止 ${app.slug} 进行中的部署？`}
+                  description="正在构建的会被中断，排队中的会被撤下；已上线的版本不受影响。需要等构建真正停下，可能要十几秒。"
+                  confirmText="停止"
+                  onConfirm={() => stop.mutate()}
+                >
+                  <Button variant="outline" size="sm" loading={stop.isPending}>
+                    {!stop.isPending && <CircleStop />}
+                    {stop.isPending ? '正在停止…' : '停止构建'}
+                  </Button>
+                </Confirm>
+              )}
               <Button variant="outline" size="sm" onClick={() => setLogsOf('build')}>
                 构建日志
               </Button>
@@ -357,6 +404,7 @@ function Deployments({ app }: { app: AppInfo }) {
             <div className="flex flex-wrap items-center justify-between gap-2">{STATUS_BADGE[d.status]}<time className="text-xs text-muted-foreground">{formatDateTime(d.createdAt)}</time></div>
             <OriginCell d={d} />
             {d.error && <p className="break-words text-xs leading-5 text-destructive">{d.error}</p>}
+            {!d.error && stopNote(d) && <p className="text-xs text-muted-foreground">{stopNote(d)}</p>}
           </article>)}
         </div>
         <div className="hidden md:block">

@@ -246,6 +246,13 @@
       "when": 1792886400001,
       "tag": "0034_environment_visibility",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1793029956025,
+      "tag": "0035_deployment_stop",
+      "breakpoints": true
     }
   ]
 }

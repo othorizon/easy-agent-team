@@ -16,6 +16,7 @@ import { WebSocketServer } from 'ws';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
 import * as schema from '../src/db/schema';
+import { DeployService } from '../src/deploy/deploy.service';
 
 let app: NestFastifyApplication;
 let adminToken: string;
@@ -91,6 +92,12 @@ let mockContainerLog = '';
 const logCalls: Array<Record<string, string>> = [];
 /** 构建记录归属的应用：crm-tool 在 Dokploy 上的 application id（由 mock 生成，建完才知道） */
 let crmAppId = '';
+/** 别的应用的构建记录（停止部署前要核对「部署后台上是不是还有别的应用在构建」，决策 90） */
+let otherBuilds: Record<string, Array<Record<string, unknown>>> = {};
+/** killBuild 被调用时怎么改构建记录：默认什么都不变（信号没生效） */
+let onKillBuild: () => void = () => {};
+/** cleanQueues 撤完队列之后再做点什么（模拟「撤的那一刻队列刚好开始处理其中一条」） */
+let onCleanQueues: () => void = () => {};
 let dokployServer: http.Server;
 let dokployWss: WebSocketServer;
 let dokployUrl: string;
@@ -189,6 +196,16 @@ beforeAll(async () => {
           case '/api/domain.update':
             dokCalls.push({ op: 'domainUpdate', body });
             return json(200, body);
+          // 两个都是空响应体（真机 v0.30.10）
+          case '/api/application.killBuild':
+            dokCalls.push({ op: 'killBuild', body });
+            onKillBuild();
+            return res.writeHead(200).end();
+          case '/api/application.cleanQueues':
+            dokCalls.push({ op: 'cleanQueues', body });
+            mockQueue = mockQueue.filter((j) => (j.data as Record<string, unknown>)?.applicationId !== body.applicationId);
+            onCleanQueues();
+            return res.writeHead(200).end();
           default:
             return res.writeHead(404).end();
         }
@@ -210,7 +227,7 @@ beforeAll(async () => {
         return json(200, mockQueue);
       case '/api/deployment.allByType':
         // 构建记录是按应用查的：mockBuilds 都属于 crm-tool，别的应用一律空清单
-        return json(200, url.searchParams.get('id') === crmAppId ? mockBuilds : []);
+        return json(200, url.searchParams.get('id') === crmAppId ? mockBuilds : (otherBuilds[url.searchParams.get('id') ?? ''] ?? []));
       case '/api/deployment.readLogs':
         logCalls.push({ kind: 'build', deploymentId: url.searchParams.get('deploymentId') ?? '', tail: url.searchParams.get('tail') ?? '' });
         // Dokploy 的 readLogs 返回的是一个 JSON 字符串，不是对象
@@ -960,6 +977,202 @@ describe('部署门禁与部署记录（决策 30）', () => {
     const row = list.body.find((d: Record<string, never>) => d.deploymentId === 'build-console-late');
     expect(row.origin).toBe('external');
     expect(row.platform).toBeNull();
+  });
+});
+
+describe('停止部署（决策 90）', () => {
+  const iso = (offsetMs = 0) => new Date(Date.now() + offsetMs).toISOString();
+  const ops = (op: string) => dokCalls.filter((c) => c.op === op);
+  /** 模拟 Dokploy：构建一结束（含被中断）就用提交信息覆盖 title/description，认领标记随之消失 */
+  const finishRunning = (status: string) => () => {
+    mockBuilds = mockBuilds.map((b) =>
+      b.status === 'running' ? { ...b, status, title: 'fix: 首页', description: 'Commit: 1c1351be' } : b,
+    );
+  };
+  const deploy = async (token: string) => (await api('POST', '/api/apps/crm-tool/deploy', { token, payload: {} })).body.platform.id as string;
+  let projectAllBackup: unknown;
+
+  beforeAll(async () => {
+    // 前面用例留下的元数据都推远，别在时间窗里抢构建记录
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    await pool.query(`update deployment set created_at = now() - interval '1 day'`);
+    await pool.end();
+    app.get(DeployService).stopTiming = { timeoutMs: 600, roundMs: 200, pollMs: 50 };
+    projectAllBackup = mockProjectAll;
+    mockBuilds = [{ deploymentId: 'build-old', title: 'Manual deployment', description: '', status: 'done', createdAt: iso(-60_000) }];
+    mockQueue = [];
+    dokCalls.length = 0;
+  });
+
+  afterAll(() => {
+    mockProjectAll = projectAllBackup;
+    otherBuilds = {};
+    onKillBuild = () => {};
+  });
+
+  it('没有进行中的部署回 409 NOTHING_TO_STOP；非成员 403；都不碰部署后台', async () => {
+    const outsider = await api('POST', '/api/apps/crm-tool/deploy/stop', { token: outsiderToken });
+    expect(outsider.status).toBe(403);
+    const nothing = await api('POST', '/api/apps/crm-tool/deploy/stop', { token: memberToken });
+    expect(nothing.status).toBe(409);
+    expect(nothing.body.error).toBe('NOTHING_TO_STOP');
+    expect(ops('killBuild')).toHaveLength(0);
+    expect(ops('cleanQueues')).toHaveLength(0);
+  });
+
+  it('正在构建的：中断后显示为「已取消」并标出是谁停的；Dokploy 事后覆盖掉标记也认得出', async () => {
+    const id = await deploy(memberToken);
+    mockBuilds = [
+      { deploymentId: 'build-stop-1', title: 'eat · 组员 · crm-tool', description: `eat:${id}`, status: 'running', createdAt: iso() },
+      ...mockBuilds,
+    ];
+    onKillBuild = finishRunning('error');
+    const r = await api('POST', '/api/apps/crm-tool/deploy/stop', { token: ownerToken });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ appSlug: 'crm-tool', running: 'stopped', dequeued: 0 });
+    expect(ops('killBuild')).toEqual([{ op: 'killBuild', body: { applicationId: crmAppId } }]);
+    expect(ops('cleanQueues')).toHaveLength(0);
+    expect(r.body.deployments).toHaveLength(1);
+    // Dokploy 把被中断的构建记成 error；平台按停止标记还原成已取消，不当成失败去读日志
+    expect(r.body.deployments[0]).toMatchObject({ deploymentId: 'build-stop-1', status: 'cancelled', error: null });
+    expect(r.body.deployments[0].platform).toMatchObject({ id, triggeredByName: '组员', stoppedByName: '应用主', claim: 'tagged' });
+    expect(r.body.deployments[0].platform.stoppedAt).toBeTruthy();
+
+    const latest = await api('GET', '/api/apps/crm-tool/deployments/latest', { token: memberToken });
+    expect(latest.body).toMatchObject({ deploymentId: 'build-stop-1', status: 'cancelled', error: null });
+    // eat deploy 是按元数据 id 轮询的，那条路径也得看到已取消
+    expect((await api('GET', `/api/apps/crm-tool/deployments/${id}`, { token: memberToken })).body.status).toBe('cancelled');
+    // 构建日志的头部也一样，别一边说已中断、一边打印「失败」
+    const logs = await api('GET', '/api/apps/crm-tool/build-logs?deploymentId=build-stop-1', { token: memberToken });
+    expect(logs.body.deployment.status).toBe('cancelled');
+    expect(logs.body.recent.find((b: { deploymentId: string }) => b.deploymentId === 'build-stop-1').status).toBe('cancelled');
+  });
+
+  it('排队中的：从队列撤下，那次部署直接显示为已取消，而不是按「刚触发不久」继续显示排队中', async () => {
+    dokCalls.length = 0;
+    const id = await deploy(memberToken);
+    mockQueue = [
+      { data: { applicationId: crmAppId, titleLog: 'eat · 组员 · crm-tool', descriptionLog: `eat:${id}` }, state: 'waiting', timestamp: Date.now() },
+      // Dokploy 侧直接触发、也在排队的：一并撤下，计数里算上，但没有平台元数据可标
+      { data: { applicationId: crmAppId, titleLog: 'Manual deployment', descriptionLog: '' }, state: 'waiting', timestamp: Date.now() },
+      { data: { applicationId: 'app-other', titleLog: '别人的应用', descriptionLog: '' }, state: 'waiting', timestamp: Date.now() },
+    ];
+    const r = await api('POST', '/api/apps/crm-tool/deploy/stop', { token: memberToken });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ running: 'none', dequeued: 2 });
+    expect(ops('cleanQueues')).toEqual([{ op: 'cleanQueues', body: { applicationId: crmAppId } }]);
+    // 没有在构建的就不发中断信号——它会波及同一台服务器上别的构建
+    expect(ops('killBuild')).toHaveLength(0);
+    // 别的应用排着的不受影响
+    expect(mockQueue).toHaveLength(1);
+    expect(r.body.deployments).toEqual([
+      expect.objectContaining({ deploymentId: null, status: 'cancelled', origin: 'platform', platform: expect.objectContaining({ id, stoppedByName: '组员' }) }),
+    ]);
+
+    const def = await api('GET', '/api/apps/crm-tool/deployments', { token: memberToken });
+    expect(def.body.find((d: { platform: { id: string } | null }) => d.platform?.id === id).status).toBe('cancelled');
+    expect(def.body.some((d: { status: string }) => d.status === 'queued')).toBe(false);
+    // 完整历史里也不能被说成「构建记录已被清理」
+    const all = await api('GET', '/api/apps/crm-tool/deployments?all=1', { token: memberToken });
+    expect(all.body.find((d: { platform: { id: string } | null }) => d.platform?.id === id).status).toBe('cancelled');
+  });
+
+  it('撤队列的那一刻其中一条刚开始构建：它不算撤下，也不标停止', async () => {
+    dokCalls.length = 0;
+    const id = await deploy(memberToken);
+    mockQueue = [
+      { data: { applicationId: crmAppId, titleLog: 'eat · 组员 · crm-tool', descriptionLog: `eat:${id}` }, state: 'waiting', timestamp: Date.now() },
+    ];
+    // cleanQueues 返回时队列已经开始处理它了：带着标记的构建记录出现（这里一出现就跑完了）
+    onCleanQueues = () => {
+      mockBuilds = [{ deploymentId: 'build-raced', title: 'eat · 组员 · crm-tool', description: `eat:${id}`, status: 'done', createdAt: iso() }, ...mockBuilds];
+    };
+    const r = await api('POST', '/api/apps/crm-tool/deploy/stop', { token: memberToken });
+    onCleanQueues = () => {};
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ running: 'none', dequeued: 0 });
+    const row = (await api('GET', `/api/apps/crm-tool/deployments/${id}`, { token: memberToken })).body;
+    expect(row).toMatchObject({ deploymentId: 'build-raced', status: 'done' });
+    expect(row.platform.stoppedAt).toBeNull();
+  });
+
+  it('部署后台还有别的应用在构建时整体拒绝、什么都不做；残留的「构建中」状态不算', async () => {
+    dokCalls.length = 0;
+    const id = await deploy(memberToken);
+    mockBuilds = [{ deploymentId: 'build-stop-2', title: 'eat', description: `eat:${id}`, status: 'running', createdAt: iso() }, ...mockBuilds];
+    mockQueue = [{ data: { applicationId: crmAppId, titleLog: 'x', descriptionLog: '' }, state: 'waiting', timestamp: Date.now() }];
+    mockProjectAll = [
+      {
+        name: '生产环境',
+        environments: [
+          {
+            name: 'production',
+            isDefault: true,
+            applications: [
+              { applicationId: crmAppId, name: 'CRM 工具', applicationStatus: 'running' },
+              { applicationId: 'app-busy', name: '别人的应用', applicationStatus: 'running' },
+            ],
+          },
+        ],
+      },
+    ];
+    otherBuilds = { 'app-busy': [{ deploymentId: 'b-busy', title: 'x', description: '', status: 'running', createdAt: iso() }] };
+    const busy = await api('POST', '/api/apps/crm-tool/deploy/stop', { token: memberToken });
+    expect(busy.status).toBe(409);
+    expect(busy.body.error).toBe('DEPLOY_BACKEND_BUSY');
+    expect(busy.body.message).not.toMatch(/dokploy/i);
+    // killBuild 是整台服务器 pkill，不能为了停自己的把别人的构建也停了；连队列也不动，免得只做一半
+    expect(ops('killBuild')).toHaveLength(0);
+    expect(ops('cleanQueues')).toHaveLength(0);
+    expect(mockQueue).toHaveLength(1);
+
+    // Dokploy 重启后 applicationStatus 会残留 running，而它最近一条构建记录早已是 cancelled：不算在构建
+    otherBuilds = { 'app-busy': [{ deploymentId: 'b-busy', title: 'x', description: '', status: 'cancelled', createdAt: iso() }] };
+    onKillBuild = finishRunning('error');
+    const ok = await api('POST', '/api/apps/crm-tool/deploy/stop', { token: memberToken });
+    expect(ok.status).toBe(200);
+    expect(ok.body).toMatchObject({ running: 'stopped', dequeued: 1 });
+    // 先撤队列再中断：反过来的话中断后队列会立刻开始跑排着的下一次
+    expect(dokCalls.map((c) => c.op)).toEqual(['cleanQueues', 'killBuild']);
+  });
+
+  it('信号没赶上、构建照样跑完：回 finished，记录仍是成功，不标停止', async () => {
+    dokCalls.length = 0;
+    const id = await deploy(memberToken);
+    mockBuilds = [{ deploymentId: 'build-stop-3', title: 'eat', description: `eat:${id}`, status: 'running', createdAt: iso() }, ...mockBuilds];
+    onKillBuild = finishRunning('done');
+    const r = await api('POST', '/api/apps/crm-tool/deploy/stop', { token: memberToken });
+    expect(r.body.running).toBe('finished');
+    expect(r.body.deployments[0]).toMatchObject({ deploymentId: 'build-stop-3', status: 'done' });
+    expect(r.body.deployments[0].platform.stoppedAt).toBeNull();
+  });
+
+  it('信号迟迟不生效：按轮重发直到超时，回 still_running；构建事后失败收场时显示为已取消', async () => {
+    dokCalls.length = 0;
+    const id = await deploy(memberToken);
+    mockBuilds = [{ deploymentId: 'build-stop-4', title: 'eat', description: `eat:${id}`, status: 'running', createdAt: iso() }, ...mockBuilds];
+    onKillBuild = () => {};
+    const r = await api('POST', '/api/apps/crm-tool/deploy/stop', { token: memberToken });
+    expect(r.body.running).toBe('still_running');
+    // 镜像构建开始前的信号只会被 shell 记下，所以要重发
+    expect(ops('killBuild').length).toBeGreaterThan(1);
+    expect(r.body.deployments[0]).toMatchObject({ deploymentId: 'build-stop-4', status: 'running' });
+    // 已经发出过信号：标上停止，界面据此显示「已请求停止」
+    expect(r.body.deployments[0].platform.stoppedByName).toBe('组员');
+
+    // shell 记下的信号让构建在当前步骤结束后失败：那是这次停止造成的
+    finishRunning('error')();
+    const one = await api('GET', `/api/apps/crm-tool/deployments/${id}`, { token: memberToken });
+    expect(one.body.status).toBe('cancelled');
+  });
+
+  it('在部署后台直接触发的构建也能停，但没有平台元数据可标，照部署后台显示为失败', async () => {
+    dokCalls.length = 0;
+    mockBuilds = [{ deploymentId: 'build-external', title: 'Manual deployment', description: '', status: 'running', createdAt: iso() }, ...mockBuilds];
+    onKillBuild = finishRunning('error');
+    const r = await api('POST', '/api/apps/crm-tool/deploy/stop', { token: memberToken });
+    expect(r.body.running).toBe('stopped');
+    expect(r.body.deployments).toEqual([expect.objectContaining({ deploymentId: 'build-external', origin: 'external', status: 'error' })]);
   });
 });
 

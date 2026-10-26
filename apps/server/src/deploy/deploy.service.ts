@@ -9,7 +9,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
 import type {
   BuildLogsResult,
   DeploymentInfo,
@@ -18,6 +18,7 @@ import type {
   DokployDeployment,
   LogsQuery,
   RunLogsResult,
+  StopDeployResult,
   TriggerDeployRequest,
 } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
@@ -61,10 +62,18 @@ const FAILURE_LOG_CHARS = 800;
 /** 构建日志接口回带多少条最近构建供切换 */
 const RECENT_BUILDS = 20;
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /** 部署触发 / 部署记录 / 日志。应用本身（配置、成员、授权、env）在 AppsService */
 @Injectable()
 export class DeployService {
   private readonly logger = new Logger(DeployService.name);
+
+  /**
+   * 停止构建时的等待节奏（决策 90）：每轮发一次中断信号、轮内按 pollMs 查构建记录，
+   * 总共最多等 timeoutMs。真机上信号生效后约 0.5 秒构建记录就变成 error。e2e 会把它调小。
+   */
+  stopTiming = { timeoutMs: 20_000, roundMs: 3_000, pollMs: 500 };
 
   constructor(
     @Inject(DB) private readonly db: Db,
@@ -75,14 +84,16 @@ export class DeployService {
 
   // ---------- 部署（决策 30：记录与状态以 Dokploy 为准，DB 只存业务元数据） ----------
 
-  private toMeta(row: MetaRow, triggeredByName: string, claim: DeploymentMeta['claim']): DeploymentMeta {
+  private toMeta(row: MetaRow, names: Map<string, string>, claim: DeploymentMeta['claim']): DeploymentMeta {
     return {
       id: row.id,
       triggeredBy: row.triggeredBy,
-      triggeredByName,
+      triggeredByName: names.get(row.triggeredBy) ?? '(已删除)',
       source: row.source,
       claim,
       triggeredAt: row.createdAt.toISOString(),
+      stoppedByName: row.stoppedAt ? ((row.stoppedBy && names.get(row.stoppedBy)) || '(已删除)') : null,
+      stoppedAt: row.stoppedAt?.toISOString() ?? null,
     };
   }
 
@@ -156,7 +167,7 @@ export class DeployService {
       title,
       error: null,
       createdAt: row.createdAt.toISOString(),
-      platform: this.toMeta(row, user.name, 'tagged'),
+      platform: this.toMeta(row, new Map([[user.id, user.name]]), 'tagged'),
     };
   }
 
@@ -232,23 +243,26 @@ export class DeployService {
       .where(eq(deployments.appId, app.id))
       .orderBy(desc(deployments.createdAt))
       .limit(all ? META_ALL_LIMIT : META_RECENT_LIMIT);
-    const names = await this.userNames(metas.map((m) => m.triggeredBy));
+    const names = await this.userNames(metas.flatMap((m) => (m.stoppedBy ? [m.triggeredBy, m.stoppedBy] : [m.triggeredBy])));
     const nameOf = (row: MetaRow): string => names.get(row.triggeredBy) ?? '(已删除)';
     const claims = await this.claimBuilds(builds, metas);
     const used = new Set([...claims.values()].map((c) => c.meta.id));
 
     const rows: DeploymentInfo[] = builds.map((b) => {
       const claim = claims.get(b.deploymentId);
+      // 在平台上停掉的构建：Dokploy 把被中断的记成 error，这里还原成「已取消」（决策 90）。
+      // 只改 error——停止信号没赶上、构建照样跑成功的，仍然是 done
+      const stopped = b.status === 'error' && !!claim?.meta.stoppedAt;
       return {
         appSlug: app.slug,
         deploymentId: b.deploymentId,
-        status: b.status,
+        status: stopped ? 'cancelled' : b.status,
         origin: claim ? 'platform' : 'external',
         title: b.title,
         // 失败详情（构建日志末尾）只在查单条时补，列表里每条都读日志太贵
-        error: b.status === 'error' ? b.errorMessage || null : null,
+        error: b.status === 'error' && !stopped ? b.errorMessage || null : null,
         createdAt: b.createdAt,
-        platform: claim ? this.toMeta(claim.meta, nameOf(claim.meta), claim.how) : null,
+        platform: claim ? this.toMeta(claim.meta, names, claim.how) : null,
       };
     });
 
@@ -259,8 +273,29 @@ export class DeployService {
       const metaId = parseDeployTag(job.description);
       if (metaId) jobByMeta.set(metaId, job);
     }
+    // 默认视图只覆盖 Dokploy 还留着的构建记录那段时间，比最早一条还早的「排队中被撤下」留给 --all
+    let oldestBuildAt = Number.POSITIVE_INFINITY;
+    for (const b of builds) oldestBuildAt = Math.min(oldestBuildAt, Date.parse(b.createdAt) || oldestBuildAt);
+    if (builds.length === 0) oldestBuildAt = Number.NEGATIVE_INFINITY;
     for (const meta of metas) {
       if (used.has(meta.id)) continue;
+      // 排队中就被停掉的（决策 90）：永远不会有构建记录，不能再按「刚触发不久」显示成排队中，
+      // 也不该在 --all 里被说成「构建记录已清理」
+      if (meta.stoppedAt && meta.dokployDeploymentId === null) {
+        if (!all && meta.createdAt.getTime() < oldestBuildAt) continue;
+        used.add(meta.id);
+        rows.push({
+          appSlug: app.slug,
+          deploymentId: null,
+          status: 'cancelled',
+          origin: 'platform',
+          title: `eat · ${nameOf(meta)} · ${app.slug}`,
+          error: null,
+          createdAt: meta.createdAt.toISOString(),
+          platform: this.toMeta(meta, names, 'none'),
+        });
+        continue;
+      }
       const job = jobByMeta.get(meta.id);
       // 认领过一次（dokploy_deployment_id 已回写）就不可能是排队中：这时构建记录不在清单里
       // 只意味着 Dokploy 把它清理掉了，那是 archived，不能靠「刚触发不久」把它退回排队中
@@ -275,7 +310,7 @@ export class DeployService {
         title: job?.title ?? `eat · ${nameOf(meta)} · ${app.slug}`,
         error: null,
         createdAt: meta.createdAt.toISOString(),
-        platform: this.toMeta(meta, nameOf(meta), job ? 'tagged' : 'none'),
+        platform: this.toMeta(meta, names, job ? 'tagged' : 'none'),
       });
     }
     // Dokploy 侧直接触发、也还在排队的
@@ -305,7 +340,7 @@ export class DeployService {
           title: '',
           error: null,
           createdAt: meta.createdAt.toISOString(),
-          platform: this.toMeta(meta, nameOf(meta), 'none'),
+          platform: this.toMeta(meta, names, 'none'),
         });
       }
     }
@@ -352,7 +387,8 @@ export class DeployService {
     for (const meta of [...metas].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())) {
       // 已经认领过一次的元数据不再参与推断：它此刻没配上构建记录只说明那条被 Dokploy 清理了，
       // 让它去认领别人的构建就成了张冠李戴——把 Dokploy 侧触发的部署显示成经平台触发的部署
-      if (used.has(meta.id) || meta.dokployDeploymentId !== null || free.length === 0) continue;
+      // 排队中就被停掉的同理（决策 90）：它永远不会有构建记录，让它参与推断只会冒认时间相近的别人的构建
+      if (used.has(meta.id) || meta.dokployDeploymentId !== null || meta.stoppedAt || free.length === 0) continue;
       const at = meta.createdAt.getTime();
       // 时间窗两头都要卡：只往后找（构建记录不可能早于触发），也不能找得太远，
       // 否则一条几天前、构建记录早被清理的元数据会去认领今天别人在 Dokploy 侧点的部署
@@ -420,6 +456,133 @@ export class DeployService {
     return `${head}，日志末尾:\n${excerpt}`;
   }
 
+  // ---------- 停止部署（决策 90） ----------
+
+  /**
+   * 停止应用当前进行中的部署：排队中的从部署队列撤下，正在构建的中断。停的是「这个应用」而不是某一次——
+   * Dokploy 一个应用同一时刻只跑一次构建，排队中的也只能按应用整体撤。与部署同权限（应用成员），
+   * 但不要求部署授权：停止只会让事情变少，没授权的应用也可能有人在部署后台直接触发了构建。
+   *
+   * 中断构建用的 killBuild 实际是整台服务器上 `pkill "docker build"`、不分应用（见 DokployClient.killBuild），
+   * 所以发信号前先确认部署后台上没有别的应用在构建，有就整体拒绝、什么都不做。
+   *
+   * 先撤队列再中断：反过来的话，中断之后队列会立刻开始处理同一应用排着的下一次，那次就撤不掉了。
+   * Dokploy 把被中断的构建记成 error、排队中撤下的根本没有构建记录，平台靠元数据上的 stopped_at
+   * 把它们显示成已取消（mergeDeployments）。在部署后台直接触发的部署没有平台元数据，停掉后照 Dokploy 显示为失败。
+   */
+  async stop(user: AuthUser, slug: string): Promise<StopDeployResult> {
+    const app = await this.apps.getApp(slug);
+    await this.apps.assertMember(app, user, '停止部署');
+    const client = await this.dokploy.client();
+    // 先合一遍清单：既为了知道什么在进行中，也趁 `eat:<id>` 标记还在把构建记录认领下来——
+    // Dokploy v0.30.5 起构建一结束（含被中断）就用提交信息覆盖 description，停完再认只能按时间猜
+    const before = await this.mergeDeployments(app, false);
+    const queued = before.filter((r) => r.status === 'queued');
+    const running = before.find((r) => r.status === 'running' && r.deploymentId);
+    if (queued.length === 0 && !running) {
+      throw new ConflictException({ error: 'NOTHING_TO_STOP', message: `应用 ${slug} 当前没有排队中或构建中的部署` });
+    }
+    if (running) await this.assertNoOtherBuilds(client, app);
+
+    const stoppedMetaIds: string[] = [];
+    let dequeued = 0;
+    if (queued.length > 0) {
+      await this.dokploy.callDokploy(() => client.cleanQueues(app.dokployApplicationId), '撤下排队中的部署失败');
+      // 撤的那一刻队列可能刚好开始处理其中一条：带着它标记的构建记录出现了，就不算撤下
+      const builds = await this.dokploy.callDokploy(() => client.listDeployments(app.dokployApplicationId), '拉取部署后台构建记录失败');
+      const started = new Set(builds.map((b) => parseDeployTag(b.description)));
+      for (const row of queued) {
+        if (row.platform && started.has(row.platform.id)) continue;
+        dequeued += 1;
+        if (row.platform) stoppedMetaIds.push(row.platform.id);
+      }
+    }
+    let outcome: StopDeployResult['running'] = 'none';
+    if (running?.deploymentId) {
+      outcome = await this.killRunningBuild(client, app, running.deploymentId);
+      // 超时还没停下的也记上：shell 已经收到信号，构建多半会在当前步骤结束后失败，那也是这次停止造成的；
+      // 显示时只把 error 还原成已取消，真跑成功了照样是 done
+      if (running.platform && outcome !== 'finished') stoppedMetaIds.push(running.platform.id);
+    }
+    if (stoppedMetaIds.length > 0) {
+      await this.db
+        .update(deployments)
+        .set({ stoppedBy: user.id, stoppedAt: new Date() })
+        .where(inArray(deployments.id, stoppedMetaIds));
+    }
+    await this.audit.record({
+      actorId: user.id,
+      actorTokenId: user.tokenId,
+      action: 'deploy.stopped',
+      targetType: 'app',
+      targetId: app.id,
+      meta: { slug, running: outcome, deploymentId: running?.deploymentId ?? null, dequeued },
+    });
+
+    const affected = new Set(stoppedMetaIds);
+    if (running?.deploymentId) affected.add(running.deploymentId);
+    const after = await this.mergeDeployments(app, true);
+    return {
+      appSlug: app.slug,
+      running: outcome,
+      dequeued,
+      deployments: after.filter(
+        (r) => (r.platform && affected.has(r.platform.id)) || (r.deploymentId && affected.has(r.deploymentId)),
+      ),
+    };
+  }
+
+  /**
+   * 按轮重发中断信号，直到这次构建离开 running 或超时。重发是必须的：Dokploy 把「拉代码 + 构建」
+   * 拼成一条 `sh -c` 跑，镜像构建开始前发出的信号只会被 shell 记下，等它手头那一步跑完才失败收场
+   * （v0.30.10 真机：拉代码时发的，拉完才停；刚拉完、docker build 还没起来时发的，120 秒的构建照样跑满）；
+   * 镜像构建开始后再发一次就会立刻中断。
+   */
+  private async killRunningBuild(client: DokployClient, app: AppRow, deploymentId: string): Promise<StopDeployResult['running']> {
+    const { timeoutMs, roundMs, pollMs } = this.stopTiming;
+    const deadline = Date.now() + timeoutMs;
+    for (let round = 0; ; round += 1) {
+      // 重发前再确认一次：等待期间别的应用可能开始构建了（构建并发调高或有多台服务器时），那就不能再发
+      if (round > 0 && (await this.otherBuildingApps(client, app)).length > 0) return 'still_running';
+      await this.dokploy.callDokploy(() => client.killBuild(app.dokployApplicationId), '中断构建失败');
+      const roundEnd = Math.min(Date.now() + roundMs, deadline);
+      do {
+        await sleep(pollMs);
+        const builds = await this.dokploy.callDokploy(() => client.listDeployments(app.dokployApplicationId), '拉取部署后台构建记录失败');
+        const status = builds.find((b) => b.deploymentId === deploymentId)?.status;
+        if (status === 'done') return 'finished';
+        if (status !== 'running') return 'stopped';
+      } while (Date.now() < roundEnd);
+      if (Date.now() >= deadline) return 'still_running';
+    }
+  }
+
+  /**
+   * 部署后台上除本应用外此刻真在构建的应用。applicationStatus 可能是 Dokploy 重启后残留的 running
+   * （它重启时只回改构建记录），所以再核对一下最近一条构建记录——真在构建的那条一定是 running。
+   */
+  private async otherBuildingApps(client: DokployClient, app: AppRow): Promise<string[]> {
+    const ids = await this.dokploy.callDokploy(() => client.buildingApplicationIds(), '拉取部署后台应用状态失败');
+    const out: string[] = [];
+    for (const id of ids) {
+      if (id === app.dokployApplicationId) continue;
+      const latest = (await this.dokploy.callDokploy(() => client.listDeployments(id), '拉取部署后台构建记录失败'))[0];
+      if (latest?.status === 'running') out.push(id);
+    }
+    return out;
+  }
+
+  private async assertNoOtherBuilds(client: DokployClient, app: AppRow): Promise<void> {
+    const others = await this.otherBuildingApps(client, app);
+    if (others.length === 0) return;
+    throw new ConflictException({
+      error: 'DEPLOY_BACKEND_BUSY',
+      message:
+        `部署后台此刻还有 ${others.length} 个其他应用在构建；中断构建的操作会把它们一起中断，所以这次没有执行任何操作。` +
+        '等它们构建完再试，或请管理员在部署后台处理',
+    });
+  }
+
   // ---------- 构建日志 / 运行日志（决策 28） ----------
 
   /** 构建日志：默认看最近一次构建，`deploymentId` 可回看指定那次。日志可能带出构建期注入的密钥，只给应用成员 */
@@ -427,7 +590,10 @@ export class DeployService {
     const app = await this.apps.getApp(slug);
     await this.apps.assertMember(app, user, '查看构建日志');
     const client = await this.dokploy.client();
-    const builds = await this.dokploy.callDokploy(() => client.listDeployments(app.dokployApplicationId), '拉取部署后台构建记录失败');
+    const raw = await this.dokploy.callDokploy(() => client.listDeployments(app.dokployApplicationId), '拉取部署后台构建记录失败');
+    // 在平台上停掉的构建 Dokploy 记的是 error：与部署记录一样显示成已取消（决策 90）
+    const stopped = await this.stoppedBuildIds(app.id, raw);
+    const builds = raw.map((b) => (b.status === 'error' && stopped.has(b.deploymentId) ? { ...b, status: 'cancelled' as const } : b));
     const target = query.deploymentId ? builds.find((b) => b.deploymentId === query.deploymentId) : builds[0];
     if (query.deploymentId && !target) {
       throw new NotFoundException({ error: 'NOT_FOUND', message: `部署后台上没有构建记录 ${query.deploymentId}` });
@@ -444,6 +610,22 @@ export class DeployService {
       meta: { deploymentId: target?.deploymentId ?? null, tail: query.tail },
     });
     return { appSlug: app.slug, deployment: target ?? null, logs, recent: builds.slice(0, RECENT_BUILDS) };
+  }
+
+  /** 这些构建记录里哪些是在平台上被停掉的（停止前已认领，元数据上回写着 dokploy_deployment_id） */
+  private async stoppedBuildIds(appId: string, builds: DokployDeployment[]): Promise<Set<string>> {
+    if (builds.length === 0) return new Set();
+    const rows = await this.db
+      .select({ id: deployments.dokployDeploymentId })
+      .from(deployments)
+      .where(
+        and(
+          eq(deployments.appId, appId),
+          inArray(deployments.dokployDeploymentId, builds.map((b) => b.deploymentId)),
+          isNotNull(deployments.stoppedAt),
+        ),
+      );
+    return new Set(rows.map((r) => r.id).filter((id): id is string => !!id));
   }
 
   /** 运行日志：默认看第一个运行中的容器，`containerId` 可指定副本 */

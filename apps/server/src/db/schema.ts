@@ -1042,6 +1042,14 @@ export const deployments = pgTable(
      * 否则下次 db:generate 会生成一条 DROP COLUMN。
      */
     report: jsonb('report').$type<Record<string, unknown>>(),
+    /**
+     * 谁、何时在平台上停止了这次部署（决策 90）。Dokploy 把被中断的构建记成 error，
+     * 排队中被撤掉的则压根没有构建记录——这两列是平台把它们显示成「已取消」的唯一依据。
+     * 停止信号发出后就写（信号到达前构建已跑完的不写）；显示时只把 error 还原成已取消，
+     * 所以信号最终没生效、构建照样成功的，仍显示为成功。
+     */
+    stoppedBy: uuid('stopped_by').references(() => users.id, { onDelete: 'set null' }),
+    stoppedAt: timestamp('stopped_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

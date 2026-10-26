@@ -414,6 +414,7 @@ sequenceDiagram
 - **部署授权**：成员自建的应用 `deployApproved=false`，首次部署（任何入口）被拒并回 `DEPLOY_NOT_APPROVED`、记下「有人试过」，管理员在控制台授权一次后永久有效（可撤销）；管理员自己建的与挂载的应用创建即视为已授权；
 - 部署操作：触发部署（CLI `eat deploy` / MCP `trigger_deploy` / 控制台「部署」按钮，三个入口门禁一致——成员资格 + 管理员部署授权；记录里的 `source` 只说明从哪触发：`cli` / `console` / `remote`）、查看部署状态与日志（映射 Dokploy API 能力）；
 - **部署记录与状态一律以 Dokploy 为准（决策 30）**：平台库只存 Dokploy 没有的业务元数据（谁触发的、从哪触发的），靠触发时写进 Dokploy 构建记录 `description` 的 `eat:<id>` 标记精确认领；**在 Dokploy 侧直接触发的部署也会被列出来并标注「绕过平台」**，绕过成员与授权门禁这件事因此变得可见；Dokploy 每个应用只保留最近 10 条构建记录，更早的历史用 `--all` 从平台元数据看；
+- **停止部署**（决策 90）：CLI `eat app stop-build <app>` / 控制台「部署记录」页的「停止构建」按钮（应用成员可用，不要求部署授权；MCP 暂不提供）。停的是应用当前进行中的全部部署——排队中的从 Dokploy 队列撤下（`application.cleanQueues`），正在构建的中断（`application.killBuild`），已上线的版本不受影响；被停掉的部署显示为「已取消」并注明是谁停的。`killBuild` 实际是整台服务器上 `pkill "docker build"`、不分应用，所以部署后台此刻还有别的应用在构建时整体拒绝（409 `DEPLOY_BACKEND_BUSY`）；
 - CLI/MCP：`eat deploy` / `trigger_deploy` 触发；`eat app status` / `get_deploy_status` 看结果（失败时 error 里已带构建日志末尾的真实报错）；`eat app build-logs` / `get_build_logs` 看构建日志，`eat app run-logs` / `get_run_logs` 看容器运行日志——AI 据此自查失败原因，不必跳去 Dokploy 控制台（决策 28）。
 
 ### 3.7.2 代码前置检查（Pre-deploy Checks）
@@ -471,6 +472,7 @@ CLI 与本机 MCP Server 同一个产物分发（平台自托管下载：类 Uni
 | `eat deploy [app] [--check <cmd>] [--dir <dir>]` | 触发部署（按应用绑定的 Git 分支构建，改动需先推送；应用需先经管理员授权一次；`--check` 为可选的本地预跑）；触发成功即进入 Dokploy 队列，随后轮询到构建结果 |
 | `eat app list / show / status / deployments` | 应用清单（成员与授权状态）、配置详情、最近一次部署状态（`--deployment <id>` 查指定那次，Dokploy 构建 id 与平台元数据 id 都认、支持 8 位前缀）、部署历史（`--all` 看平台完整历史，决策 30） |
 | `eat app build-logs / run-logs <app>` | 构建日志 / 容器运行日志（`--tail`、`--list`、`--deployment`/`--container`）（决策 28） |
+| `eat app stop-build <app>` | 停止应用进行中的部署：中断正在构建的、撤下排队中的，已上线版本不受影响；等到构建真正停下才返回（决策 90） |
 | `eat self-update` | 把 CLI 更新到平台当前分发的版本（重拉 `/install/eat.js` 覆盖本地产物，跨平台同一条命令）（决策 26） |
 | `eat db list` | 查看自己名下的数据库账号（引导用 env pull 取凭证） |
 
@@ -599,7 +601,7 @@ erDiagram
 **experience**：id, help_request_id, skill_id(沉淀生成的 skill), public(bool), granted_to_requester(bool), granted_to_helper(bool), created_by(=helper), updated_at
 
 **app**：id, slug, name, repo_url, branch, build_type(static|dockerfile|null=挂载), dockerfile, docker_context_path, publish_directory, static_spa, port(容器端口), domain(自动分配的域名，null=未分配), domain_https, dokploy_domain_id, dokploy_application_id, description, owner_id, managed(bool), deploy_approved(bool), approved_by, approved_at, approval_requested_at —— **app_member**：app_id, user_id
-**deployment**：id, app_id, triggered_by, source(cli|console|remote；remote = 云端 HTTP MCP 触发，决策 55), dokploy_deployment_id, claim(tagged|inferred), report(jsonb，**已停用**：决策 64 之前的检查报告，存量保留、不再读写), created_at（状态一律实时读 Dokploy，决策 30）
+**deployment**：id, app_id, triggered_by, source(cli|console|remote；remote = 云端 HTTP MCP 触发，决策 55), dokploy_deployment_id, claim(tagged|inferred), report(jsonb，**已停用**：决策 64 之前的检查报告，存量保留、不再读写), stopped_by, stopped_at（在平台上停止这次部署的人与时间，决策 90）, created_at（状态一律实时读 Dokploy，决策 30）
 **dokploy_setting**：id, api_url, api_token_encrypted, enabled, project_id, environment_id, ssh_key_id（自助建应用的落点，决策 31）, domain_suffix, domain_https（自动分配域名，决策 32）
 
 **ai_setting**：id, api_base_url, api_key_encrypted, model, enabled（单行系统配置，OpenAI 接口范式）
@@ -635,7 +637,7 @@ sequenceDiagram
 
 ### 6.2 部署流程
 
-`eat deploy` →（可选 `--check` 本地预跑，非零退出即终止）→ 调用平台 API → 平台依次校验成员资格、**管理员部署授权**（未授权回 `DEPLOY_NOT_APPROVED` 并记下「有人试过」，决策 31）→ 调 Dokploy API 触发部署（按应用绑定的 Git 分支构建，平台不拉代码）并落业务元数据 → 轮询状态回传。控制台「部署」按钮与远程 MCP 走同一接口，只是 `source` 记为 `console` / `remote`。部署前不做密钥扫描（决策 64）。
+`eat deploy` →（可选 `--check` 本地预跑，非零退出即终止）→ 调用平台 API → 平台依次校验成员资格、**管理员部署授权**（未授权回 `DEPLOY_NOT_APPROVED` 并记下「有人试过」，决策 31）→ 调 Dokploy API 触发部署（按应用绑定的 Git 分支构建，平台不拉代码）并落业务元数据 → 轮询状态回传。控制台「部署」按钮与远程 MCP 走同一接口，只是 `source` 记为 `console` / `remote`。部署前不做密钥扫描（决策 64）。进行中的部署可用 `eat app stop-build` 或控制台「停止构建」停止（决策 90）。
 
 ---
 
@@ -927,3 +929,15 @@ easy-agent-team/
 - **`delete` 必须 `--yes`**（同 `eat app delete`）；`update --visibility private` 后打印服务端顺带做的事（撤销授权、作废待审批申请）。
 - **MCP 本期不跟**：`run` / `--merge` / `--value-file` 都是本地概念；让 AI 经 MCP 写值意味着密钥要过一遍模型上下文，是否给远程 AI 写入能力另议。
 - CLI 升 0.12.0、指南升 39（环境变量主题补写入命令与 `--prune` 先预演的约束）。
+
+### 决策 90：支持停止部署（2026-10-26）
+
+- **入口**：CLI `eat app stop-build <app>`、控制台应用详情「部署记录」页的「停止构建」按钮（有排队中或构建中的部署时出现，带确认）；接口 `POST /api/apps/:slug/deploy/stop`。权限同查看日志——应用成员（含 Owner 与管理员）；**不要求部署授权**：停止只会让事情变少，没授权的应用也可能有人在部署后台直接触发了构建。MCP 本期不加：需求只提了 CLI 与控制台，内置指南写明「MCP 暂无对应工具」。
+- **停的是应用而不是某一次**：Dokploy 一个应用同一时刻只跑一次构建，排队中的也只能按应用整体撤，所以不接受部署 id。排队中的用 `application.cleanQueues` 撤下（只动这个应用的等待任务），正在构建的用 `application.killBuild` 中断。**先撤队列再中断**：反过来的话中断之后队列会立刻开始跑同一应用排着的下一次。
+- **Dokploy 能用的只有 `killBuild`，而它不分应用**（对 v0.30.10 源码与真机逐一核对）：`deployment.killProcess` 要构建记录上有 `pid`，只有定时任务才记；`application.cancelDeployment` 只在云版可用，自托管一律 400；`killBuild` 的实现是在应用所在服务器上 `pkill -2 -f "docker build"`。真机复现过：对已经构建完的应用 A 调用，被中断的是同一时刻在构建的应用 B。默认构建并发是每台服务器 1，此时「自己在构建」就意味着没有别人在构建；但管理员调高并发或有多台服务器时就会误伤，而成员的权限只到自己的应用。所以**发信号前先确认部署后台上没有别的应用在构建**（`project.all` 的 `applicationStatus=running`，再核对它最近一条构建记录——Dokploy 重启时只回改构建记录、不回改这个字段，残留的 running 不算），有就回 409 `DEPLOY_BACKEND_BUSY`、什么都不做（连队列也不撤，免得只做一半）。核对与发信号之间仍有极短的竞态窗口，接受。
+- **信号要重发到构建真正停下**：Dokploy 把「拉代码 + 构建」拼成一条 `sh -c` 执行，`pkill -f` 匹配到的是这个 shell 与 docker CLI；镜像构建开始前发的信号只会被 shell 记下，等它手头那一步跑完才失败收场（真机：拉代码时发的，拉完才停；刚拉完、docker build 还没起来时发的，120 秒的构建照样跑满才报错）。所以服务端每 3 秒重发一次、每 0.5 秒查一次构建记录，最多等 20 秒，结果如实回给调用方：`stopped`（已中断）/ `finished`（信号到达前已跑完，没被中断）/ `still_running`（超时仍在跑，多半卡在镜像构建之前的步骤，CLI 退出码 1）/ `none`（当时没在构建）；另回 `dequeued`（撤下的排队数）。每轮重发前再核对一次别的应用，等待期间有人开始构建就停止重发。
+- **显示为「已取消」**：Dokploy 把被中断的构建记成 `error`，排队中撤下的根本没有构建记录。平台在部署元数据上记 `stopped_by` / `stopped_at`（迁移 `0035_deployment_stop`），合成部署记录时：被认领的构建记录是 `error` 且元数据带停止标记 → `cancelled`；从未绑定构建记录且带停止标记的 → 一条 `cancelled`（不再按「刚触发不久」显示成排队中，`--all` 里也不说成「已归档」，默认视图只列 Dokploy 留存的构建记录覆盖到的那段时间）。`DeploymentMeta` 加 `stoppedByName` / `stoppedAt`，CLI 与控制台据此注明「X 于 T 手动停止」；构建日志接口返回的构建记录状态按同一规则还原，别一边说已中断、一边打印「失败」。只还原 `error`：信号没赶上、构建照样成功的仍是 `done`。超时仍在跑的那次也打上标记（shell 已收到信号，它之后的失败就是这次停止造成的），界面显示「已请求停止，构建还没停下」。
+- **两个必须记住的坑**：① 停止前先合一遍部署记录——既为判断有什么在进行中，也趁 `eat:<id>` 标记还在把构建记录认领下来（决策 31：构建一结束，含被中断，Dokploy 就用提交信息覆盖 description）；② **排队中被停掉的元数据不参与按时间推断的认领**——它永远不会有构建记录，参与推断会冒认时间相近的别人的构建（e2e 里正是这样暴露的）。撤队列的那一刻其中一条恰好开始构建的，按「构建记录上出现了它的标记」识别，不计入撤下、不打标记。
+- **局限**：在部署后台直接触发的部署（决策 30 的「绕过平台」）没有平台元数据可标，停掉后照 Dokploy 显示为「失败」，停止接口的返回里如实列出。
+- **验证**：e2e（mock Dokploy）覆盖无事可停 / 非成员 / 中断构建 / 撤队列 / 撤队列竞态 / 别的应用在构建时拒绝与残留状态不算 / 信号没赶上 / 超时重发 / 外部部署；对容器内自建的 Dokploy v0.30.10 真机跑通：`eat deploy` 轮询中被另一终端 `eat app stop-build` 停下（约 1.3 秒，轮询端打印「部署已被 X 停止」）、构建中 + 排队中一起停、拉代码阶段（Git 服务加 3 秒延迟）停止约 9 秒生效、并发调到 2 时另一个应用在构建被拒绝且两边构建都不受影响，控制台桌面 / 移动双视口 Playwright 走查。
+- CLI 升 0.13.0、指南升 40。
