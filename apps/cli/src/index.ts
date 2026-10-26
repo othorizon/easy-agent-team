@@ -28,6 +28,7 @@ import {
   appList,
   appShow,
   appStatus,
+  appStopBuild,
   appUpdate,
   buildLogs,
   deployRun,
@@ -284,6 +285,10 @@ app
   .description('应用的部署历史（默认最近 10 次构建，含绕过平台直接触发的）')
   .option('--all', '改列平台侧的完整历史，含构建记录已被清理的那些')
   .action(appDeployments);
+app
+  .command('stop-build <app>')
+  .description('停止应用进行中的部署：中断正在构建的、撤下排队中的（已上线的版本不受影响）')
+  .action(appStopBuild);
 app
   .command('build-logs <app>')
   .description('读构建日志（部署失败先看它，能看到真实报错）')

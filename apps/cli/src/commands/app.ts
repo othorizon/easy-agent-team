@@ -20,6 +20,7 @@ import type {
   CreateAppRequest,
   DeploymentInfo,
   RunLogsResult,
+  StopDeployResult,
   UpdateAppRequest,
 } from '@eat/shared';
 import { Api } from '../client.js';
@@ -99,10 +100,11 @@ export async function deployRun(slug: string | undefined, opts: { dir?: string; 
     console.error(`完整构建日志: eat app build-logs ${app.slug}`);
     process.exitCode = 1;
   } else if (dep.status === 'cancelled') {
-    console.error('部署已被取消');
+    console.error(dep.platform?.stoppedByName ? `部署已被 ${dep.platform.stoppedByName} 停止` : '部署已被取消');
     process.exitCode = 1;
   } else {
     console.log(`仍在${STATUS_LABEL[dep.status] ?? dep.status}，稍后查询: eat app status ${app.slug}`);
+    console.log(`要停止这次部署: eat app stop-build ${app.slug}`);
   }
 }
 
@@ -122,8 +124,18 @@ function printDeployment(dep: DeploymentInfo): void {
   if (dep.status === 'archived') {
     console.log('说明: 这次的构建记录已被清理（每个应用只保留最近 10 次），只剩平台侧元数据');
   }
+  const stopped = stopNote(dep);
+  if (stopped) console.log(`停止: ${stopped}`);
   if (dep.error) console.log(`原因: ${dep.error}`);
   if (dep.status === 'error') console.log(`完整构建日志: eat app build-logs ${dep.appSlug}`);
+}
+
+/** 在平台上停止过的部署：谁停的、什么时候；信号已发出但还在构建时如实说明（决策 90） */
+function stopNote(dep: DeploymentInfo): string {
+  if (!dep.platform?.stoppedAt) return '';
+  const who = `${dep.platform.stoppedByName ?? '(已删除)'} 于 ${when(dep.platform.stoppedAt)}`;
+  if (dep.status === 'running') return `${who} 请求停止，构建还没停下`;
+  return dep.status === 'cancelled' ? `${who} 手动停止` : '';
 }
 
 /** 应用最近一次部署的状态；--deployment 查指定那次（兼收 Dokploy 构建 id 与平台元数据 id，支持前缀） */
@@ -144,14 +156,38 @@ export async function appDeployments(slug: string, opts: { all?: boolean }): Pro
   }
   for (const d of rows) {
     const id = (d.deploymentId ?? d.platform?.id ?? '-').slice(0, 8);
-    const err = d.error ? ` — ${d.error.split('\n')[0]}` : '';
-    console.log(`${when(d.createdAt)}  [${STATUS_LABEL[d.status] ?? d.status}] ${id.padEnd(8)}  ${originNote(d)}${err}`);
+    const note = d.error ? d.error.split('\n')[0] : stopNote(d);
+    console.log(`${when(d.createdAt)}  [${STATUS_LABEL[d.status] ?? d.status}] ${id.padEnd(8)}  ${originNote(d)}${note ? ` — ${note}` : ''}`);
   }
   console.log(
     opts.all
       ? '\n已归档 = 构建记录已被清理，只剩平台侧元数据（谁触发的、从哪触发的）'
       : `\n共 ${rows.length} 条。每个应用只保留最近 10 次构建记录；看平台完整历史用: eat app deployments ${slug} --all`,
   );
+}
+
+/**
+ * 停止应用进行中的部署（决策 90）：排队中的撤下、正在构建的中断，已上线的版本不受影响。
+ * 停止信号要重发到构建真正停下，服务端可能要等十几秒才回。
+ */
+export async function appStopBuild(slug: string): Promise<void> {
+  const api = Api.fromSaved();
+  console.log(`停止 ${slug} 进行中的部署（可能要十几秒）...`);
+  const res = await api.request<StopDeployResult>('POST', `/api/apps/${slug}/deploy/stop`);
+  if (res.dequeued > 0) console.log(`已撤下 ${res.dequeued} 次排队中、还没开始构建的部署`);
+  const build = res.deployments.find((d) => d.deploymentId);
+  const id = build?.deploymentId ? `（构建 ${build.deploymentId}）` : '';
+  if (res.running === 'stopped') {
+    console.log(`已中断正在进行的构建${id}`);
+  } else if (res.running === 'finished') {
+    console.log(`构建在停止信号到达前已经完成${id}，没有被中断——这次的版本已经上线`);
+  } else if (res.running === 'still_running') {
+    console.error(`已发出停止信号，但构建还没停下${id}：多半还在拉代码等镜像构建之前的步骤，通常会在当前步骤结束后失败收场。`);
+    console.error(`稍后查看: eat app status ${slug}；仍在构建可再执行一次 eat app stop-build ${slug}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (res.running !== 'finished') console.log('已上线的版本不受影响。');
 }
 
 // ---------- 应用清单 / 详情 / 创建 / 更新 / 删除（决策 31） ----------

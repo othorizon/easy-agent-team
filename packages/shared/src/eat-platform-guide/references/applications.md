@@ -20,4 +20,6 @@
 
 日志读到的报错是排查依据，改完代码重新 `eat deploy` 即可；日志可能带出构建期注入的密钥，不要把整段日志贴进求助或提交里。
 
-部署状态与历史实时来自部署后台：`status` 取值是 `queued`(排队中) / `running`(构建中) / `done`(成功) / `error`(失败) / `cancelled`(已取消) / `archived`(构建记录已被清理)。`eat app deployments <slug>` 列出的是还保留着的最近 10 次构建——**其中可能有绕开平台、在部署后台直接触发的部署**（`platform` 为 null），也可能有别人从控制台按钮或远程 MCP 触发的部署（`platform.source=console` 或 `remote`），排查问题时要把它们算进来；加 `--all` 看平台侧的完整历史。
+**停止部署**：部署了错的分支、发现改动有问题，或排了一串不需要的部署时，用 `eat app stop-build <slug>`（CLI 与控制台「部署记录」页可用，MCP 暂无对应工具）——正在构建的会被中断、排队中的会被撤下，**已上线的版本不受影响**，被停掉的部署状态显示为 `cancelled`。命令要等构建真正停下，可能十几秒才返回；回报「构建还没停下」时稍后用 `eat app status` 再看，别连续重试。部署后台此刻还有其他应用在构建时会被拒绝（`DEPLOY_BACKEND_BUSY`：中断操作会波及它们），等一会儿再试或找管理员。
+
+部署状态与历史实时来自部署后台：`status` 取值是 `queued`(排队中) / `running`(构建中) / `done`(成功) / `error`(失败) / `cancelled`(已取消，含在平台上被手动停止的，`platform.stoppedByName` 是谁停的) / `archived`(构建记录已被清理)。`eat app deployments <slug>` 列出的是还保留着的最近 10 次构建——**其中可能有绕开平台、在部署后台直接触发的部署**（`platform` 为 null），也可能有别人从控制台按钮或远程 MCP 触发的部署（`platform.source=console` 或 `remote`），排查问题时要把它们算进来；加 `--all` 看平台侧的完整历史。

@@ -58,6 +58,16 @@ export class DeployController {
   }
 
   /**
+   * 停止应用当前进行中的部署（决策 90）：排队中的撤下、正在构建的中断。可能要等十几秒——
+   * 中断信号要重发到构建真正停下为止，结果里如实说明停没停下（见 DeployService.stop）。
+   */
+  @Post('apps/:slug/deploy/stop')
+  @HttpCode(200)
+  stop(@Param('slug') slug: string, @CurrentUser() user: AuthUser) {
+    return this.deploy.stop(user, slug);
+  }
+
+  /**
    * 部署历史（决策 30）：默认以 Dokploy 的构建记录为准（它只留最近 10 条），
    * `?all=1` 改以平台元数据为主干列出全部历史，含 Dokploy 已清理掉的。
    */
