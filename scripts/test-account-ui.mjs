@@ -22,18 +22,18 @@ const base = `http://127.0.0.1:${server.address().port}`;
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] });
 const errors = [];
 
-async function fixture({ requireBio = false, requireNotification = false, role = 'member', width = 1280, bio = '' } = {}) {
+async function fixture({ requireBio = false, requireNotification = false, role = 'member', width = 1280, bio = '', channel = 'webhook' } = {}) {
   const context = await browser.newContext({ viewport: { width, height: 950 } });
   const user = { id: '00000000-0000-4000-8000-000000000001', name: '测试用户', email: 'member@test.dev', role, bio, allowHelp: true };
-  const notification = { webhookUrl: '', hasWebhookSecret: false, verified: false, notifyHelp: true, notifyReply: true, notifyMention: true, notifyApprovalRequest: true, notifyApprovalResult: true };
+  const notification = { channel, connected: false, feishuApp: channel === 'app' ? { appId: 'cli_test', botName: 'EAT 通知机器人', botAvatarUrl: null, openBotUrl: 'https://applink.feishu.cn/client/bot/open?appId=cli_test', bound: false, boundAt: null, stale: false } : null, webhookUrl: '', hasWebhookSecret: false, verified: false, notifyHelp: true, notifyReply: true, notifyMention: true, notifyApprovalRequest: true, notifyApprovalResult: true };
   const settings = { enabled: true, allowedEmailSuffixes: [], requireBio, requireNotification };
   const writes = [];
   let sentUrl = '';
   const onboarding = () => ({
     requireBio: role !== 'admin' && settings.requireBio,
     requireNotification: role !== 'admin' && settings.requireNotification,
-    bioComplete: !!user.bio.trim(), notificationComplete: notification.verified,
-    required: role !== 'admin' && ((settings.requireBio && !user.bio.trim()) || (settings.requireNotification && !notification.verified)),
+    bioComplete: !!user.bio.trim(), notificationComplete: notification.connected,
+    required: role !== 'admin' && ((settings.requireBio && !user.bio.trim()) || (settings.requireNotification && !notification.connected)),
   });
   await context.addInitScript((user) => { localStorage.setItem('eat.token', 'test-token'); localStorage.setItem('eat.user', JSON.stringify(user)); }, user);
   await context.route('**/api/**', async (route) => {
@@ -45,12 +45,18 @@ async function fixture({ requireBio = false, requireNotification = false, role =
     else if (path === '/api/account') {
       if (method === 'PATCH') Object.assign(user, updateAccountSchema.parse(body));
       result = { ...user, notification, onboarding: onboarding() };
+    } else if (path === '/api/account/notification/feishu/bind-code') {
+      result = { code: 'EAT-7KQ2MX', expiresAt: new Date(Date.now() + 600000).toISOString(), ttlSeconds: 600 };
+    } else if (path === '/api/account/notification/feishu' && method === 'DELETE') {
+      Object.assign(notification.feishuApp, { bound: false, boundAt: null });
+      notification.connected = false;
+      result = notification;
     } else if (path === '/api/account/notification/code') {
       sentUrl = sendWebhookCodeSchema.parse(body).webhookUrl;
       result = { challengeId: '00000000-0000-4000-8000-000000000002', retryAfter: 60, expiresIn: 600 };
     } else if (path === '/api/account/notification/verify') {
       if (body.code !== '123456') { status = 400; result = { error: 'VERIFICATION_FAILED', message: '验证码不正确' }; }
-      else { notification.webhookUrl = sentUrl; notification.verified = true; result = notification; }
+      else { notification.webhookUrl = sentUrl; notification.verified = true; notification.connected = true; result = notification; }
     } else if (path === '/api/account/notification/preferences') {
       Object.assign(notification, (method === 'PATCH' ? patchNotificationPreferencesSchema : notificationPreferencesSchema).parse(body)); result = notification;
     } else if (path === '/api/admin/registration-settings') {
@@ -84,6 +90,74 @@ async function verify(page) {
   await page.locator('#notification-code').fill('123456');
   await page.getByRole('button', { name: '验证并启用' }).click();
 }
+async function verifyFeishuEdgeCases() {
+  const f = await fixture({ channel: 'app', width: 390 });
+  let generates = 0;
+  await f.page.route('**/api/account/notification/feishu/bind-code', async (route) => {
+    const attempt = ++generates;
+    await new Promise((r) => setTimeout(r, 600));
+    await route.fulfill({ status: attempt === 1 ? 500 : 200, contentType: 'application/json', body: JSON.stringify(attempt === 1
+      ? { message: '模拟生成失败' }
+      : { code: `EAT-TEST0${attempt}`, expiresAt: new Date(Date.now() + (attempt === 2 ? 1500 : 600000)).toISOString(), ttlSeconds: attempt === 2 ? 2 : 600 }) });
+  });
+  await f.page.goto(`${base}/account?section=notifications`);
+  await f.page.getByRole('button', { name: '绑定', exact: true }).dblclick();
+  const dialog = f.page.getByRole('dialog');
+  await dialog.getByText('验证码生成失败，请重试', { exact: true }).waitFor();
+  assert.equal(generates, 1, '双击绑定仅生成一次');
+  await dialog.getByRole('button', { name: '重试', exact: true }).dblclick();
+  assert(await dialog.getByRole('button', { name: '重新生成', exact: true }).isDisabled(), '生成期间禁用重复生成');
+  await dialog.getByLabel('绑定码', { exact: true }).waitFor();
+  assert.equal(generates, 2, '双击重试仅生成一次');
+  await dialog.getByText('验证码已过期，请重新生成', { exact: true }).waitFor();
+  assert.equal(await dialog.getByRole('button', { name: '复制', exact: true }).count(), 0, '过期验证码不可复制');
+  let polls = 0;
+  const onRequest = (request) => { if (new URL(request.url()).pathname === '/api/account') polls++; };
+  f.page.on('request', onRequest);
+  await f.page.waitForTimeout(3300);
+  assert.equal(polls, 0, '验证码过期后停止轮询');
+  f.page.off('request', onRequest);
+  await dialog.getByRole('button', { name: '重新生成', exact: true }).dblclick();
+  await dialog.getByLabel('绑定码', { exact: true }).waitFor();
+  assert.equal(generates, 3);
+  assert.equal(await dialog.getByLabel('绑定码', { exact: true }).textContent(), 'EAT-TEST03');
+  await screenshot(f.page, 'feishu-audit-recovered-390');
+  await f.page.keyboard.press('Escape');
+  await f.page.getByRole('button', { name: '绑定', exact: true }).click();
+  await dialog.getByLabel('绑定码', { exact: true }).waitFor();
+  assert.equal(generates, 3, '关闭重开不会额外生成验证码');
+  await f.context.close();
+
+  const bound = await fixture({ channel: 'app' });
+  Object.assign(bound.notification.feishuApp, { bound: true, boundAt: new Date().toISOString() });
+  bound.notification.connected = true;
+  let removals = 0;
+  await bound.page.route('**/api/account/notification/feishu', async (route) => {
+    const attempt = ++removals;
+    await new Promise((r) => setTimeout(r, 600));
+    if (attempt > 1) { Object.assign(bound.notification.feishuApp, { bound: false, boundAt: null }); bound.notification.connected = false; }
+    await route.fulfill({ status: attempt === 1 ? 500 : 200, contentType: 'application/json', body: JSON.stringify(attempt === 1 ? { message: '模拟解绑失败' } : bound.notification) });
+  });
+  await bound.page.goto(`${base}/account?section=notifications`);
+  await bound.page.getByRole('button', { name: '解绑', exact: true }).click();
+  await bound.page.getByRole('alertdialog').getByRole('button', { name: '取消', exact: true }).click();
+  assert.equal(removals, 0, '取消解绑不发送请求');
+  await bound.page.getByRole('button', { name: '解绑', exact: true }).click();
+  await bound.page.getByRole('alertdialog').getByRole('button', { name: '解绑', exact: true }).dblclick();
+  assert(await bound.page.getByRole('button', { name: '重新绑定', exact: true }).isDisabled(), '解绑请求期间不可重绑');
+  await bound.page.getByText('模拟解绑失败', { exact: true }).waitFor();
+  assert.equal(removals, 1, '双击确认仅解绑一次');
+  assert.equal(bound.notification.feishuApp.bound, true);
+  await bound.page.getByText('已绑定', { exact: true }).waitFor();
+  await bound.page.getByRole('button', { name: '解绑', exact: true }).click();
+  await bound.page.getByRole('alertdialog').getByRole('button', { name: '解绑', exact: true }).click();
+  await bound.page.getByRole('button', { name: '绑定', exact: true }).waitFor();
+  assert.equal(removals, 2);
+  assert.equal(bound.notification.feishuApp.bound, false);
+  assert.equal(bound.writes.filter((r) => r.path.endsWith('/bind-code')).length, 0);
+  await bound.context.close();
+}
+
 try {
   for (const width of [1280, 390]) {
     const f = await fixture({ width });
@@ -137,6 +211,71 @@ try {
     await f.page.locator('[data-account-panel=github]:not([hidden])').waitFor();
     await f.context.close();
   }
+  // 自建应用：进入页面不发码，弹窗按两步绑定，关闭后停止轮询，重绑保留原绑定。
+  for (const width of [1280, 390]) {
+    const f = await fixture({ width, channel: 'app' });
+    const codeRequests = () => f.writes.filter((r) => r.path.endsWith('/feishu/bind-code')).length;
+    await f.page.goto(`${base}/account`);
+    await f.page.locator('#account-name').waitFor();
+    assert.equal(codeRequests(), 0);
+    assert.equal(await f.page.getByRole('region', { name: '绑定飞书机器人' }).count(), 0);
+    await f.page.goto(`${base}/account?section=notifications`);
+    await f.page.getByRole('button', { name: '绑定', exact: true }).waitFor();
+    assert.equal(await f.page.getByLabel('绑定码', { exact: true }).count(), 0);
+    assert.equal(codeRequests(), 0);
+    await screenshot(f.page, `feishu-entry-${width}`);
+    await f.page.getByRole('button', { name: '绑定', exact: true }).click();
+    const dialog = f.page.getByRole('dialog');
+    await dialog.getByLabel('绑定码', { exact: true }).waitFor();
+    assert.equal(codeRequests(), 1);
+    const steps = dialog.getByRole('listitem');
+    assert.equal(await steps.count(), 2);
+    await steps.nth(0).getByRole('link', { name: /点击打开飞书对话/ }).waitFor();
+    await steps.nth(1).getByRole('button', { name: '复制', exact: true }).click();
+    await screenshot(f.page, `feishu-bind-dialog-${width}`);
+    assert(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth), '绑定弹窗不应横向溢出');
+    await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+    let polls = 0;
+    const onRequest = (request) => { if (new URL(request.url()).pathname === '/api/account') polls++; };
+    f.page.on('request', onRequest);
+    await f.page.waitForTimeout(3300);
+    assert.equal(polls, 0, '关闭弹窗后不应继续轮询');
+    f.page.off('request', onRequest);
+    await f.page.getByRole('button', { name: '绑定', exact: true }).click();
+    await dialog.getByLabel('绑定码', { exact: true }).waitFor();
+    assert.equal(codeRequests(), 1, '重新打开复用尚未过期的验证码');
+    Object.assign(f.notification.feishuApp, { bound: true, boundAt: new Date().toISOString() });
+    f.notification.connected = true;
+    await dialog.waitFor({ state: 'hidden' });
+    await f.page.getByRole('button', { name: '解绑', exact: true }).waitFor();
+    await screenshot(f.page, `feishu-bound-${width}`);
+    await f.page.getByRole('button', { name: '重新绑定', exact: true }).click();
+    await dialog.getByLabel('绑定码', { exact: true }).waitFor();
+    await dialog.getByText(/新账号绑定成功前，原绑定仍然有效/).waitFor();
+    await f.page.keyboard.press('Escape');
+    assert.equal(f.notification.feishuApp.bound, true);
+    assert.equal(f.writes.filter((r) => r.method === 'DELETE').length, 0);
+    await f.page.getByRole('button', { name: '重新绑定', exact: true }).click();
+    await dialog.getByLabel('绑定码', { exact: true }).waitFor();
+    f.notification.feishuApp.boundAt = new Date(Date.now() + 1000).toISOString();
+    await dialog.waitFor({ state: 'hidden' });
+    await f.page.getByRole('button', { name: '解绑', exact: true }).click();
+    await f.page.getByRole('alertdialog').getByRole('button', { name: '解绑', exact: true }).click();
+    await f.page.getByRole('button', { name: '绑定', exact: true }).waitFor();
+    assert.equal(f.notification.feishuApp.bound, false);
+    assert.equal(codeRequests(), 2, '解绑后不自动生成验证码');
+    await f.context.close();
+  }
+  await verifyFeishuEdgeCases();
+  const appCompletion = await fixture({ channel: 'app', requireNotification: true, width: 390 });
+  await appCompletion.page.goto(`${base}/help`);
+  await appCompletion.page.waitForURL('**/complete-profile?next=*');
+  await appCompletion.page.getByRole('button', { name: '绑定', exact: true }).click();
+  await appCompletion.page.getByLabel('绑定码', { exact: true }).waitFor();
+  Object.assign(appCompletion.notification.feishuApp, { bound: true, boundAt: new Date().toISOString() });
+  appCompletion.notification.connected = true;
+  await appCompletion.page.waitForURL(`${base}/help`);
+  await appCompletion.context.close();
   for (const [requireBio, requireNotification] of [[true, false], [false, true], [true, true]]) {
     const f = await fixture({ requireBio, requireNotification, width: 390 });
     await f.page.goto(`${base}/help`);
@@ -211,5 +350,5 @@ try {
   assert.equal(await admin.page.evaluate(() => JSON.parse(localStorage.getItem('eat.user')).name), '管理员修改姓名');
   await admin.context.close();
   assert.deepEqual(errors, []);
-  console.log(`用户中心、三个强制补全组合、管理员姓名与简介编辑、求助设置保存及失败恢复、表单校验和桌面/移动布局检查通过。截图：${shots}`);
+  console.log(`用户中心、飞书绑定弹窗及重复点击/失败恢复/过期、三个强制补全组合、管理员姓名与简介编辑、求助设置保存及失败恢复、表单校验和桌面/移动布局检查通过。截图：${shots}`);
 } finally { await browser.close(); await new Promise((r) => server.close(r)); }
