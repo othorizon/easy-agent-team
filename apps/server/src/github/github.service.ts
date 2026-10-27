@@ -3,10 +3,10 @@ import { and, eq, inArray, lte, sql } from 'drizzle-orm';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { GithubAccountInfo, GithubAppInfo, GithubRole } from '@eat/shared';
 import type { AuthUser } from '../auth/auth.decorators';
-import { apps, appMembers, apiTokens, users, githubAccounts, githubOauthStates, githubRepositories, githubSettings, githubTasks, githubGrants, userNotifications } from '../db/schema';
+import { apps, appMembers, apiTokens, users, githubAccounts, githubOauthStates, githubRepositories, githubSettings, githubTasks, githubGrants } from '../db/schema';
 import { encryptSecret, decryptSecret, sha256Hex } from '../common/crypto';
 import { loadConfig } from '../config';
-import { WebhookService } from '../notify/webhook.service';
+import { NotifierService } from '../notify/notifier.service';
 import { GithubStore, TaskRow, githubFullName, repositoryIdentity } from './github.store';
 import { GithubClient, GithubConfig, GithubError, GithubWaiting, roleRank } from './github.client';
 import { GithubSetupService } from './github-setup.service';
@@ -17,7 +17,7 @@ export class GithubService implements OnModuleInit, OnApplicationShutdown {
   private timer?: ReturnType<typeof setInterval>;
   private job?: Promise<void>;
   private stopped = false;
-  constructor(readonly store: GithubStore, readonly client: GithubClient, private readonly webhook: WebhookService,
+  constructor(readonly store: GithubStore, readonly client: GithubClient, private readonly notifier: NotifierService,
     private readonly setup: GithubSetupService) {}
   onModuleInit() { this.timer = setInterval(() => this.wake(), 30000); this.timer.unref(); }
   async onApplicationShutdown() { this.stopped = true; clearInterval(this.timer); await this.job; }
@@ -474,15 +474,14 @@ export class GithubService implements OnModuleInit, OnApplicationShutdown {
     if (failure) throw new GithubError(failure, retryable, retryAfter);
   }
   private async notifyFailure(task: TaskRow, message: string): Promise<string> {
-    const recipients = await this.db.select({ url: userNotifications.webhookUrl, secret: userNotifications.webhookSecretEncrypted })
-      .from(users).innerJoin(userNotifications, eq(users.id, userNotifications.userId))
-      .where(and(eq(users.role, 'admin'), eq(users.status, 'active'), sql`${userNotifications.verifiedAt} IS NOT NULL`));
-    const valid = recipients.filter(r => !!r.url);
-    if (!valid.length) return '没有管理员配置有效的飞书通知';
+    const admins = await this.db.select({ id: users.id }).from(users)
+      .where(and(eq(users.role, 'admin'), eq(users.status, 'active')));
+    const targets = (await Promise.all(admins.map(a => this.notifier.target(a.id)))).filter(t => !!t);
+    if (!targets.length) return '没有管理员配置有效的飞书通知';
     let failed = false;
     const link = `${loadConfig().publicUrl.replace(/\/$/, '')}${task.kind === 'cleanup' ? '/settings?section=github' : task.payload.appId ? '/apps' : '/users'}`;
-    for (const r of valid) {
-      try { await this.webhook.sendCardOnce(r.url!, r.secret ? decryptSecret(r.secret) : null, {
+    for (const target of targets) {
+      try { await this.notifier.sendOnce(target, {
         header: { title: { tag: 'plain_text', content: 'GitHub 操作未完成' } },
         elements: [{ tag: 'div', text: { tag: 'plain_text', content: `${task.kind} · ${task.payload.userId ?? task.payload.appId ?? '仓库撤权'}\n${message}` } },
           { tag: 'action', actions: [{ tag: 'button', text: { tag: 'plain_text', content: '查看并处理' }, url: link }] }],

@@ -5,7 +5,8 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { createUserRequestSchema, resetUserPasswordRequestSchema } from '@eat/shared';
+import { createUserRequestSchema, resetUserPasswordRequestSchema, type UserNotificationStatus } from '@eat/shared';
+import { formatDateTime } from '../lib/format';
 import { toast } from 'sonner';
 import { api, ApiError, getStoredUser, getToken, setSession } from '../api';
 import { Confirm } from '../components/confirm';
@@ -27,6 +28,28 @@ interface UserRow {
   role: 'admin' | 'member';
   status: 'active' | 'disabled';
   bio: string;
+  /** 只有管理员拿得到（决策 92） */
+  notification?: UserNotificationStatus;
+}
+
+/** 按平台当前的通知渠道展示：自建应用看飞书绑定，Webhook 看是否验证过 */
+function NotificationBadge({ status }: { status?: UserNotificationStatus }) {
+  if (!status) return null;
+  if (status.channel === 'webhook')
+    return status.webhookVerified ? <Badge variant="success">Webhook 已验证</Badge> : <Badge variant="outline">未配置</Badge>;
+  if (status.feishuApp === 'bound')
+    return (
+      <Tip content={status.feishuBoundAt ? `绑定于 ${formatDateTime(status.feishuBoundAt)}` : undefined}>
+        <Badge variant="success">已绑定</Badge>
+      </Tip>
+    );
+  if (status.feishuApp === 'stale')
+    return (
+      <Tip content="绑定的是之前的飞书应用，需要重新绑定">
+        <Badge variant="warning">需重新绑定</Badge>
+      </Tip>
+    );
+  return <Badge variant="outline">未绑定</Badge>;
 }
 
 /** 用户管理（仅管理员）：建号、改角色、禁用/启用、重置密码 */
@@ -135,6 +158,12 @@ export function UsersPage() {
       meta: { className: 'w-20' },
       cell: ({ row: { original: row } }) =>
         row.status === 'active' ? <Badge variant="success">正常</Badge> : <Badge variant="destructive">已禁用</Badge>,
+    },
+    {
+      id: 'feishu',
+      header: '飞书通知',
+      meta: { className: 'w-28', hideBelow: 'md' },
+      cell: ({ row: { original: row } }) => <NotificationBadge status={row.notification} />,
     },
     {
       id: 'github',

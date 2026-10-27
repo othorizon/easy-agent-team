@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { FeishuAppBindingInfo, NotificationChannel } from './feishu-app.js';
 
 export const bioSchema = z.string().trim().max(2000, '个人简介最多 2000 字');
 export const updateBioSchema = z.object({ bio: bioSchema });
@@ -51,9 +52,16 @@ export interface OnboardingStatus {
 export interface NotificationSettings extends NotificationPreferences {
   notifyApprovalRequest: boolean;
   notifyApprovalResult: boolean;
+  /** 平台当前的通知渠道（决策 92），由管理员选择 */
+  channel: NotificationChannel;
+  /** 当前渠道下已能收到通知 */
+  connected: boolean;
   webhookUrl: string;
   hasWebhookSecret: boolean;
+  /** Webhook 渠道已验证（与当前渠道无关） */
   verified: boolean;
+  /** 自建应用渠道的绑定状态；管理员还没配置应用时为 null */
+  feishuApp: FeishuAppBindingInfo | null;
 }
 export interface AccountInfo {
   id: string;

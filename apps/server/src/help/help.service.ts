@@ -15,7 +15,7 @@ import { isFullId, resolveShortId } from '../common/short-id';
 import { loadConfig } from '../config';
 import { DB, type Db } from '../db/db.module';
 import { experiences, helpMessages, helpRequests, skills, users } from '../db/schema';
-import { WebhookService } from '../notify/webhook.service';
+import { NotifierService } from '../notify/notifier.service';
 import { HelpersService } from './helpers.service';
 
 type HelpRow = typeof helpRequests.$inferSelect;
@@ -28,7 +28,7 @@ export class HelpService {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly helpers: HelpersService,
-    private readonly webhook: WebhookService,
+    private readonly notifier: NotifierService,
     private readonly audit: AuditService,
   ) {}
 
@@ -100,9 +100,7 @@ export class HelpService {
 
   /** 飞书卡片通知（决策 17）。按接收方的「接收求助/接收回复」开关过滤 */
   private notifyUser(userId: string, event: 'help.created' | 'help.replied', card: HelpFeishuCardInput, summary: string): void {
-    void this.helpers.webhookOf(userId, event === 'help.created' ? 'help' : 'reply').then((wh) => {
-      if (wh) this.webhook.notify(event, wh.url, wh.secret, buildHelpFeishuCard(card), summary);
-    });
+    this.notifier.notify(userId, event === 'help.created' ? 'help' : 'reply', event, buildHelpFeishuCard(card), summary);
   }
 
   async create(user: AuthUser, dto: CreateHelpRequest): Promise<HelpRequestInfo> {

@@ -3,7 +3,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import * as bcrypt from 'bcryptjs';
 import type { UpdateAccountRequest } from '@eat/shared';
 import { DB, type Db } from '../db/db.module';
-import { users, apiTokens, registrationSettings, userNotifications } from '../db/schema';
+import { users, apiTokens, registrationSettings } from '../db/schema';
 import { AuditService } from '../audit/audit.service';
 import { UserNotificationsService } from '../notify/user-notifications.service';
 import type { AuthUser } from './auth.decorators';
@@ -18,13 +18,12 @@ export class AccountService {
 
   async onboarding(user: Pick<AuthUser, 'id' | 'role'>) {
     const [settings] = await this.db.select().from(registrationSettings).limit(1);
-    const [profile] = await this.db.select({
-      bio: users.bio, webhookUrl: userNotifications.webhookUrl, verifiedAt: userNotifications.verifiedAt,
-    }).from(users).leftJoin(userNotifications, eq(userNotifications.userId, users.id)).where(eq(users.id, user.id));
+    const [profile] = await this.db.select({ bio: users.bio }).from(users).where(eq(users.id, user.id));
     const requireBio = user.role !== 'admin' && !!settings?.requireBio;
     const requireNotification = user.role !== 'admin' && !!settings?.requireNotification;
     const bioComplete = !!profile?.bio.trim();
-    const notificationComplete = !!profile?.webhookUrl && !!profile.verifiedAt;
+    // 按平台当前的通知渠道判断（决策 92）：Webhook 已验证，或已绑定当前的飞书自建应用
+    const notificationComplete = await this.notifications.connected(user.id);
     return {
       requireBio, requireNotification, bioComplete, notificationComplete,
       required: (requireBio && !bioComplete) || (requireNotification && !notificationComplete),

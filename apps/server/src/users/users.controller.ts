@@ -25,12 +25,14 @@ import {
   type CreateUserRequest,
   type ResetUserPasswordRequest,
   type UpdateUserRequest,
+  type UserNotificationStatus,
 } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import { CurrentUser, Roles, type AuthUser } from '../auth/auth.decorators';
 import { ZodValidationPipe } from '../common/zod.pipe';
 import { DB, type Db } from '../db/db.module';
-import { apiTokens, users } from '../db/schema';
+import { apiTokens, feishuBindings, userNotifications, users } from '../db/schema';
+import { FeishuAppService } from '../notify/feishu/feishu-app.service';
 import { LlmGatewayService } from '../llm-gateway/llm-gateway.service';
 
 @Controller('api/users')
@@ -42,15 +44,36 @@ export class UsersController {
     private readonly oss: OssService,
     private readonly github: GithubStore,
     private readonly githubService: GithubService,
+    private readonly feishu: FeishuAppService,
   ) {}
 
-  /** 用户列表（登录即可见——授权、求助都需要选人） */
+  /** 用户列表（登录即可见——授权、求助都需要选人）。管理员额外看到每人的通知状态（决策 92） */
   @Get()
-  list() {
-    return this.db
-      .select({ id: users.id, name: users.name, email: users.email, role: users.role, status: users.status, bio: users.bio })
+  async list(@CurrentUser() actor: AuthUser) {
+    const rows = await this.db
+      .select({
+        id: users.id, name: users.name, email: users.email, role: users.role, status: users.status, bio: users.bio,
+        webhookUrl: userNotifications.webhookUrl, verifiedAt: userNotifications.verifiedAt,
+        feishuAppId: feishuBindings.appId, feishuBoundAt: feishuBindings.boundAt,
+      })
       .from(users)
+      .leftJoin(userNotifications, eq(userNotifications.userId, users.id))
+      .leftJoin(feishuBindings, eq(feishuBindings.userId, users.id))
       .orderBy(asc(users.createdAt));
+    const feishu = actor.role === 'admin' ? await this.feishu.row() : null;
+    return rows.map(({ webhookUrl, verifiedAt, feishuAppId, feishuBoundAt, ...user }) => {
+      if (!feishu) return user;
+      const webhookVerified = !!webhookUrl && !!verifiedAt;
+      const app = !feishuAppId ? 'none' : feishuAppId === feishu.appId ? 'bound' : 'stale';
+      const notification: UserNotificationStatus = {
+        channel: feishu.channel,
+        connected: feishu.channel === 'app' ? app === 'bound' : webhookVerified,
+        webhookVerified,
+        feishuApp: app,
+        feishuBoundAt: app === 'bound' && feishuBoundAt ? feishuBoundAt.toISOString() : null,
+      };
+      return { ...user, notification };
+    });
   }
 
   /** 创建用户（仅管理员） */

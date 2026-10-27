@@ -44,7 +44,7 @@ function RegistrationForm({ settings }: { settings: RegistrationSettings }) {
         <Field label="强制填写个人简介" hint="未填写时跳转到独立补全页。个人简介会用于 AI 查询用户。">
           <Switch aria-label="强制填写个人简介" checked={values.requireBio} onCheckedChange={(requireBio) => setValues((v) => ({ ...v, requireBio }))} />
         </Field>
-        <Field label="强制配置飞书通知" hint="必须通过飞书群验证码验证；仅填写 Webhook 地址不算完成。">
+        <Field label="强制配置飞书通知" hint="按当前通知渠道判断：Webhook 渠道须通过飞书群验证码验证，自建应用渠道须私聊机器人完成绑定。">
           <Switch aria-label="强制配置飞书通知" checked={values.requireNotification} onCheckedChange={(requireNotification) => setValues((v) => ({ ...v, requireNotification }))} />
         </Field>
       </div>

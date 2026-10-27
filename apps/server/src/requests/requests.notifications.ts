@@ -7,6 +7,9 @@ import { decryptSecret } from '../common/crypto';
 import { loadConfig } from '../config';
 import { RequestsService } from './requests.service';
 import { createRequestActionToken } from './request-action-link';
+import { FeishuAppService } from '../notify/feishu/feishu-app.service';
+import { ApprovalCards } from './approval-cards.service';
+import { approvalCardState, buildApprovalCard } from './approval-card';
 
 /** Durable notification outbox; processing never blocks or rolls back approval. */
 @Injectable()
@@ -18,6 +21,8 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly webhook: WebhookService,
     private readonly requests: RequestsService,
+    private readonly feishu: FeishuAppService,
+    private readonly cards: ApprovalCards,
   ) {}
   onModuleInit() {
     this.timer = setInterval(() => void this.tick(), 30_000);
@@ -32,6 +37,8 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
     try {
       await this.requests.reconcile();
       for (let i = 0; i < 20; i++) if (!(await this.next())) break;
+      // 申请状态变了（网页审批、撤回、失效、开通完成）的审批卡片在这里回写
+      await this.cards.sync();
     } catch (e) {
       this.logger.warn(`审批通知处理失败：${(e as Error).message}`);
     } finally {
@@ -70,12 +77,17 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
         await c.query('COMMIT');
         return true;
       }
+      // 渠道是平台级单选（决策 92）：自建应用渠道只认绑定了当前应用的成员
+      const feishu = await this.feishu.row();
+      const app = feishu.channel === 'app' && feishu.appId ? this.feishu.client(feishu) : null;
+      const appMode = feishu.channel === 'app';
       const { rows: subscribers } = await c.query(
-        `SELECT u.id,n.webhook_url,n.webhook_secret_encrypted,n.verified_at FROM "user" u
+        `SELECT u.id,n.webhook_url,n.webhook_secret_encrypted,n.verified_at,b.open_id FROM "user" u
         LEFT JOIN user_notification n ON n.user_id=u.id
+        LEFT JOIN feishu_binding b ON b.user_id=u.id AND b.app_id=$4
         WHERE u.status='active' AND coalesce(n.${submitted ? 'notify_approval_request' : 'notify_approval_result'},true)
         AND $1::uuid IS NOT NULL AND ${submitted ? `(u.role='admin' OR u.id=CASE $2 WHEN 'env' THEN (SELECT owner_id FROM environment WHERE id=$3) WHEN 'mcp' THEN (SELECT owner_id FROM mcp_config WHERE id=$3) ELSE NULL END)` : `u.id=$1 AND $2::text IS NOT NULL AND $3::uuid IS NOT NULL`}`,
-        [r.requester_id, r.type, r.resource_id],
+        [r.requester_id, r.type, r.resource_id, feishu.appId],
       );
       // Opting out is intentional, not a delivery failure. Recheck on every retry.
       if (!subscribers.length) {
@@ -86,13 +98,36 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
         await c.query('COMMIT');
         return true;
       }
-      const recipients = subscribers.filter((u) => u.webhook_url && u.verified_at);
+      const recipients = subscribers.filter((u) => (appMode ? app && u.open_id : u.webhook_url && u.verified_at));
       let error: string | null = recipients.length
         ? null
-        : '没有可用的已验证飞书通知渠道，请在页面查看处理结果';
+        : appMode
+          ? '没有成员绑定飞书自建应用，请在页面查看处理结果'
+          : '没有可用的已验证飞书通知渠道，请在页面查看处理结果';
       const sent: string[] = event.sent_to ?? [];
       for (const recipient of recipients) {
         if (sent.includes(recipient.id)) continue;
+        if (app) {
+          try {
+            // 自建应用渠道：审批人收到可直接同意 / 驳回的卡片，并记下来供状态变化后回写
+            const card = buildApprovalCard(r, {
+              view: submitted ? 'pending' : 'result',
+              audience: submitted ? 'approver' : 'requester',
+              detailUrl: this.cards.detailUrl(r.id),
+            });
+            const messageId = await app.sendCard(recipient.open_id, card);
+            if (submitted) {
+              await c.query(
+                'INSERT INTO feishu_card(app_id,message_id,user_id,request_id,state) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',
+                [app.appId, messageId, recipient.id, r.id, approvalCardState(r)],
+              );
+            }
+            sent.push(recipient.id);
+          } catch {
+            error = '飞书通知投递失败，审批结果已保存，请在页面查看';
+          }
+          continue;
+        }
         try {
           const url = new URL(`/requests?request=${r.id}`, loadConfig().publicUrl).toString();
           const approveUrl = new URL(`/requests/${r.id}/approve`, loadConfig().publicUrl);

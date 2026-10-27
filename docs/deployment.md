@@ -17,7 +17,7 @@
 |---|---|---|
 | `DATABASE_URL` | ✅ | 如 `postgres://eat:密码@db-host:5432/eat` |
 | `EAT_KEK` | ✅（生产） | 值加密主密钥，base64 的 32 字节。生成：`openssl rand -base64 32`。**丢失后所有密文（环境变量值、各类 token）不可恢复，务必在密码管理器中备份** |
-| `EAT_PUBLIC_URL` | ✅ | 平台对外地址（如 `https://eat.example.com`），用于设备码授权页与 webhook 链接拼接 |
+| `EAT_PUBLIC_URL` | ✅ | 平台对外地址（如 `https://eat.example.com`），用于设备码授权页与 webhook 链接拼接；启用飞书自建应用通知时还是飞书事件与回调的请求地址（`/api/feishu/callback`），须公网可达 |
 | `PORT` | | 默认 3000 |
 | `EAT_ADMIN_EMAIL` / `EAT_ADMIN_PASSWORD` | 建议 | 首次种子创建的管理员账号（默认 `admin@example.com` / `admin12345`，生产务必显式设置） |
 | `EAT_SKIP_SEED` | | 设为 `1` 跳过启动种子 |
