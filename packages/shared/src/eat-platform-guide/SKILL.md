@@ -15,7 +15,7 @@ EAT（easy-agent-team）统一管理团队资源、权限与审计。终端可�
 |---|---|---|
 | 登录、区分凭证，或查询审批进度与驳回理由 | [身份、登录与申请](references/access.md) | 区分 EAT、HTTP MCP、模型 Key；用 `eat requests` / `list_requests` 查看历次申请，按驳回原因修改后再提交 |
 | 获取配置、密钥、连接串或申请权限；建环境、写入变量 | [环境变量](references/environment.md) | 先查清单，按需取值；无权限走申请；写入只在用户要求时，`--prune` 先预演 |
-| 为自己的应用申请数据库、取它的连接凭证 | [数据库](references/databases.md) | 先看已有分配，再按需申请独立账号；凭证用 `eat db credentials pull|run` 取，不在环境变量里 |
+| 为自己的应用申请数据库、取它的连接凭证 | [数据库](references/databases.md) | 先看已有分配，再按需申请独立账号；凭证用 `eat db credentials pull` / `run` 取，不在环境变量里 |
 | 申请文件存储、读取 OSS 凭证或修改公开读 | [OSS 对象存储](references/oss.md) | 先审批；用户共用 AK/SK；区分目录公开读与 CDN |
 | 申请模型 Key、查询额度、编写模型调用代码 | [LLM API](references/llm-api.md) | 个人 Key、可用模型及 New API 官方调用文档 |
 | 创建应用、配置 env、部署或排查服务 | [应用与部署](references/applications.md) | Git 源、整体 env 覆盖、部署授权与日志 |

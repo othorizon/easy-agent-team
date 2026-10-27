@@ -1,5 +1,7 @@
 # 环境变量与权限申请
 
+自己申请的数据库（`eat db request` 建的库）的连接凭证**不在环境变量里**，按[数据库](databases.md)用 `eat db credentials` 取；这里管的是团队共享的配置与密钥（含别人业务库的只读连接信息）。
+
 1. 先看清单认路：MCP 工具 `list_env_variables`（或 `eat env list`）。每个变量都带备注说明用途，先确认目标再取值，不要盲目拉全量。
 2. 取值：`get_env_values`（或 `eat env pull <环境> --keys KEY1,KEY2`）。**`eat env pull` 会往本地写 `.env`**：同名文件不是 eat 写的时会直接中止报错——那是用户自己维护的文件，覆盖了就没了。按报错里的出路走：`--merge` 合并进去（只改同名 key、追加新 key，其余原样保留）、`--out <别的文件>` 写到别处、`--print` 只打印不落盘；**不要习惯性加 `--force`**，确实该覆盖再加（会先自动备份）。
    只是要让一条命令用上这些值时，优先 `eat env run <环境>[,<环境>...] -- <命令>`：值只注入子进程、不落盘。导出到当前 shell：`eval "$(eat env pull <环境> --print --format shell)"`。

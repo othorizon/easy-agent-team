@@ -163,7 +163,7 @@ flowchart TB
 |---|---|
 | 实例登记 | 管理员登记团队数据库实例，管理员凭证加密存储 |
 | 真实建库建号 | 成员申请 → 审批 → 平台在实例上实际创建数据库与专属账号并授权（PostgreSQL） |
-| 凭证下发 | 密码加密存在分配记录上，只有申请人与管理员可在数据库页查看或用 `eat db credentials pull|run <库名>` 写进本地 `.env` / 注入命令（MCP: `get_db_credentials`），每次读取记审计；不进环境变量 |
+| 凭证下发 | 密码加密存在分配记录上，只有申请人与管理员可在数据库页查看或用 `eat db credentials pull <库名>` 写进本地 `.env`、`eat db credentials run <库名> -- <命令>` 注入命令（MCP: `get_db_credentials`），每次读取记审计；不进环境变量 |
 
 ### 部署托管（Dokploy）
 
