@@ -228,12 +228,12 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
       ├── 是否敏感（默认：敏感；见下）
       ├── 备注（这个变量的作用，AI 会读）
       ├── 授权名单（哪些用户可读取值——敏感与否都适用）
-      └── 未授权成员可见（默认开：只见变量名与备注、看不到值；关闭则完全隐藏，连存在都不知道。数据库分配生成的凭证环境例外，整组默认关——§10 决策 39）
+      └── 未授权成员可见（默认开：只见变量名与备注、看不到值；关闭则完全隐藏，连存在都不知道）
 ```
 
 - 环境示例：`公司内部服务`、`测试数据库`、`第三方 SaaS`；
 - 环境有 Owner（创建者），Owner 和 Admin 可管理环境（编辑名称/备注、删除）与变量、授权；Owner 的权限不来自授权名单——控制台环境详情页在授权名单上方有一张 Owner 卡片把这层关系说清楚（§10 决策 39）；
-- 环境有**来源**（`source`：手工创建 `manual` / 数据库分配生成 `db_assignment`），控制台清单按来源分「常规 / 数据库」两个页签，默认常规；清单接口 `GET /api/envs` 为分页信封 `{items,total,page,pageSize,counts}` + `q`/`source` 筛选，单个环境走 `GET /api/envs/:slug`（§10 决策 39）；清单另有「全部 / 我的 / 可读取」范围筛选（`scope` + `scopeCounts`），每行标注当前用户的读取状态（可管理 / 全部可读 / 部分可读 / 申请中 / 未授权，`access` / `readableCount` / `pendingRequest`，§10 决策 88）；
+- 清单接口 `GET /api/envs` 为分页信封 `{items,total,page,pageSize,scopeCounts}` + `q` 筛选，单个环境走 `GET /api/envs/:slug`（§10 决策 39）；数据库凭证不进环境（§10 决策 91），原来的「来源」维度（`source` / 「常规 / 数据库」页签 / `counts`）随之撤掉；清单有「全部 / 我的 / 可读取」范围筛选（`scope` + `scopeCounts`），每行标注当前用户的读取状态（可管理 / 全部可读 / 部分可读 / 申请中 / 未授权，`access` / `readableCount` / `pendingRequest`，§10 决策 88）；
 - CLI 可以直接建环境、写变量（`eat env create / update / delete / set / unset / push`），以环境变量的形式使用值（`eat env run`、`eat env pull --print --format shell`）、合并进本地 `.env`（`eat env pull --merge`）（§10 决策 89）；更新变量时**没传的元信息保持原值**（备注 / 敏感标记 / 未授权可见，新增时才取默认），传入的值与现值相同不递增版本；
 - 更新变量时 `value` 可缺省 = 保持当前值、版本不递增，只改备注 / 可见性 / 敏感标记——敏感变量的值控制台本就拿不到，不能逼着重填；有管理权者（Owner / 管理员）可在控制台点「眼睛」临时查看敏感值，走的就是正式拉取接口、照常落 `secret.read` 审计（§10 决策 39）；
 - **非敏感变量**（§10 决策 23）：服务地址、端口这类配置可标记为非敏感——**只改变存储与展示、不改变授权模型**：值明文存储（`value_plain`），**有读取权限者**在清单里直接看到明文值（控制台明文展示可复制、CLI/MCP 清单含 `value`），无需再走「拉取」；无权限者与敏感变量一样只见 key+备注、取值需申请授权。非敏感值读取不落审计、不进密钥指纹清单。敏感性可在更新时切换。
@@ -289,11 +289,11 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 1. 管理员登记实例（类型、连接地址、管理凭证——凭证同样加密存储）；
 2. 成员发起「数据库申请」（选实例、填项目名和用途）或由管理员直接分配；
 3. 平台在实例上自动执行：建库 + 建账号 + 授权（也支持纯手工登记模式，兼容不能自动执行的场景）——PostgreSQL 建完库还要**把库里的 `public` schema 归到分配账号名下**，`CREATE DATABASE ... OWNER` 不管这件事（§10 决策 53）；
-4. **分配结果自动生成为一个环境（或环境变量组）**：`DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD`，Owner = 申请人、整组默认仅授权给申请人——其中**仅 `DB_PASSWORD` 为敏感**（加密存储、读取落审计），主机/端口/库名/账号为非敏感明文存储、有权限者平台明文可见（§10 决策 23）；整组变量默认**对未授权成员完全隐藏**（`visible_without_permission=false`，§10 决策 39）——这是某个人的项目库凭证，不是团队公共配置，别人的清单里不该出现；数据库账号的下发、拉取、审计**完全复用环境变量体系**；环境与分配记录**互相回指**（`db_assignment.environment_id` 反查得到环境的 `dbAssignment`），控制台环境详情页可跳到分配详情、分配详情页可跳到凭证环境；
-5. **共用给其他成员 = 普通的环境授权**：Owner 可整环境授权他人（可设有效期），也可把变量改成「未授权成员可见」让 AI 经 `eat env list`/MCP 清单发现后自助申请；项目 skill 里可写明"连接信息从环境 xxx 拉取"作为引导，但凭证永远不进 skill 内容，只走环境变量通道；
-6. 支持回收：禁用账号（可恢复）；删除分配为**仅记录级软删除**（§10 决策 13）——删除平台记录与凭证环境，实例上的库与账号**不做物理删除**，控制台二次确认时明确提示「只能到数据库实例上手动删除」；已删除（status=deleted）的分配**不再出现在任何列表**，记录仅留库内供审计（§10 决策 23）。
+4. **凭证存在分配记录上，只在数据库这里取**（§10 决策 91）：批准时生成的密码加密存进 `db_assignment.password_encrypted`，主机 / 端口取实例、库名 / 账号取分配记录；**不生成环境变量**。读取入口：控制台分配详情页「连接凭证」卡片（点「查看」才取密码，可复制连接串与整段 `.env`）、CLI `eat db pull <库名>`（落盘规则同 `eat env pull`：默认写 `./.env`、`--merge` / `--print` / `--format`）、MCP `get_db_credentials`；接口 `POST /api/db/assignments/:id/credentials`（no-store），**只有申请人与管理员能读**，每次读取落 `db_credentials.read` 审计；输出变量名沿用 `DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD`，另加 `DATABASE_URL`；
+5. **不提供共享给其他成员的授权**：这是某个人的项目库账号，与 OSS 的个人 AK/SK 同一性质（§10 决策 91）；同事要用由申请人自行转交，或各自申请；
+6. 支持回收：禁用账号（可恢复，禁用期间不给凭证）；删除分配为**仅记录级软删除**（§10 决策 13）——删除平台记录并清掉平台上存的密码，实例上的库与账号**不做物理删除**，控制台二次确认时明确提示「只能到数据库实例上手动删除」；已删除（status=deleted）的分配**不再出现在任何列表**，记录仅留库内供审计（§10 决策 23）。
 
-💡 设计说明：「分配结果 = 一组环境变量」是关键复用点：不为数据库账号单独造一套拉取/授权/审计通道。
+💡 设计说明：最初的设计是「分配结果 = 一组环境变量」，复用环境变量的拉取 / 授权 / 审计通道（决策 39 及以前）；决策 91 撤掉了这层复用——申请来的库凭证混在团队的环境清单里、能被授权出去、能在环境页被改被删（删了密码就再也找不回），都不是它该有的样子。
 
 ## 3.5 求助系统（人机协作核心）
 
@@ -474,7 +474,8 @@ CLI 与本机 MCP Server 同一个产物分发（平台自托管下载：类 Uni
 | `eat app build-logs / run-logs <app>` | 构建日志 / 容器运行日志（`--tail`、`--list`、`--deployment`/`--container`）（决策 28） |
 | `eat app stop-build <app>` | 停止应用进行中的部署：中断正在构建的、撤下排队中的，已上线版本不受影响；等到构建真正停下才返回（决策 90） |
 | `eat self-update` | 把 CLI 更新到平台当前分发的版本（重拉 `/install/eat.js` 覆盖本地产物，跨平台同一条命令）（决策 26） |
-| `eat db list` | 查看自己名下的数据库账号（引导用 env pull 取凭证） |
+| `eat db list` | 查看自己名下的数据库账号与申请进度 |
+| `eat db pull <库名>` | 取连接凭证，默认写入 `./.env`（`--merge` / `--print` / `--format` / `--out` / `--force`，规则同 `eat env pull`）（决策 91） |
 
 ### MCP 工具
 
@@ -581,7 +582,7 @@ erDiagram
 
 **mcp_config**：id, slug, name, description, transport, config(jsonb, 敏感字段写作 `${env:ENV/KEY}` 引用), owner_id, visibility
 
-**environment**：id, slug, name, description, owner_id, source(manual|db_assignment)
+**environment**：id, slug, name, description, owner_id, visibility
 
 **env_variable**：id, environment_id, key, value_encrypted, description, visible_without_permission(bool, 默认 true), version, updated_at
 
@@ -591,7 +592,7 @@ erDiagram
 **access_request**：id, requester_id, target_type(variable|environment|db), target_ids, reason, status(pending|approved|rejected), decided_by, decided_at, grant_expires_at
 
 **db_instance**：id, name, engine(mysql|postgres), host, port, admin_credentials_encrypted, note
-**db_assignment**：id, instance_id, user_id, db_name, db_user, purpose, environment_id(生成的环境), status(active|disabled|deleted), created_at
+**db_assignment**：id, instance_id, user_id, db_name, db_user, purpose, password_encrypted(决策 91), environment_id(旧版生成的环境，仅供存量搬迁读取), status(active|disabled|deleted), created_at
 
 **helper_profile**：user_id, description(AI 会读取，可空), webhook_url, webhook_secret, notify_help(bool), notify_reply(bool), available(bool)
 
@@ -743,7 +744,7 @@ easy-agent-team/
 
 - 角色模板（管理员定义、成员选用、模板同步）
 - MCP 配置分发（含环境变量引用渲染）
-- 数据库账号分配（实例登记、自动建库建号、以环境变量形式下发、回收）
+- 数据库账号分配（实例登记、自动建库建号、在数据库页下发凭证、回收）
 
 ### P3 —— 部署托管
 
@@ -771,7 +772,7 @@ easy-agent-team/
 | 10 | 成员上手方式 | 控制台提供**安装页**（人机双视角）：给人看的分步说明 + 给 AI Agent 的一键复制安装指令（同一份文案也在 `GET /install/AGENT.md` 公开提供，`packages/shared` 单一来源）（§3.1） |
 | 11 | 平台使用指南 Skill 的携带方式 | **内置虚拟 Skill**（方案 A）：内容随平台代码维护、版本号常量控制更新，`sync-bundle` 对所有用户始终注入，不落库、不可退订、slug 保留；获取需登录（`eat sync`），登录前由免鉴权 `/install/AGENT.md` 兜底（§3.8） |
 | 12 | `eat sync` 落地目录 | 实际文件落 `~/.agents/skills/`（跨 Agent 工具共用），逐个**软链**到 `~/.claude/skills/`；历史直接落地目录自动迁移；`--dir` 自定义时不建软链（§3.2.2；落点的记忆与漂移拦截见决策 56） |
-| 13 | 数据库分配的删除语义 | **仅记录级软删除，平台不做物理 DROP**：删除只标记记录 deleted 并移除凭证环境，实例上的数据库与账号保留，物理清理由管理员在实例上手动执行；控制台二次确认时明确提示。rejected 的记录同样可删（§3.4） |
+| 13 | 数据库分配的删除语义 | **仅记录级软删除，平台不做物理 DROP**：删除只标记记录 deleted 并移除凭证环境（决策 91 起为清掉平台上存的密码），实例上的数据库与账号保留，物理清理由管理员在实例上手动执行；控制台二次确认时明确提示。rejected 的记录同样可删（§3.4） |
 | 14 | `eat sync` 安装范围参数 | 类 npx skills 的 global/project 语义：默认/`--global` 落 `~/.agents/skills/` + 软链 `~/.claude/skills/`（决策 12 布局不变）；`--project` 落当前项目 `./.agents/skills/` + **相对**软链 `./.claude/skills/`；`--dir` 仍为自定义目录不建软链；三者互斥（§3.2.3） |
 | 15 | 安装脚本 PATH 落地 | **三层叠加（非递进兜底），全部幂等**：① 软链 `~/.local/bin/eat`（XDG 惯例，无需 sudo）；② `/usr/local/bin` 可写时软链（系统级 PATH，非交互 shell 可见）；③ 幂等写 shell 配置——zsh 写 `~/.zshenv`（非交互也加载，而非 `.zshrc`），bash 写 `~/.bashrc`，登录 shell 写 `~/.bash_profile`（仅存在 `~/.profile` 且无 `~/.bash_profile` 时改写 `~/.profile`，避免屏蔽），marker 注释去重。三层互为冗余覆盖不同 shell 场景，保证 Agent 的非交互子进程也能直接调 `eat`（§7.5） |
 | 16 | 求助 webhook 通知形态 | **只支持飞书群自定义机器人**（替换最初的「通用 JSON + 平台生成 HMAC 密钥」设计）：「加签」密钥由**用户从飞书粘贴**（可选、加密存储、不回显，留空更新表示保持不变，清空地址一并清除），平台不再生成/展示自己的签名密钥；按响应体 code 判定投递成败。钉钉/企微/通用端点待有需求再扩展（§3.10）。消息格式后升级为卡片（决策 17） |
@@ -941,3 +942,14 @@ easy-agent-team/
 - **局限**：在部署后台直接触发的部署（决策 30 的「绕过平台」）没有平台元数据可标，停掉后照 Dokploy 显示为「失败」，停止接口的返回里如实列出。
 - **验证**：e2e（mock Dokploy）覆盖无事可停 / 非成员 / 中断构建 / 撤队列 / 撤队列竞态 / 别的应用在构建时拒绝与残留状态不算 / 信号没赶上 / 超时重发 / 外部部署；对容器内自建的 Dokploy v0.30.10 真机跑通：`eat deploy` 轮询中被另一终端 `eat app stop-build` 停下（约 1.3 秒，轮询端打印「部署已被 X 停止」）、构建中 + 排队中一起停、拉代码阶段（Git 服务加 3 秒延迟）停止约 9 秒生效、并发调到 2 时另一个应用在构建被拒绝且两边构建都不受影响，控制台桌面 / 移动双视口 Playwright 走查。
 - CLI 升 0.13.0、指南升 40。
+
+### 决策 91：数据库凭证只在数据库页取，不再生成环境变量（2026-10-27）
+
+- **问题**：决策 39 及以前，批准数据库申请会生成一个环境（`db-<库名>`，五个 `DB_*` 变量），凭证的读取、授权、审计全走环境变量。结果是一个人的项目库账号混在团队的环境清单里（还专门为此加了「常规 / 数据库」页签）、可以被授权给别人、可以在环境页被改被删——删了 `DB_PASSWORD` 密码就再也找不回。凭证应当只在数据库这里，与 OSS 的个人 AK/SK 同一形状。
+- **存储与读取**：密码加密存 `db_assignment.password_encrypted`（同 EAT_KEK 信封加密），主机 / 端口取实例、库名 / 账号取分配记录；新接口 `POST /api/db/assignments/:id/credentials`（`Cache-Control: no-store`），只有申请人与管理员能读、`active` 才给（禁用期间回 409），每次读取 await 落 `db_credentials.read` 审计（带 token 与 IP）。乱写的 id 先挡成 404，别让 uuid 类型错误冒成 500。删除分配时清空密码。`DbAssignmentInfo` 去掉 `environmentId` / `environmentSlug`，加 `hasCredentials`。
+- **不提供共享**：没有「授权给别人读」这条路，同事要用由申请人转交或各自申请。管理员可读——实例的管理凭证本就在管理员手里，运维时（帮人把凭证配进应用 env）也需要。
+- **三端入口**：控制台分配详情页「连接凭证」卡片（密码打码，点「查看」才取，可复制密码 / 连接串 / 整段 `.env`；清单「凭证」列改为「查看凭证」入口）；CLI `eat db pull <库名|库名@实例名|id>`，落盘规则照搬 `eat env pull`（默认写 `./.env`、非 eat 文件中止、`--merge` / `--print --format dotenv|shell|json` / `--out` / `--force`）；MCP `get_db_credentials`（stdio / HTTP 两侧都有，名字不对时回 `DB_ASSIGNMENT_NOT_FOUND` / `DB_ASSIGNMENT_AMBIGUOUS` + 候选清单）。按名字找分配的判定 `matchDbAssignments()` 在 `packages/shared/src/db.ts`，三处共用（同决策 57 的理由）。输出变量名沿用 `DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD`（已有项目的 `.env` 与代码不用改），另加 `DATABASE_URL`（用户名、密码、库名做了 URL 编码），转换在 `dbCredentialsToEnv()`。
+- **环境侧**：`environment.source` 列删掉（迁移 `0036_db_credentials`），`EnvironmentInfo` 去掉 `source` / `dbAssignment`，`GET /api/envs` **破坏性地**去掉 `source` 参数与 `counts`（照决策 30 不留兼容层），控制台撤掉「常规 / 数据库」页签、范围筛选改为实心分段，环境详情页去掉凭证环境的徽标、来源行与提示。
+- **存量搬迁**（`apps/server/src/db/repair-db-credentials.ts`，随 `pnpm db:migrate` 每次启动幂等执行）：扫还挂着 `environment_id` 的分配，按环境里 `DB_PASSWORD` 的**当前值**搬过来（敏感的直接拷密文，被改成非敏感的就地加密）；环境里只有生成的五个变量 → 整个环境删除（变量、读值授权、权限申请随外键级联，角色模板里的引用一并清掉）；有人往里加过别的变量 → 环境保留、只删生成的五个、备注里补一句凭证去哪了；`DB_PASSWORD` 早被删掉的 → 照样断开，分配显示「无可用凭证」、读取回 `DB_CREDENTIALS_MISSING` 并提示找管理员重置。每搬一条落一条 `db_assignment.credentials_moved` 审计（记原环境 slug、是否删除、保留了哪些 key）。`db_assignment.environment_id` 列留着给搬迁读，新代码不读不写——线上可能有还没跑过搬迁的库，别在同一个版本里删它。存量环境上给别人的读值授权随环境一起消失，这是有意的：这条共享路径本身就是要撤掉的东西。实例被删后留下的孤儿凭证环境（分配记录已级联删掉，只剩环境）不在搬迁范围内，成为普通环境，Owner 可自行删除。
+- **验证**：e2e 覆盖批准后不生成环境、凭证接口的权限 / no-store / 审计 / 禁用 / 删除、真实 PG 上用取到的凭证连库建表、搬迁的三种存量形态与幂等、MCP 按库名取凭证与候选清单。
+- CLI 升 0.14.0、指南升 41（数据库一节重写：凭证用 `eat db pull` / `get_db_credentials` 取，不在环境变量里）。演示截图 `envs.png` / `db.png` 仍是旧版界面，待重拍。

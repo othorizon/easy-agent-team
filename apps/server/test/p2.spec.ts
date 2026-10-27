@@ -13,7 +13,10 @@ import * as path from 'node:path';
 import { Client, Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
+import { decryptSecret, encryptSecret } from '../src/common/crypto';
+import { moveDbCredentialsOutOfEnvs } from '../src/db/repair-db-credentials';
 import * as schema from '../src/db/schema';
+import { eq, inArray } from 'drizzle-orm';
 
 let app: NestFastifyApplication;
 let adminToken: string;
@@ -374,61 +377,56 @@ describe('数据库账号分配（真实建库）', () => {
     expect(evil.status).toBe(400);
   });
 
-  it('批准后真实建库建号，凭证生成为环境（Owner=申请人）', async () => {
+  it('批准后真实建库建号，密码存在分配记录上，不生成环境变量（决策 91）', async () => {
     expect((await api('POST', `/api/db/assignments/${assignmentId}/approve`, { token: m1Token })).status).toBe(403);
     const r = await api('POST', `/api/db/assignments/${assignmentId}/approve`, { token: adminToken });
     expect(r.body.status).toBe('active');
-    expect(r.body.environmentSlug).toBe('db-proj-wang');
-
-    // 申请人拉取凭证
-    const pull = await api('POST', '/api/envs/db-proj-wang/values', { token: m1Token, payload: {} });
-    creds = pull.body.values;
-    expect(creds.DB_NAME).toBe('proj_wang');
-    expect(creds.DB_USER).toBe('u_proj_wang');
-    expect(creds.DB_PASSWORD).toBeTruthy();
-    // 除密码外均为非敏感明文存储：申请人（环境 Owner）在清单里直接看到明文值
-    const vars = await api('GET', '/api/envs/db-proj-wang/variables', { token: m1Token });
-    type VarMeta = { key: string; secret: boolean; value: string | null };
-    const byKey: Record<string, VarMeta> = Object.fromEntries(
-      vars.body.map((v: VarMeta): [string, VarMeta] => [v.key, v]),
-    );
-    for (const k of ['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER']) {
-      expect(byKey[k].secret).toBe(false);
-      expect(byKey[k].value).toBeTruthy();
-    }
-    expect(byKey.DB_NAME.value).toBe('proj_wang');
-    expect(byKey.DB_PASSWORD.secret).toBe(true);
-    expect(byKey.DB_PASSWORD.value).toBeNull();
-    // 其他成员未授权：整组默认对未授权成员**完全隐藏**（决策 39）——清单里根本不出现，拉取照样被拒
-    const otherVars = await api('GET', '/api/envs/db-proj-wang/variables', { token: m2Token });
-    expect(otherVars.body).toEqual([]);
-    const hostPull = await api('POST', '/api/envs/db-proj-wang/values', { token: m2Token, payload: { keys: ['DB_HOST'] } });
-    expect(hostPull.body.denied[0].error).toBe('PERMISSION_REQUIRED');
-    const other = await api('POST', '/api/envs/db-proj-wang/values', { token: m2Token, payload: { keys: ['DB_PASSWORD'] } });
-    expect(other.body.denied[0].error).toBe('PERMISSION_REQUIRED');
-    // Owner 自己清单照常齐全
-    expect(vars.body).toHaveLength(5);
-    expect(vars.body.every((v: { visibleWithoutPermission: boolean }) => v.visibleWithoutPermission === false)).toBe(true);
+    expect(r.body.hasCredentials).toBe(true);
+    expect(r.body).not.toHaveProperty('environmentSlug');
+    // 不再生成凭证环境：环境清单里搜不到，按旧 slug 访问 404
+    expect((await api('GET', '/api/envs?q=proj_wang', { token: m1Token })).body.total).toBe(0);
+    expect((await api('GET', '/api/envs/db-proj-wang', { token: m1Token })).status).toBe(404);
   });
 
-  it('凭证环境与分配记录互相回指（决策 39）：环境详情带 dbAssignment，分配详情带环境，清单可按来源筛', async () => {
-    const envDetail = await api('GET', '/api/envs/db-proj-wang', { token: m1Token });
-    expect(envDetail.status).toBe(200);
-    expect(envDetail.body).toMatchObject({
-      source: 'db_assignment',
-      ownerName: '小王',
-      dbAssignment: { id: assignmentId, dbName: 'proj_wang', instanceName: '本地测试 PG', status: 'active' },
+  it('连接凭证只在数据库这里取：申请人与管理员可读、no-store、每次读取落审计', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/db/assignments/${assignmentId}/credentials`,
+      headers: { authorization: `Bearer ${m1Token}` },
     });
-    const dbOnly = await api('GET', '/api/envs?source=db_assignment', { token: m2Token });
-    expect(dbOnly.body.items.map((e: { slug: string }) => e.slug)).toContain('db-proj-wang');
-    expect(dbOnly.body.counts.db_assignment).toBeGreaterThanOrEqual(1);
-    const manualOnly = await api('GET', '/api/envs?source=manual', { token: m2Token });
-    expect(manualOnly.body.items.map((e: { slug: string }) => e.slug)).not.toContain('db-proj-wang');
-    // 关键词能按库名搜到凭证环境
-    const byDbName = await api('GET', '/api/envs?q=proj_wang', { token: m2Token });
-    expect(byDbName.body.items.map((e: { slug: string }) => e.slug)).toContain('db-proj-wang');
+    expect(res.statusCode).toBe(201);
+    expect(res.headers['cache-control']).toBe('no-store');
+    const cred = JSON.parse(res.body);
+    expect(cred).toMatchObject({
+      assignmentId,
+      engine: 'postgres',
+      host: '127.0.0.1',
+      port: 5433,
+      database: 'proj_wang',
+      user: 'u_proj_wang',
+    });
+    expect(cred.password).toMatch(/^[0-9a-f]{36}$/);
+    expect(cred.url).toBe(`postgres://u_proj_wang:${cred.password}@127.0.0.1:5433/proj_wang`);
+    creds = {
+      DB_HOST: cred.host,
+      DB_PORT: String(cred.port),
+      DB_NAME: cred.database,
+      DB_USER: cred.user,
+      DB_PASSWORD: cred.password,
+    };
+    // 其他成员读不到，也没有「授权给别人」这条路
+    expect((await api('POST', `/api/db/assignments/${assignmentId}/credentials`, { token: m2Token })).status).toBe(403);
+    const byAdmin = await api('POST', `/api/db/assignments/${assignmentId}/credentials`, { token: adminToken });
+    expect(byAdmin.status).toBe(201);
+    expect(byAdmin.body.password).toBe(cred.password);
+    // 乱写的 id 是 404，不是 uuid 类型错误冒出来的 500
+    expect((await api('POST', '/api/db/assignments/proj_wang/credentials', { token: m1Token })).status).toBe(404);
+    const audit = await api('GET', '/api/audit?action=db_credentials.read', { token: adminToken });
+    expect(audit.body).toHaveLength(2);
+    expect(audit.body.every((a: { targetId: string }) => a.targetId === assignmentId)).toBe(true);
+  });
 
-    // 分配详情：申请人与管理员可看，其他成员 403
+  it('分配详情：申请人与管理员可看，其他成员 403', async () => {
     const detail = await api('GET', `/api/db/assignments/${assignmentId}`, { token: m1Token });
     expect(detail.status).toBe(200);
     expect(detail.body).toMatchObject({
@@ -436,8 +434,7 @@ describe('数据库账号分配（真实建库）', () => {
       dbUser: 'u_proj_wang',
       instanceHost: '127.0.0.1',
       instancePort: 5433,
-      environmentSlug: 'db-proj-wang',
-      environmentId: envDetail.body.id,
+      hasCredentials: true,
       decidedByName: '管理员',
       requesterName: '小王',
     });
@@ -488,7 +485,11 @@ describe('数据库账号分配（真实建库）', () => {
     await api('POST', `/api/db/assignments/${assignmentId}/disable`, { token: adminToken });
     const blocked = new Client({ host: creds.DB_HOST, port: Number(creds.DB_PORT), user: creds.DB_USER, database: creds.DB_NAME });
     await expect(blocked.connect()).rejects.toThrow();
+    // 禁用期间不给凭证（账号登不上，给了也没用，还平白多一次密码外泄）
+    const disabled = await api('POST', `/api/db/assignments/${assignmentId}/credentials`, { token: m1Token });
+    expect(disabled.status).toBe(409);
     await api('POST', `/api/db/assignments/${assignmentId}/enable`, { token: adminToken });
+    expect((await api('POST', `/api/db/assignments/${assignmentId}/credentials`, { token: m1Token })).status).toBe(201);
     const ok = new Client({ host: creds.DB_HOST, port: Number(creds.DB_PORT), user: creds.DB_USER, database: creds.DB_NAME });
     await ok.connect();
     await ok.end();
@@ -499,9 +500,11 @@ describe('数据库账号分配（真实建库）', () => {
     expect(r.status).toBe(409);
   });
 
-  it('删除分配：仅记录级软删除，凭证环境删除，实例上的库与账号保留（决策 13）', async () => {
+  it('删除分配：仅记录级软删除，平台上的密码清掉，实例上的库与账号保留（决策 13）', async () => {
     const r = await api('DELETE', `/api/db/assignments/${assignmentId}`, { token: adminToken });
     expect(r.body.status).toBe('deleted');
+    expect(r.body.hasCredentials).toBe(false);
+    expect((await api('POST', `/api/db/assignments/${assignmentId}/credentials`, { token: adminToken })).status).toBe(409);
     // 不做物理 DROP：实例上的库与账号仍然存在、可连接（物理清理由管理员手动执行）
     const still = new Client({
       host: creds.DB_HOST,
@@ -513,8 +516,6 @@ describe('数据库账号分配（真实建库）', () => {
     await still.connect();
     expect((await still.query('select 1 as ok')).rows[0].ok).toBe(1);
     await still.end();
-    const env = await api('POST', '/api/envs/db-proj-wang/values', { token: m1Token, payload: {} });
-    expect(env.status).toBe(404);
     // 已删除的记录不再出现在列表里
     const mineList = await api('GET', '/api/db/assignments/mine', { token: m1Token });
     expect(mineList.body.map((a: { id: string }) => a.id)).not.toContain(assignmentId);
@@ -522,5 +523,97 @@ describe('数据库账号分配（真实建库）', () => {
     expect(allList.body.map((a: { id: string }) => a.id)).not.toContain(assignmentId);
     // 记录已删除（非 active），可以删除实例登记了
     expect((await api('DELETE', `/api/db/instances/${instanceId}`, { token: adminToken })).status).toBe(200);
+  });
+});
+
+describe('存量凭证环境搬迁（决策 91）', () => {
+  it('密码搬回分配记录；只有生成变量的环境删掉，加过别的变量的环境保留；幂等', async () => {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const db = drizzle(pool, { schema });
+    try {
+      const people = await db.select().from(schema.users);
+      const id = (email: string) => people.find((u) => u.email === email)!.id;
+      const [admin, wang, zhang] = [id('admin@test.dev'), id('wang@test.dev'), id('zhang@test.dev')];
+      const [inst] = await db
+        .insert(schema.dbInstances)
+        .values({ name: '旧实例', engine: 'postgres', host: '10.0.0.5', port: 5432, adminUser: 'a', adminPasswordEncrypted: encryptSecret(''), createdBy: admin })
+        .returning();
+
+      // 旧版本批准时生成的样子：四个明文 + 加密的 DB_PASSWORD
+      const legacyEnv = async (dbName: string, password: { secret: boolean; value: string } | null, extra: Record<string, string> = {}) => {
+        const [env] = await db
+          .insert(schema.environments)
+          .values({ slug: `db-${dbName.replace(/_/g, '-')}`, name: `数据库 ${dbName}`, description: '连接凭证见变量', ownerId: wang })
+          .returning();
+        const plain = { DB_HOST: '10.0.0.5', DB_PORT: '5432', DB_NAME: dbName, DB_USER: `u_${dbName}`, ...extra };
+        for (const [key, value] of Object.entries(plain)) {
+          await db.insert(schema.envVariables).values({ environmentId: env.id, key, valuePlain: value, secret: false });
+        }
+        if (password) {
+          await db.insert(schema.envVariables).values({
+            environmentId: env.id,
+            key: 'DB_PASSWORD',
+            secret: password.secret,
+            valueEncrypted: password.secret ? encryptSecret(password.value) : null,
+            valuePlain: password.secret ? null : password.value,
+          });
+        }
+        await db.insert(schema.variableGrants).values({ userId: zhang, environmentId: env.id, grantedBy: wang });
+        const [a] = await db
+          .insert(schema.dbAssignments)
+          .values({ instanceId: inst.id, requesterId: wang, dbName, dbUser: `u_${dbName}`, purpose: '旧数据', status: 'active', environmentId: env.id })
+          .returning();
+        return { env, assignment: a };
+      };
+      const plainOnly = await legacyEnv('legacy_a', { secret: true, value: 'pw-a' });
+      const withExtra = await legacyEnv('legacy_b', { secret: false, value: 'pw-b' }, { MY_EXTRA: 'keep-me' });
+      const noPassword = await legacyEnv('legacy_c', null);
+      const [tpl] = await db.insert(schema.roleTemplates).values({ name: '旧模板', createdBy: admin }).returning();
+      await db.insert(schema.templateItems).values({ templateId: tpl.id, itemType: 'environment', itemId: plainOnly.env.id });
+
+      const moved = await moveDbCredentialsOutOfEnvs(db);
+      expect(moved.map((m) => m.dbName).sort()).toEqual(['legacy_a', 'legacy_b', 'legacy_c']);
+      expect(moved.find((m) => m.dbName === 'legacy_b')).toMatchObject({ environment: 'db-legacy-b', keptKeys: ['MY_EXTRA'], passwordMissing: false });
+      expect(moved.find((m) => m.dbName === 'legacy_c')?.passwordMissing).toBe(true);
+
+      const rows = await db
+        .select()
+        .from(schema.dbAssignments)
+        .where(inArray(schema.dbAssignments.dbName, ['legacy_a', 'legacy_b', 'legacy_c']));
+      const by = Object.fromEntries(rows.map((r) => [r.dbName, r]));
+      expect(rows.every((r) => r.environmentId === null)).toBe(true);
+      expect(decryptSecret(by.legacy_a.passwordEncrypted!)).toBe('pw-a');
+      // Owner 改成非敏感的密码也照样加密存进来
+      expect(decryptSecret(by.legacy_b.passwordEncrypted!)).toBe('pw-b');
+      expect(by.legacy_c.passwordEncrypted).toBeNull();
+
+      // 只有生成变量的环境整个删掉：授权随外键级联，角色模板里的引用一并清掉
+      const envs = await db
+        .select()
+        .from(schema.environments)
+        .where(inArray(schema.environments.id, [plainOnly.env.id, withExtra.env.id, noPassword.env.id]));
+      expect(envs.map((e) => e.slug)).toEqual(['db-legacy-b']);
+      expect(await db.select().from(schema.templateItems).where(eq(schema.templateItems.templateId, tpl.id))).toEqual([]);
+      // 加过别的变量的环境保留：生成的五个删掉、别人加的留着、环境级授权留着、备注说清凭证去哪了
+      const kept = await db.select().from(schema.envVariables).where(eq(schema.envVariables.environmentId, withExtra.env.id));
+      expect(kept.map((v) => v.key)).toEqual(['MY_EXTRA']);
+      expect(envs[0].description).toContain('eat db pull legacy_b');
+      const grants = await db.select().from(schema.variableGrants).where(eq(schema.variableGrants.environmentId, withExtra.env.id));
+      expect(grants).toHaveLength(1);
+
+      const audit = await db.select().from(schema.auditLogs).where(eq(schema.auditLogs.action, 'db_assignment.credentials_moved'));
+      expect(audit).toHaveLength(3);
+      expect(await moveDbCredentialsOutOfEnvs(db)).toEqual([]);
+
+      // 搬完照常从数据库这里取；环境里早没了密码的那条明确告诉用户找管理员重置
+      const cred = await api('POST', `/api/db/assignments/${plainOnly.assignment.id}/credentials`, { token: m1Token });
+      expect(cred.body).toMatchObject({ host: '10.0.0.5', port: 5432, database: 'legacy_a', user: 'u_legacy_a', password: 'pw-a' });
+      const missing = await api('POST', `/api/db/assignments/${noPassword.assignment.id}/credentials`, { token: m1Token });
+      expect(missing.status).toBe(409);
+      expect(missing.body.error).toBe('DB_CREDENTIALS_MISSING');
+      expect((await api('GET', `/api/db/assignments/${noPassword.assignment.id}`, { token: m1Token })).body.hasCredentials).toBe(false);
+    } finally {
+      await pool.end();
+    }
   });
 });

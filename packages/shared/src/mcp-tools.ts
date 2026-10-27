@@ -201,7 +201,7 @@ function dbTools(): EatToolDef[] {
     {
       name: 'request_db',
       description:
-        '申请在某实例上创建一个库和一个专属账号。**需要自己写数据（建表、落结果）时才申请库**；只读地取别人的业务库数据走 list_env_variables / get_env_values 那条路。提交后状态是 pending，要等管理员批准——告诉用户已提交、需要谁去批，不要反复申请。批准时平台会真实建库建号，状态转 active 并生成一组凭证环境变量，用 list_db_assignments 查进度。',
+        '申请在某实例上创建一个库和一个专属账号。**需要自己写数据（建表、落结果）时才申请库**；只读地取别人的业务库数据走 list_env_variables / get_env_values 那条路。提交后状态是 pending，要等管理员批准——告诉用户已提交、需要谁去批，不要反复申请。批准时平台会真实建库建号，状态转 active，用 list_db_assignments 查进度、get_db_credentials 取连接凭证。',
       inputSchema: {
         type: 'object',
         properties: {
@@ -218,8 +218,23 @@ function dbTools(): EatToolDef[] {
     {
       name: 'list_db_assignments',
       description:
-        '列出我名下的数据库分配，兼作申请进度查询。status=pending 还在等批准；active 表示库和账号已建好，此时 environmentSlug 就是凭证所在的环境，用 get_env_values 取值连上去；failed 时 error 里是失败原因。',
+        '列出我名下的数据库分配，兼作申请进度查询。status=pending 还在等批准；active 表示库和账号已建好，用 get_db_credentials 取连接凭证；failed 时 error 里是失败原因。',
       inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'get_db_credentials',
+      description:
+        '读取我名下某个已开通（active）数据库的连接凭证：host / port / database / user / password 与拼好的 url（敏感操作，每次读取都会审计）。凭证只在这里取，不在环境变量里。只用于当前任务，别写进源码、日志或对话；要写进项目时用 eat db pull <库名>（默认写 .env，已有手写 .env 加 --merge）。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          assignment: {
+            type: 'string',
+            description: '库名、`库名@实例名`（同名库在两台实例上时）或分配 id（list_db_assignments 查看）',
+          },
+        },
+        required: ['assignment'],
+      },
     },
   ];
 }

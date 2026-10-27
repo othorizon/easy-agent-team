@@ -6,12 +6,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { and, asc, count, eq, gt, inArray, isNotNull, isNull, or } from 'drizzle-orm';
+import { and, asc, count, eq, gt, inArray, isNull, or } from 'drizzle-orm';
 import type {
   CreateEnvironmentRequest,
   CreateGrantRequest,
   EnvironmentAccess,
-  EnvironmentDbAssignment,
   EnvironmentInfo,
   EnvListQuery,
   EnvListResult,
@@ -27,7 +26,7 @@ import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
 import { decryptSecret, encryptSecret } from '../common/crypto';
 import { DB, type Db } from '../db/db.module';
-import { accessRequests, dbAssignments, dbInstances, environments, envVariables, users, variableGrants } from '../db/schema';
+import { accessRequests, environments, envVariables, users, variableGrants } from '../db/schema';
 
 type EnvRow = typeof environments.$inferSelect;
 type VarRow = typeof envVariables.$inferSelect;
@@ -144,30 +143,6 @@ export class EnvsService {
 
   // ---------- 环境 CRUD ----------
 
-  /**
-   * 凭证环境 → 生成它的数据库分配（决策 39）。关系存在 db_assignment.environment_id 上，
-   * 这里反查一次拿整张映射，清单与详情共用；分配记录已不存在（实例被删级联）时查不到，环境侧显示为 null
-   */
-  private async dbAssignmentLinks(): Promise<Map<string, EnvironmentDbAssignment>> {
-    const rows = await this.db
-      .select({
-        environmentId: dbAssignments.environmentId,
-        id: dbAssignments.id,
-        dbName: dbAssignments.dbName,
-        status: dbAssignments.status,
-        instanceName: dbInstances.name,
-      })
-      .from(dbAssignments)
-      .leftJoin(dbInstances, eq(dbInstances.id, dbAssignments.instanceId))
-      .where(isNotNull(dbAssignments.environmentId));
-    const links = new Map<string, EnvironmentDbAssignment>();
-    for (const r of rows) {
-      if (!r.environmentId || links.has(r.environmentId)) continue;
-      links.set(r.environmentId, { id: r.id, dbName: r.dbName, status: r.status, instanceName: r.instanceName ?? '(已删除)' });
-    }
-    return links;
-  }
-
   /** 当前用户可见的环境（按 slug 排序）：先过滤权限，再搜索、计数和分页。 */
   private async loadEnvironments(user: AuthUser): Promise<EnvironmentInfo[]> {
     const rows = await this.db
@@ -183,7 +158,6 @@ export class EnvsService {
       .where(or(eq(environments.visibility, 'team'), eq(environments.ownerId, user.id)))
       .groupBy(environments.id, users.name, users.email)
       .orderBy(asc(environments.slug));
-    const links = await this.dbAssignmentLinks();
     const accessOf = await this.accessResolver(user);
     return rows.map((r) => ({
       id: r.env.id,
@@ -194,8 +168,6 @@ export class EnvsService {
       ownerId: r.env.ownerId,
       ownerName: r.ownerName,
       ownerEmail: r.ownerEmail,
-      source: r.env.source,
-      dbAssignment: links.get(r.env.id) ?? null,
       variableCount: Number(r.variableCount),
       ...accessOf(r.env, Number(r.variableCount)),
       createdAt: r.env.createdAt.toISOString(),
@@ -203,38 +175,32 @@ export class EnvsService {
   }
 
   /**
-   * 清单：关键词 → 计数 → 来源 / 范围筛选 → 分页（决策 39）。
-   * 来源（页签）与范围（全部 / 我的 / 可读取）是两个正交维度，各自的数字回答「在当前搜索和另一个维度下，
-   * 切过去会有几条」——所以每个维度只在另一个维度筛过的集合上数，自己不参与计数（与 Skill 清单的 scope 计数同一思路）
+   * 清单：关键词 → 计数 → 范围筛选 → 分页（决策 39 / 88）。
+   * 范围（全部 / 我的 / 可读取）的数字回答「在当前搜索下切过去会有几条」，scope 自己不参与计数
+   * （与 Skill 清单的 scope 计数同一思路）。数据库凭证不在环境里（决策 91），没有来源这个维度了
    */
   async listEnvironments(user: AuthUser, query: EnvListQuery): Promise<EnvListResult> {
     const all = await this.loadEnvironments(user);
     const keyword = query.q?.toLowerCase() ?? '';
     const narrowed = keyword
       ? all.filter((e) =>
-          `${e.slug}\n${e.name}\n${e.description}\n${e.dbAssignment?.dbName ?? ''}`.toLowerCase().includes(keyword),
+          `${e.slug}\n${e.name}\n${e.description}`.toLowerCase().includes(keyword),
         )
       : all;
     const inScope = (e: EnvironmentInfo, scope: EnvListQuery['scope']) =>
       scope === 'all' || (scope === 'mine' ? e.ownerId === user.id : e.access !== 'none');
-    const inSource = (e: EnvironmentInfo) => query.source === 'all' || e.source === query.source;
-
-    const counts = { manual: 0, db_assignment: 0 };
-    for (const e of narrowed) if (inScope(e, query.scope)) counts[e.source] += 1;
     const scopeCounts = { all: 0, mine: 0, readable: 0 };
     for (const e of narrowed) {
-      if (!inSource(e)) continue;
       for (const scope of ['all', 'mine', 'readable'] as const) if (inScope(e, scope)) scopeCounts[scope] += 1;
     }
 
-    const filtered = narrowed.filter((e) => inSource(e) && inScope(e, query.scope));
+    const filtered = narrowed.filter((e) => inScope(e, query.scope));
     const start = (query.page - 1) * query.pageSize;
     return {
       items: filtered.slice(start, start + query.pageSize),
       total: filtered.length,
       page: query.page,
       pageSize: query.pageSize,
-      counts,
       scopeCounts,
     };
   }
@@ -247,7 +213,6 @@ export class EnvsService {
       .select({ variableCount: count(envVariables.id) })
       .from(envVariables)
       .where(eq(envVariables.environmentId, env.id));
-    const links = await this.dbAssignmentLinks();
     const accessOf = await this.accessResolver(user);
     return {
       id: env.id,
@@ -258,8 +223,6 @@ export class EnvsService {
       ownerId: env.ownerId,
       ownerName: owner?.name ?? '(已删除)',
       ownerEmail: owner?.email ?? '',
-      source: env.source,
-      dbAssignment: links.get(env.id) ?? null,
       variableCount: Number(variableCount),
       ...accessOf(env, Number(variableCount)),
       createdAt: env.createdAt.toISOString(),

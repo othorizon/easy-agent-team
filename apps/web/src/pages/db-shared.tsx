@@ -7,7 +7,7 @@ import { Confirm } from '../components/confirm';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 
-/** 分配状态徽标：清单、详情页、凭证环境的来源行三处共用一套口径 */
+/** 分配状态徽标：清单与详情页共用一套口径 */
 export const DB_STATUS_BADGE: Record<DbAssignmentStatus, JSX.Element> = {
   withdrawn: <Badge variant="outline">已撤回</Badge>,
   pending: <Badge variant="warning">待批准</Badge>,
@@ -73,7 +73,7 @@ export function AssignmentActions({
           title="删除分配记录？"
           description={
             <>
-              仅删除平台上的记录与凭证环境，<b>不会</b>删除实例上的数据库与账号；如需彻底清理，只能到数据库实例上手动删除。
+              仅删除平台上的记录与存着的密码，<b>不会</b>删除实例上的数据库与账号；如需彻底清理，只能到数据库实例上手动删除。
             </>
           }
           confirmText="删除"

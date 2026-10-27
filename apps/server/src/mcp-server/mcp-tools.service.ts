@@ -10,6 +10,7 @@ import {
   createDbAssignmentSchema,
   createHelpRequestSchema,
   logsQuerySchema,
+  matchDbAssignments,
   resolveDbInstance,
   platformGuideSyncSkill,
   updateAppEnvSchema,
@@ -192,6 +193,28 @@ export class McpToolsService {
       }
       case 'list_db_assignments':
         return this.dbs.listMine(user);
+      case 'get_db_credentials': {
+        const { assignment } = parse(z.object({ assignment: z.string().min(1).max(200) }), args);
+        const mine = await this.dbs.listMine(user);
+        const hits = matchDbAssignments(mine, assignment);
+        // 和 request_db 找不到实例一样：把候选清单一起回过去，省一轮 list_db_assignments
+        if (hits.length !== 1) {
+          throw new BadRequestException({
+            error: hits.length === 0 ? 'DB_ASSIGNMENT_NOT_FOUND' : 'DB_ASSIGNMENT_AMBIGUOUS',
+            message:
+              hits.length === 0
+                ? `名下没有库 ${assignment}，用 list_db_assignments 查看`
+                : `有 ${hits.length} 个同名库，改用「库名@实例名」或分配 id`,
+            assignments: (hits.length === 0 ? mine : hits).map((a) => ({
+              id: a.id,
+              dbName: a.dbName,
+              instanceName: a.instanceName,
+              status: a.status,
+            })),
+          });
+        }
+        return this.dbs.credentials(user, hits[0].id, ip);
+      }
 
       // ---------- 应用 ----------
       case 'list_apps':

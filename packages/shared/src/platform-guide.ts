@@ -16,7 +16,7 @@ import updates from './eat-platform-guide/references/updates.md';
 /** Built-in skill: sources are real Markdown files, embedded at build time for browser/CLI/server. */
 export const PLATFORM_GUIDE_SLUG = 'eat-platform-guide';
 /** Increment whenever the entry, metadata, or any reference file changes. */
-export const PLATFORM_GUIDE_VERSION = 40;
+export const PLATFORM_GUIDE_VERSION = 41;
 
 const metadata = parseSkillFrontmatter(content);
 const files: Record<string, string> = {

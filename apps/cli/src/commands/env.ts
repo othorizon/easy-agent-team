@@ -13,7 +13,7 @@ import type {
 import { ENV_IMPORT_MAX_KEYS, formatDateTime } from '@eat/shared';
 import { Api, ApiError } from '../client.js';
 import { mergeEnvFile, printWriteResult, stripEatHeader, writeEnvFile } from '../dotenv-file.js';
-import { formatDotenvLine, formatShellLine, parseEnvInput } from '../dotenv-format.js';
+import { formatDotenvLine, parseEnvInput, PRINT_FORMATS, renderPrinted, type PrintFormat } from '../dotenv-format.js';
 
 type CatalogEntry = { environment: EnvironmentInfo; variables: VariableMeta[] };
 
@@ -63,15 +63,6 @@ async function explainNothingReadable(api: Api, envSlug: string): Promise<void> 
   }
 }
 
-const PULL_FORMATS = ['dotenv', 'shell', 'json'] as const;
-type PullFormat = (typeof PULL_FORMATS)[number];
-
-function renderValues(values: Array<[string, string]>, format: PullFormat): string {
-  if (format === 'json') return `${JSON.stringify(Object.fromEntries(values), null, 2)}\n`;
-  const line = format === 'shell' ? formatShellLine : formatDotenvLine;
-  return values.map(([k, v]) => `${line(k, v)}\n`).join('');
-}
-
 export async function envPull(
   envSlug: string,
   opts: { keys?: string; out?: string; print?: boolean; force?: boolean; merge?: boolean; format?: string },
@@ -79,8 +70,8 @@ export async function envPull(
   if (opts.format !== undefined && !opts.print) {
     throw new Error('--format 只用于 --print（写文件一律是 dotenv）；导出到当前 shell：eval "$(eat env pull <env> --print --format shell)"');
   }
-  const format = (opts.format ?? 'dotenv') as PullFormat;
-  if (!PULL_FORMATS.includes(format)) throw new Error(`--format 只能是 ${PULL_FORMATS.join(' / ')}，收到 ${opts.format}`);
+  const format = (opts.format ?? 'dotenv') as PrintFormat;
+  if (!PRINT_FORMATS.includes(format)) throw new Error(`--format 只能是 ${PRINT_FORMATS.join(' / ')}，收到 ${opts.format}`);
   if (opts.merge && opts.print) throw new Error('--merge 是合并进文件，不能和 --print 一起用');
   if (opts.merge && opts.force) throw new Error('--merge 只改同名 key、追加新 key，不会整份覆盖，不需要 --force');
 
@@ -91,7 +82,7 @@ export async function envPull(
   const got = Object.entries(res.values);
   if (got.length > 0) {
     if (opts.print) {
-      process.stdout.write(renderValues(got, format));
+      process.stdout.write(renderPrinted(got, format));
     } else if (opts.merge) {
       const merged = mergeEnvFile({ file: opts.out ?? '.env', values: got, command: `eat env pull ${envSlug}` });
       printWriteResult(merged, `合并 ${envSlug} 的 ${got.length} 个变量，其余内容原样保留`);

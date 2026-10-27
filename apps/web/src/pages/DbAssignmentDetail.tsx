@@ -1,8 +1,11 @@
 import { ResourceRequests } from '../components/resource-requests';
-import type { DbAssignmentInfo } from '@eat/shared';
-import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, ArrowRight, KeyRound } from 'lucide-react';
+import type { DbAssignmentInfo, DbCredentials } from '@eat/shared';
+import { dbCredentialsToEnv } from '@eat/shared';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { ArrowLeft, Eye, EyeOff, KeyRound } from 'lucide-react';
+import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { toast } from 'sonner';
 import { api, ApiError, getStoredUser } from '../api';
 import { Cmd, CopyButton, InlineCode } from '../components/code';
 import { Empty } from '../components/empty';
@@ -16,7 +19,7 @@ import { AssignmentActions, DB_STATUS_BADGE, useAssignmentAction } from './db-sh
 
 /**
  * 数据库分配详情（决策 39）：清单里一行放不下的东西都在这——实例地址、账号、处理人与时间、失败原因，
- * 以及最重要的「凭证在哪」：直达凭证环境，和环境详情页互相回指。
+ * 以及最重要的连接凭证：决策 91 起凭证只在这里取（申请人与管理员可读、每次读取落审计），不再生成环境变量。
  */
 export function DbAssignmentDetailPage() {
   const { id = '' } = useParams();
@@ -155,34 +158,19 @@ function Dd({ children }: { children: React.ReactNode }) {
   return <dd className="min-w-0">{children}</dd>;
 }
 
-/** 凭证在哪：有环境就直达，没有就说清楚为什么没有 */
+/** 连接凭证：开通了就在这里查看（读取落审计），没开通就说清楚为什么还没有 */
 function CredentialsCard({ r }: { r: DbAssignmentInfo }) {
   let body: React.ReactNode;
-  if (r.environmentSlug) {
+  if (r.status === 'active' && r.hasCredentials) {
+    body = <CredentialsView r={r} />;
+  } else if (r.status === 'active') {
     body = (
-      <div className="space-y-4">
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          连接信息（主机、端口、库名、账号、密码）以环境变量的形式下发在环境{' '}
-          <Link to={`/envs/${r.environmentSlug}`}>
-            <InlineCode className="text-primary hover:underline">{r.environmentSlug}</InlineCode>
-          </Link>{' '}
-          里，本地这样拉取：
-        </p>
-        <Cmd text={`eat env pull ${r.environmentSlug}`} />
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          环境的 Owner 是申请人 <span className="font-medium text-foreground">{r.requesterName}</span>
-          ：可以直接读取全部凭证（含密码），也可以把整个环境授权给其他成员；其他人默认看不到这组变量。
-        </p>
-        <Button asChild variant="outline" size="sm">
-          <Link to={`/envs/${r.environmentSlug}`}>
-            打开凭证环境
-            <ArrowRight className="size-3.5" />
-          </Link>
-        </Button>
-      </div>
+      <Note>
+        平台上没有这个账号的密码（旧版本里它所在的凭证环境被删除过），无法找回。如需继续使用这个库，请管理员在实例上重置账号密码，或删除本记录后重新申请。
+      </Note>
     );
   } else if (r.status === 'pending') {
-    body = <Note>批准后平台会在实例上建库建号，并自动生成一个凭证环境（Owner 为申请人），这里会出现拉取命令。</Note>;
+    body = <Note>批准后平台会在实例上建库建号，连接凭证会出现在这里（只有申请人和管理员能查看）。</Note>;
   } else if (r.status === 'provisioning') {
     body = <Note>审批已通过，正在开通数据库与凭证。请勿重复申请；如长时间没有完成，请联系管理员核对执行情况。</Note>;
   } else if (r.status === 'withdrawn') {
@@ -192,13 +180,9 @@ function CredentialsCard({ r }: { r: DbAssignmentInfo }) {
   } else if (r.status === 'failed') {
     body = <Note>审批已通过，但建库失败。请管理员处理失败原因后重试开通，无需重新申请；如实例上已有同名库或账号，先核对未完成的资源。</Note>;
   } else if (r.status === 'deleted') {
-    body = <Note>记录已删除，凭证环境已一并删除；实例上的库与账号未做物理删除，需管理员到实例上手动清理。</Note>;
+    body = <Note>记录已删除，平台上存的密码已一并清除；实例上的库与账号未做物理删除，需管理员到实例上手动清理。</Note>;
   } else {
-    body = (
-      <Note>
-        凭证环境已被删除，密码无法找回。如需继续使用这个库，请管理员在实例上重置账号密码，或删除本记录后重新申请。
-      </Note>
-    );
+    body = <Note>账号已被管理员禁用（无法登录），恢复后才能查看连接凭证。</Note>;
   }
   return (
     <Card>
@@ -210,6 +194,80 @@ function CredentialsCard({ r }: { r: DbAssignmentInfo }) {
         {body}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * 主机 / 端口 / 库名 / 账号本就在页上，密码打码；点「查看」才走正式的读取接口——
+ * 服务端照常落 db_credentials.read 审计，与终端里 eat db pull 一视同仁。拿到后可复制密码、连接串、整段 .env
+ */
+function CredentialsView({ r }: { r: DbAssignmentInfo }) {
+  const [cred, setCred] = useState<DbCredentials | null>(null);
+  const reveal = useMutation({
+    mutationFn: () => api<DbCredentials>('POST', `/api/db/assignments/${r.id}/credentials`),
+    onSuccess: setCred,
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : '读取凭证失败'),
+  });
+  const dotenv = cred ? dbCredentialsToEnv(cred).map(([k, v]) => `${k}=${v}`).join('\n') : '';
+  return (
+    <div className="space-y-4">
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-6 gap-y-3 text-sm">
+        <Dt>主机</Dt>
+        <Dd>
+          <span className="inline-flex items-center gap-1">
+            <InlineCode>
+              {r.instanceHost}:{r.instancePort}
+            </InlineCode>
+            {r.instanceHost && <CopyButton text={r.instanceHost} />}
+          </span>
+        </Dd>
+        <Dt>密码</Dt>
+        <Dd>
+          <span className="inline-flex flex-wrap items-center gap-1">
+            <InlineCode>{cred ? cred.password : '••••••••••••'}</InlineCode>
+            {cred ? (
+              <>
+                <CopyButton text={cred.password} />
+                <Button variant="ghost" size="icon-sm" aria-label="隐藏密码" onClick={() => setCred(null)}>
+                  <EyeOff />
+                </Button>
+              </>
+            ) : (
+              <Button variant="ghost" size="sm" loading={reveal.isPending} onClick={() => reveal.mutate()}>
+                <Eye />
+                查看
+              </Button>
+            )}
+          </span>
+        </Dd>
+        {cred && (
+          <>
+            <Dt>连接串</Dt>
+            <Dd>
+              <span className="inline-flex items-start gap-1">
+                <InlineCode>{cred.url}</InlineCode>
+                <CopyButton text={cred.url} />
+              </span>
+            </Dd>
+            <Dt>.env</Dt>
+            <Dd>
+              <span className="inline-flex items-center gap-1 text-muted-foreground">
+                DB_HOST … DB_PASSWORD、DATABASE_URL
+                <CopyButton text={dotenv} />
+              </span>
+            </Dd>
+          </>
+        )}
+      </dl>
+      <div className="space-y-2">
+        <p className="text-sm leading-relaxed text-muted-foreground">在项目目录里直接写进 .env（已有手写的 .env 加 --merge）：</p>
+        <Cmd text={`eat db pull ${r.dbName}`} />
+      </div>
+      <p className="text-[13px] leading-relaxed text-muted-foreground">
+        凭证只在这里取，不在环境变量里。只有申请人 <span className="font-medium text-foreground">{r.requesterName}</span>{' '}
+        和管理员能查看，每次查看或拉取都会记入审计。
+      </p>
+    </div>
   );
 }
 

@@ -173,3 +173,13 @@ export function shellQuote(value: string): string {
 export function formatShellLine(key: string, value: string): string {
   return `export ${key}=${shellQuote(value)}`;
 }
+
+/** `--print` 的输出格式：`eat env pull` 与 `eat db pull` 共用 */
+export const PRINT_FORMATS = ['dotenv', 'shell', 'json'] as const;
+export type PrintFormat = (typeof PRINT_FORMATS)[number];
+
+export function renderPrinted(values: Array<[string, string]>, format: PrintFormat): string {
+  if (format === 'json') return `${JSON.stringify(Object.fromEntries(values), null, 2)}\n`;
+  const line = format === 'shell' ? formatShellLine : formatDotenvLine;
+  return values.map(([k, v]) => `${line(k, v)}\n`).join('');
+}

@@ -527,7 +527,7 @@ describe('环境编辑与删除', () => {
 });
 
 describe('环境清单分页 / 筛选、单个环境详情、更新变量不带值（决策 39）', () => {
-  it('GET /api/envs 返回分页信封：关键词与来源筛选生效，counts 只随关键词变、不随 source 变', async () => {
+  it('GET /api/envs 返回分页信封：关键词筛选与分页生效', async () => {
     for (const i of [1, 2, 3]) {
       await api('POST', '/api/envs', {
         token: adminToken,
@@ -538,25 +538,18 @@ describe('环境清单分页 / 筛选、单个环境详情、更新变量不带�
     expect(all.status).toBe(200);
     expect(all.body).toMatchObject({ page: 1, pageSize: 20 });
     expect(all.body.total).toBeGreaterThanOrEqual(3);
-    // 本套用例没有数据库分配，全量清单就是全部手工环境
-    expect(all.body.counts).toEqual({ manual: all.body.total, db_assignment: 0 });
+    // 数据库凭证不再生成环境（决策 91），清单没有来源维度了
+    expect(all.body).not.toHaveProperty('counts');
 
     const paged = await api('GET', '/api/envs?q=page-env&page=2&pageSize=2', { token: memberToken });
     expect(paged.body.total).toBe(3);
     expect(paged.body.items).toHaveLength(1);
     expect(paged.body.items[0].slug).toBe('page-env-3');
-    expect(paged.body.counts).toEqual({ manual: 3, db_assignment: 0 });
-
-    const dbOnly = await api('GET', '/api/envs?q=page-env&source=db_assignment', { token: memberToken });
-    expect(dbOnly.body.items).toEqual([]);
-    expect(dbOnly.body.total).toBe(0);
-    expect(dbOnly.body.counts.manual).toBe(3);
 
     expect((await api('GET', '/api/envs?pageSize=1001', { token: memberToken })).status).toBe(400);
-    expect((await api('GET', '/api/envs?source=weird', { token: memberToken })).status).toBe(400);
   });
 
-  it('GET /api/envs/:slug 返回单个环境（Owner、来源、变量数）；不存在 404', async () => {
+  it('GET /api/envs/:slug 返回单个环境（Owner、变量数）；不存在 404', async () => {
     const r = await api('GET', '/api/envs/page-env-1', { token: memberToken });
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({
@@ -564,10 +557,9 @@ describe('环境清单分页 / 筛选、单个环境详情、更新变量不带�
       name: '分页环境 1',
       ownerName: '管理员',
       ownerEmail: 'admin@test.dev',
-      source: 'manual',
-      dbAssignment: null,
       variableCount: 0,
     });
+    expect(r.body).not.toHaveProperty('source');
     expect((await api('GET', '/api/envs/no-such-env', { token: memberToken })).status).toBe(404);
   });
 
@@ -765,13 +757,11 @@ describe('环境清单的读取状态与「我的 / 可读取」范围', () => {
     expect(bySlug['scope-env-d']).toMatchObject({ access: 'none', readableCount: 0, pendingRequest: true });
     expect(bySlug['scope-env-mine']).toMatchObject({ access: 'manage', readableCount: 0 });
     expect(all.body.scopeCounts).toEqual({ all: 5, mine: 1, readable: 4 });
-    expect(all.body.counts).toEqual({ manual: 5, db_assignment: 0 });
 
     const mine = await api('GET', '/api/envs?q=scope-env&scope=mine', { token: memberToken });
     expect(mine.body.items.map((e: { slug: string }) => e.slug)).toEqual(['scope-env-mine']);
     expect(mine.body.total).toBe(1);
-    // 页签计数跟着范围走，范围计数不随自己变
-    expect(mine.body.counts).toEqual({ manual: 1, db_assignment: 0 });
+    // 范围计数不随自己变
     expect(mine.body.scopeCounts).toEqual({ all: 5, mine: 1, readable: 4 });
 
     const readable = await api('GET', '/api/envs?q=scope-env&scope=readable', { token: memberToken });
@@ -781,10 +771,6 @@ describe('环境清单的读取状态与「我的 / 可读取」范围', () => {
       'scope-env-c',
       'scope-env-mine',
     ]);
-
-    // 来源筛到没有的那一类时，范围计数一起归零
-    const dbOnly = await api('GET', '/api/envs?q=scope-env&source=db_assignment', { token: memberToken });
-    expect(dbOnly.body.scopeCounts).toEqual({ all: 0, mine: 0, readable: 0 });
 
     // 详情接口给出同样的读取状态
     const detail = await api('GET', '/api/envs/scope-env-a', { token: memberToken });
@@ -843,7 +829,7 @@ describe('Private 环境：环境权限优先于变量可见性和授权', () =>
       expect((await api(method, url, { token: adminToken, payload })).status, url).toBe(404);
     }
     const list = await api('GET', '/api/envs?q=private-env', { token: adminToken });
-    expect(list.body).toMatchObject({ items: [], total: 0, counts: { manual: 0, db_assignment: 0 } });
+    expect(list.body).toMatchObject({ items: [], total: 0, scopeCounts: { all: 0, mine: 0, readable: 0 } });
     const catalog = await api('GET', '/api/catalog', { token: adminToken });
     expect(catalog.body.some((r: any) => r.environment.id === privateEnvId)).toBe(false);
     const audit = await api('GET', '/api/audit', { token: adminToken });
