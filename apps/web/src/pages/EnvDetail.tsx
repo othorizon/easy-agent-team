@@ -8,7 +8,7 @@ import type {
   VariableMeta,
 } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, ArrowRight, Check, Database, Eye, EyeOff, Loader2, Pencil, Plus, ShieldCheck, Trash2 } from 'lucide-react';
+import { ArrowLeft, Check, Eye, EyeOff, Loader2, Pencil, Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { createEnvironmentSchema, upsertVariableSchema } from '@eat/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -35,7 +35,6 @@ import { Switch } from '../components/ui/switch';
 import { formatDateTime } from '../lib/format';
 import type { z } from '../lib/zod';
 import { cn } from '../lib/utils';
-import { DB_STATUS_BADGE } from './db-shared';
 
 interface UserRow {
   id: string;
@@ -166,12 +165,10 @@ export function EnvDetailPage() {
     onSuccess: () => {
       toast.success('环境已删除');
       void queryClient.invalidateQueries({ queryKey: ['envs'] });
-      navigate(env?.source === 'db_assignment' ? '/?tab=database' : '/');
+      navigate('/');
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : '删除失败'),
   });
-
-  const isDbEnv = env?.source === 'db_assignment';
 
   const variableColumns: DataTableColumn<VariableMeta>[] = [
     {
@@ -304,7 +301,7 @@ export function EnvDetailPage() {
     <div className="space-y-5">
       <div>
         <Link
-          to={isDbEnv ? '/?tab=database' : '/'}
+          to="/"
           className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
           <ArrowLeft className="size-3.5" />
@@ -316,22 +313,9 @@ export function EnvDetailPage() {
               环境 <InlineCode className="text-lg">{slug}</InlineCode>
               {env?.name && <span>{env.name}</span>}
               {isPrivate && <Badge variant="secondary">Private · 仅自己可见</Badge>}
-              {isDbEnv && (
-                <Badge variant="secondary">
-                  <Database />
-                  数据库凭证
-                </Badge>
-              )}
             </span>
           }
-          description={
-            env && (env.description || isDbEnv) ? (
-              <>
-                {env.description}
-                {isDbEnv && <DbSourceLine env={env} />}
-              </>
-            ) : undefined
-          }
+          description={env?.description || undefined}
           actions={
             canManage && (
               <>
@@ -341,11 +325,7 @@ export function EnvDetailPage() {
                 </Button>
                 <Confirm
                   title={`删除环境 ${slug}？`}
-                  description={
-                    isDbEnv
-                      ? '这是数据库分配生成的凭证环境：删除后密码无法找回，分配记录会失去凭证。如果是想回收这个库，请到「数据库」页删除分配记录。'
-                      : '将同时删除环境下的全部变量与授权，此操作不可恢复。'
-                  }
+                  description="将同时删除环境下的全部变量与授权，此操作不可恢复。"
                   confirmText="删除"
                   onConfirm={() => removeEnv.mutate()}
                 >
@@ -427,30 +407,6 @@ export function EnvDetailPage() {
         />
       )}
     </div>
-  );
-}
-
-/** 页头下的来源行：这组凭证是哪个库的、在哪台实例、分配现在什么状态，点过去就是分配详情（决策 39） */
-function DbSourceLine({ env }: { env: EnvironmentInfo }) {
-  const link = env.dbAssignment;
-  return (
-    <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-      <Database className="size-3.5 shrink-0" aria-hidden />
-      {link ? (
-        <>
-          <span>
-            数据库分配自动生成 · 库 <InlineCode>{link.dbName}</InlineCode> · {link.instanceName}
-          </span>
-          {DB_STATUS_BADGE[link.status]}
-          <Link to={`/db/${link.id}`} className="inline-flex items-center gap-0.5 text-primary underline-offset-3 hover:underline">
-            查看分配
-            <ArrowRight className="size-3" />
-          </Link>
-        </>
-      ) : (
-        <span>数据库分配自动生成，关联的分配记录已不存在</span>
-      )}
-    </span>
   );
 }
 
@@ -577,11 +533,6 @@ function OwnerCard({ env, me, canManage }: { env: EnvironmentInfo; me: UserPubli
               </li>
             ))}
           </ul>
-          {env.source === 'db_assignment' && !isPrivate && (
-            <p className="text-[13px] leading-relaxed text-muted-foreground">
-              这个环境随数据库分配自动生成，申请人即 Owner；想让同事一起用这个库，把整个环境授权给对方即可。
-            </p>
-          )}
           {!canManage && (
             <p className="text-[13px] leading-relaxed text-muted-foreground">
               需要读取这里的变量？在清单里对目标变量发起权限申请，由 Owner 或管理员审批。

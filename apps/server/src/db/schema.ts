@@ -429,9 +429,6 @@ export const environments = pgTable('environment', {
   ownerId: uuid('owner_id')
     .notNull()
     .references(() => users.id),
-  source: text('source', { enum: ['manual', 'db_assignment'] })
-    .notNull()
-    .default('manual'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -765,7 +762,7 @@ export const dbInstances = pgTable('db_instance', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-/** 库 + 专属账号的分配记录；active 后关联生成的环境 */
+/** 库 + 专属账号的分配记录；连接凭证存在记录自身上（决策 91），不再生成环境 */
 export const dbAssignments = pgTable(
   'db_assignment',
   {
@@ -783,7 +780,14 @@ export const dbAssignments = pgTable(
     status: text('status', { enum: ['pending', 'provisioning', 'active', 'failed', 'rejected', 'disabled', 'deleted', 'withdrawn'] })
       .notNull()
       .default('pending'),
+    /**
+     * 旧版本批准时生成的凭证环境（决策 39）。决策 91 起不再生成、新代码不读不写，
+     * 只留给 `pnpm db:migrate` 里的 repair-db-credentials 把存量凭证搬回来——搬完即置空。
+     * 线上可能有还没跑过搬迁的库，别在同一个版本里删这一列
+     */
     environmentId: uuid('environment_id').references(() => environments.id, { onDelete: 'set null' }),
+    /** 分配账号的密码（信封加密，同 EAT_KEK）；主机 / 端口取实例、库名 / 账号取本行。删除分配时清空 */
+    passwordEncrypted: text('password_encrypted'),
     error: text('error'),
     decidedBy: uuid('decided_by').references(() => users.id),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

@@ -18,7 +18,7 @@ import {
   envUpdate,
 } from './commands/env.js';
 import { askCreate, askDelete, askList, askReply, askResolve, askShow, askTargets } from './commands/ask.js';
-import { dbInstances, dbList, dbRequest } from './commands/db.js';
+import { dbCredentialsPull, dbCredentialsRun, dbInstances, dbList, dbRequest } from './commands/db.js';
 import {
   appCreate,
   appDelete,
@@ -220,7 +220,7 @@ configCmd
 
 registerOssCommands(program);
 
-const db = program.command('db').description('数据库账号：查看实例、申请库、查看我的分配');
+const db = program.command('db').description('数据库账号：查看实例、申请库、查看我的分配、取连接凭证');
 db.command('instances').description('查看可用的数据库实例').action(dbInstances);
 db
   .command('request <dbName>')
@@ -228,7 +228,26 @@ db
   .requiredOption('--instance <instance>', '实例 ID 或名称（eat db instances 查看）')
   .requiredOption('--purpose <purpose>', '用途说明（给管理员看）')
   .action(dbRequest);
-db.command('list').description('我的数据库分配与凭证环境').action(dbList);
+db.command('list').description('我的数据库分配与申请进度').action(dbList);
+const dbCredentials = db
+  .command('credentials')
+  .alias('creds')
+  .description('连接凭证（DB_HOST…DB_PASSWORD、DATABASE_URL）：写进 .env 或注入命令运行；<db> 为库名、库名@实例名或分配 id');
+dbCredentials
+  .command('pull <db>')
+  .description('取连接凭证，默认写入 ./.env（同名文件不是 eat 写的会中止；--merge 合并进去）')
+  .option('--out <file>', '输出文件（默认 .env）')
+  .option('--merge', '合并进已有文件：同名 key 改值、新 key 追加，其余内容原样保留（改了别人文件里的值会先备份）')
+  .option('--print', '打印到标准输出而不写文件')
+  .option('--format <format>', '配合 --print：dotenv（默认）/ shell（export 语句，可 eval）/ json / url（只输出连接串）')
+  .option('--force', '覆盖不是 eat 生成的同名文件（覆盖前自动备份为 <file>.bak-<时间戳>）')
+  .action(dbCredentialsPull);
+dbCredentials
+  .command('run <db> <command...>')
+  .usage('<db> -- <command...>')
+  .description('把连接凭证注入子进程后运行命令（命令写在 -- 之后）：值不落盘，退出码透传；平台值覆盖当前 shell 的同名变量')
+  .showHelpAfterError('提示：要运行的命令写在 -- 之后，例如 eat db credentials run crm -- npm run migrate')
+  .action(dbCredentialsRun);
 
 // deploy 留在顶层：最高频，且做成 `app deploy` 会与 `app <slug>` 形式的参数打架
 program

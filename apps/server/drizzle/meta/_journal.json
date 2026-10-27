@@ -253,6 +253,13 @@
       "when": 1793029956025,
       "tag": "0035_deployment_stop",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1793072868060,
+      "tag": "0036_db_credentials",
+      "breakpoints": true
     }
   ]
 }

@@ -95,11 +95,11 @@ export function CopyButton({ text, className }: { text: string; className?: stri
   );
 }
 
-/** 带复制按钮的单行命令 */
+/** 带复制按钮的单行命令；放不下时命令在框内横向滚动（flex 子项要 min-w-0 才肯收缩，否则会把页面撑宽） */
 export function Cmd({ text }: { text: string }) {
   return (
     <div className="flex w-fit max-w-full items-center gap-1 rounded-md border bg-muted/60 py-1 pr-1 pl-2.5">
-      <code className="overflow-x-auto whitespace-nowrap font-mono text-[13px]">{text}</code>
+      <code className="min-w-0 overflow-x-auto whitespace-nowrap font-mono text-[13px]">{text}</code>
       <CopyButton text={text} />
     </div>
   );

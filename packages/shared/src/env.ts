@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { slugSchema } from './common.js';
-import { dbAssignmentStatusSchema } from './db.js';
 
 /** 环境变量 Key：沿用惯例，大写字母开头的大写蛇形 */
 export const variableKeySchema = z
@@ -25,19 +24,6 @@ export type CreateEnvironmentRequest = z.infer<typeof createEnvironmentSchema>;
 export const updateEnvironmentSchema = createEnvironmentSchema.partial().omit({ slug: true });
 export type UpdateEnvironmentRequest = z.infer<typeof updateEnvironmentSchema>;
 
-/** 环境来源：手工创建，或数据库分配批准时自动生成的凭证环境（决策 39） */
-export const environmentSourceSchema = z.enum(['manual', 'db_assignment']);
-export type EnvironmentSource = z.infer<typeof environmentSourceSchema>;
-
-/** 凭证环境回指生成它的数据库分配：从环境能找回是哪个库、在哪个实例、现在什么状态，页面之间可以互相跳转 */
-export const environmentDbAssignmentSchema = z.object({
-  id: z.string(),
-  dbName: z.string(),
-  instanceName: z.string(),
-  status: dbAssignmentStatusSchema,
-});
-export type EnvironmentDbAssignment = z.infer<typeof environmentDbAssignmentSchema>;
-
 /**
  * 当前用户对这个环境的读值能力（清单行右侧的状态、「可读取」筛选都看它）：
  * manage = Owner 或管理员，全部可读也可改；all = 环境级授权；partial = 部分变量授权；none = 一个都读不了
@@ -54,9 +40,6 @@ export const environmentSchema = z.object({
   ownerId: z.string(),
   ownerName: z.string(),
   ownerEmail: z.string(),
-  source: environmentSourceSchema,
-  /** source=db_assignment 时指向生成它的分配记录；分配记录已不存在（实例被删等）时为 null */
-  dbAssignment: environmentDbAssignmentSchema.nullable(),
   variableCount: z.number(),
   access: environmentAccessSchema,
   /** 当前用户能读值的变量数；manage / all 时等于 variableCount */
@@ -71,19 +54,14 @@ export type EnvironmentInfo = z.infer<typeof environmentSchema>;
 export const ENV_LIST_MAX_PAGE_SIZE = 1000;
 export const ENV_LIST_DEFAULT_PAGE_SIZE = 20;
 
-/** 清单按来源筛选：控制台的「常规 / 数据库」页签就是它 */
-export const envListSourceSchema = z.enum(['all', 'manual', 'db_assignment']);
-export type EnvListSource = z.infer<typeof envListSourceSchema>;
-
 /** 清单按与我的关系筛选：mine = 我是 Owner；readable = 我至少能读一个变量的值（access 不是 none） */
 export const envListScopeSchema = z.enum(['all', 'mine', 'readable']);
 export type EnvListScope = z.infer<typeof envListScopeSchema>;
 
 /** GET /api/envs 的查询串（数值从 query 来，用 coerce） */
 export const envListQuerySchema = z.object({
-  /** 关键词：匹配 slug / 名称 / 备注 / 关联库名，大小写不敏感 */
+  /** 关键词：匹配 slug / 名称 / 备注，大小写不敏感 */
   q: z.string().trim().max(100).optional(),
-  source: envListSourceSchema.default('all'),
   scope: envListScopeSchema.default('all'),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(ENV_LIST_MAX_PAGE_SIZE).default(ENV_LIST_DEFAULT_PAGE_SIZE),
@@ -96,12 +74,7 @@ export const envListResultSchema = z.object({
   total: z.number(),
   page: z.number(),
   pageSize: z.number(),
-  /** 两类来源各有几条：关键词与 scope 已应用、source 不参与——回答「切到那个页签会有几条」 */
-  counts: z.object({
-    manual: z.number(),
-    db_assignment: z.number(),
-  }),
-  /** 各范围各有几条：关键词与 source 已应用、scope 不参与 */
+  /** 各范围各有几条：关键词已应用、scope 不参与——回答「切到那个范围会有几条」 */
   scopeCounts: z.object({
     all: z.number(),
     mine: z.number(),

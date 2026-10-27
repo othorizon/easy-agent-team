@@ -7,8 +7,8 @@ import { isOssTool, ossToolRequest } from '@eat/shared';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { buildEatTools, CLI_VERSION, resolveDbInstance, STATIC_CONTAINER_PORT } from '@eat/shared';
-import type { AppInfo, DbInstanceInfo } from '@eat/shared';
+import { buildEatTools, CLI_VERSION, matchDbAssignments, resolveDbInstance, STATIC_CONTAINER_PORT } from '@eat/shared';
+import type { AppInfo, DbAssignmentInfo, DbInstanceInfo } from '@eat/shared';
 import { Api, ApiError, setClientTag } from './client.js';
 import { isFolioTool, folioToolRequest } from '@eat/shared';
 import { takeUpdateNoticeForMcp } from './update.js';
@@ -197,6 +197,27 @@ export async function startMcpServer(): Promise<void> {
         }
         case 'list_db_assignments': {
           return jsonResult(await api.request('GET', '/api/db/assignments/mine'));
+        }
+        case 'get_db_credentials': {
+          const mine = await api.request<DbAssignmentInfo[]>('GET', '/api/db/assignments/mine');
+          const ref = String(args.assignment ?? '');
+          const hits = matchDbAssignments(mine, ref);
+          if (hits.length !== 1) {
+            return jsonResult({
+              error: hits.length === 0 ? 'DB_ASSIGNMENT_NOT_FOUND' : 'DB_ASSIGNMENT_AMBIGUOUS',
+              message:
+                hits.length === 0
+                  ? `名下没有库 ${ref}，用 list_db_assignments 查看`
+                  : `有 ${hits.length} 个同名库，改用「库名@实例名」或分配 id`,
+              assignments: (hits.length === 0 ? mine : hits).map((a) => ({
+                id: a.id,
+                dbName: a.dbName,
+                instanceName: a.instanceName,
+                status: a.status,
+              })),
+            });
+          }
+          return jsonResult(await api.request('POST', `/api/db/assignments/${hits[0].id}/credentials`));
         }
         case 'list_apps': {
           return jsonResult((await api.request<AppInfo[]>('GET', '/api/apps')).map(forAgent));

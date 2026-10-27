@@ -1,6 +1,6 @@
 import type { CreateDbInstanceRequest, DbAssignmentInfo, DbInstanceInfo } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRight, Plus, Search } from 'lucide-react';
+import { ArrowRight, KeyRound, Plus, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { createDbAssignmentSchema, createDbInstanceSchema } from '@eat/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -167,10 +167,16 @@ export function DbsPage() {
       header: '凭证',
       meta: { className: 'w-40' },
       cell: ({ row: { original: r } }) =>
-        r.environmentSlug ? (
-          <Link to={`/envs/${r.environmentSlug}`}>
-            <InlineCode className="text-primary hover:underline">{r.environmentSlug}</InlineCode>
+        r.status === 'active' && r.hasCredentials ? (
+          // 凭证只在详情页取（读取落审计），清单上只给入口
+          <Link to={`/db/${r.id}`} className="inline-flex items-center gap-1 text-primary underline-offset-3 hover:underline">
+            <KeyRound className="size-3.5" />
+            查看凭证
           </Link>
+        ) : r.status === 'active' ? (
+          <Tip content="平台上没有这个账号的密码（旧版本删除过它的凭证环境），需管理员在实例上重置">
+            <span className="text-muted-foreground">无可用凭证</span>
+          </Tip>
         ) : r.error ? (
           <Tip content={r.error}>
             <span className="block max-w-40 truncate text-destructive">{r.error}</span>
@@ -282,7 +288,7 @@ export function DbsPage() {
     <div className="space-y-5">
       <PageHeader
         title="数据库"
-        description="团队共享的数据库实例（面向日常项目，非生产核心）。成员申请后由管理员批准，平台自动建库建号，凭证以环境变量形式下发。"
+        description="团队共享的数据库实例（面向日常项目，非生产核心）。成员申请后由管理员批准，平台自动建库建号，连接凭证在分配详情里查看，或用 eat db credentials pull 写进本地 .env。"
         actions={
           <>
             {isAdmin && (
@@ -332,7 +338,7 @@ export function DbsPage() {
                     assignmentRows,
                     false,
                     mine.isLoading,
-                    '暂无。点击「申请数据库」，批准后凭证会出现在你的环境列表里。',
+                    '暂无。点击「申请数据库」，批准后在这里查看连接凭证。',
                   )}
               {pagination}
             </CardContent>
@@ -515,7 +521,7 @@ function RequestDbDialog({
             htmlFor="req-dbname"
             required
             error={errors.dbName?.message}
-            hint="也用于生成账号名与凭证环境名"
+            hint="也用于生成账号名（u_<库名>）"
           >
             <Input
               id="req-dbname"

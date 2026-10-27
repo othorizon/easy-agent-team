@@ -18,6 +18,7 @@ import * as path from 'node:path';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
+import { encryptSecret } from '../src/common/crypto';
 import * as schema from '../src/db/schema';
 
 let app: NestFastifyApplication;
@@ -380,6 +381,30 @@ describe('工具', () => {
     const err = toolJson(r.body);
     expect(err.error).toBe('DB_INSTANCE_NOT_FOUND');
     expect(err.instances.map((i: { name: string }) => i.name)).toContain('业务 PostgreSQL');
+  });
+
+  it('get_db_credentials 按库名取连接凭证（决策 91）；名字不对把候选一起回过去', async () => {
+    // 跳过真实建库：直接把上一条申请摆成「已开通、平台存着密码」
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    await pool.query(`UPDATE db_assignment SET status='active', password_encrypted=$1 WHERE db_name='usage_anomaly'`, [
+      encryptSecret('p@ss/word'),
+    ]);
+    await pool.end();
+    const cred = toolJson(
+      (await rpc('tools/call', { name: 'get_db_credentials', arguments: { assignment: 'usage_anomaly' } })).body,
+    );
+    expect(cred).toMatchObject({ database: 'usage_anomaly', user: 'u_usage_anomaly', password: 'p@ss/word' });
+    // 连接串里的密码做了 URL 编码
+    expect(cred.url).toContain(':p%40ss%2Fword@');
+
+    const r = await rpc('tools/call', { name: 'get_db_credentials', arguments: { assignment: 'nope_db' } });
+    expect(r.body.result.isError).toBe(true);
+    const err = toolJson(r.body);
+    expect(err.error).toBe('DB_ASSIGNMENT_NOT_FOUND');
+    expect(err.assignments.map((a: { dbName: string }) => a.dbName)).toContain('usage_anomaly');
+
+    const audits = await api('GET', '/api/audit?action=db_credentials.read', { token: adminToken });
+    expect(audits.body.find((a: { actorTokenId: string | null }) => a.actorTokenId === apiKeyId)).toBeTruthy();
   });
 
   it('敏感读取记进审计，且认得出是哪把 Key 干的', async () => {

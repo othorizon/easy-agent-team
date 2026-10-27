@@ -1,7 +1,7 @@
 import type { CreateEnvironmentRequest, EnvironmentInfo, EnvListResult, EnvListScope } from '@eat/shared';
 import { ENV_LIST_DEFAULT_PAGE_SIZE } from '@eat/shared';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRight, Check, CircleCheck, Clock, Database, Lock, Plus, Search, ShieldCheck, SquareTerminal } from 'lucide-react';
+import { Check, CircleCheck, Clock, Lock, Plus, Search, ShieldCheck, SquareTerminal } from 'lucide-react';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { createEnvironmentSchema } from '@eat/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -22,23 +22,14 @@ import { Tip } from '../components/ui/tooltip';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { ListSkeleton } from '../components/ui/skeleton';
-import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { formatDateTime, formatRelativeTime } from '../lib/format';
 import { cn } from '../lib/utils';
 import { useQueryParams } from '../lib/use-query-params';
-import { DB_STATUS_BADGE } from './db-shared';
 
 /**
- * 页签 ↔ 清单接口的 source 参数。「常规」是手工创建的环境，「数据库」是数据库分配批准时自动生成的
- * 凭证环境（决策 39）——后者一条对应一个库、Owner 是申请人，混在一起会把公共配置淹没在一堆 db-xxx 里
+ * 范围：全部 / 我的 / 可读取。数据库凭证不再生成环境（决策 91），原来的「常规 / 数据库」页签随之撤掉，
+ * 范围成了唯一的筛选维度，照 Skill 清单用实心分段
  */
-const TABS = [
-  { value: 'regular', source: 'manual', label: '常规' },
-  { value: 'database', source: 'db_assignment', label: '数据库' },
-] as const;
-type TabValue = (typeof TABS)[number]['value'];
-
-/** 范围：与页签正交的第二个维度，用描边分段与页签区分开（决策 43 的做法） */
 const SCOPE_OPTIONS: Array<{ value: EnvListScope; label: string }> = [
   { value: 'all', label: '全部' },
   { value: 'mine', label: '我的' },
@@ -50,13 +41,11 @@ export function EnvsPage() {
   const me = getStoredUser();
   const [creating, setCreating] = useState(false);
   const [params, setParams] = useQueryParams({
-    tab: 'regular',
     scope: 'all',
     q: '',
     page: '1',
     pageSize: String(ENV_LIST_DEFAULT_PAGE_SIZE),
   });
-  const tab = (TABS.find((t) => t.value === params.tab) ?? TABS[0]) as (typeof TABS)[number];
   const scope = SCOPE_OPTIONS.find((o) => o.value === params.scope)?.value ?? 'all';
   const page = Math.max(1, Number(params.page) || 1);
   const pageSize = Number(params.pageSize) || ENV_LIST_DEFAULT_PAGE_SIZE;
@@ -80,16 +69,15 @@ export function EnvsPage() {
   }, [params.q]);
 
   const envs = useQuery({
-    queryKey: ['envs', params.q, tab.source, scope, page, pageSize],
+    queryKey: ['envs', params.q, scope, page, pageSize],
     queryFn: () =>
       api<EnvListResult>(
         'GET',
-        `/api/envs?${new URLSearchParams({ q: params.q, source: tab.source, scope, page: String(page), pageSize: String(pageSize) })}`,
+        `/api/envs?${new URLSearchParams({ q: params.q, scope, page: String(page), pageSize: String(pageSize) })}`,
       ),
     placeholderData: keepPreviousData,
   });
   const items = envs.data?.items ?? [];
-  const counts = envs.data?.counts;
   const scopeCounts = envs.data?.scopeCounts;
 
   const create = useMutation({
@@ -104,7 +92,6 @@ export function EnvsPage() {
 
   const empty = emptyState({
     searching: params.q !== '',
-    database: tab.value === 'database',
     scope,
     onClearSearch: () => setSearch(''),
     onCreate: () => setCreating(true),
@@ -130,19 +117,7 @@ export function EnvsPage() {
 
       <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex flex-wrap items-center gap-2">
-          <Tabs value={tab.value} onValueChange={(v) => setParams({ tab: v as TabValue, page: '1' })}>
-            <TabsList aria-label="环境来源">
-              {TABS.map((t) => (
-                <TabsTrigger key={t.value} value={t.value}>
-                  {t.label}
-                  {/* 数量回答「切过去会有几条」：关键词与范围已应用、页签本身不参与计数 */}
-                  {counts && <span className="text-xs tabular-nums opacity-60">{counts[t.source]}</span>}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
           <Segmented
-            variant="outline"
             ariaLabel="与我的关系"
             value={scope}
             onChange={(v) => setParams({ scope: v, page: '1' })}
@@ -161,7 +136,7 @@ export function EnvsPage() {
           <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             className="pl-9"
-            placeholder={tab.value === 'database' ? '搜索标识 / 名称 / 库名' : '搜索标识 / 名称 / 备注'}
+            placeholder="搜索标识 / 名称 / 备注"
             aria-label="搜索环境"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -204,13 +179,11 @@ export function EnvsPage() {
 /** 空清单按「为什么空」给出下一步，而不是一句「暂无数据」 */
 function emptyState({
   searching,
-  database,
   scope,
   onClearSearch,
   onCreate,
 }: {
   searching: boolean;
-  database: boolean;
   scope: EnvListScope;
   onClearSearch: () => void;
   onCreate: () => void;
@@ -223,20 +196,6 @@ function emptyState({
           清除搜索
         </Button>
       ),
-    };
-  }
-  if (database) {
-    const dbLink = (
-      <Button variant="outline" size="sm" asChild>
-        <Link to="/db">去申请数据库</Link>
-      </Button>
-    );
-    if (scope === 'all') {
-      return { text: '还没有数据库凭证环境。到「数据库」页申请一个库，批准后凭证会以环境的形式出现在这里。', action: dbLink };
-    }
-    return {
-      text: scope === 'mine' ? '你还没有数据库凭证环境。申请的库批准后，凭证会出现在这里。' : '还没有你能读取的数据库凭证环境。',
-      action: scope === 'mine' ? dbLink : undefined,
     };
   }
   if (scope === 'mine') {
@@ -277,7 +236,6 @@ function shouldSkipRowNav(target: HTMLElement, pointerType: string) {
  * 清单的一行：名称 + 备注排成阅读流，slug 退为等宽小字，元信息压成一行小字（Owner · 创建时间）；
  * 右侧是「我能不能读」——扫清单时真正要回答的问题，可读的环境悬停即可复制拉取命令。
  * 整行可点进详情（选中文字时不跳，免得复制 slug 时被带走）。
- * 数据库凭证环境多一行「库 · 实例 · 状态」并直达分配详情（决策 39）。
  */
 function EnvRow({ env, isMine }: { env: EnvironmentInfo; isMine: boolean }) {
   const navigate = useNavigate();
@@ -320,7 +278,6 @@ function EnvRow({ env, isMine }: { env: EnvironmentInfo; isMine: boolean }) {
             未填写备注{env.access === 'manage' && '，AI 无法据此判断这个环境是干嘛的，建议补上'}
           </p>
         )}
-        {env.source === 'db_assignment' && <DbSourceMeta env={env} />}
         <div className="flex min-w-0 items-center gap-1.5 pt-0.5 text-xs text-muted-foreground tabular-nums">
           {/* 窄屏把读取状态并进这一行的右端，省掉单独一行 */}
           <AccessStatus env={env} isMine={isMine} className="order-last ml-auto pl-2 sm:hidden" />
@@ -440,35 +397,6 @@ function PullCommandButton({ slug }: { slug: string }) {
         {copied ? <Check className="size-4 text-success" /> : <SquareTerminal className="size-4" />}
       </button>
     </Tip>
-  );
-}
-
-/** 凭证环境的来源行：哪个库、哪台实例、现在什么状态，点过去就是分配详情 */
-function DbSourceMeta({ env }: { env: EnvironmentInfo }) {
-  const link = env.dbAssignment;
-  return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground">
-      <Database className="size-3.5 shrink-0" aria-hidden />
-      {link ? (
-        <>
-          <span>
-            库 <InlineCode>{link.dbName}</InlineCode>
-          </span>
-          <MetaDot />
-          <span className="truncate">{link.instanceName}</span>
-          {DB_STATUS_BADGE[link.status]}
-          <Link
-            to={`/db/${link.id}`}
-            className="inline-flex items-center gap-0.5 text-primary underline-offset-3 hover:underline"
-          >
-            分配详情
-            <ArrowRight className="size-3" />
-          </Link>
-        </>
-      ) : (
-        <span>数据库分配生成的凭证环境，关联的分配记录已不存在</span>
-      )}
-    </div>
   );
 }
 

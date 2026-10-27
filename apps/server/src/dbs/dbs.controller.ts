@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { RequestsService } from '../requests/requests.service';
-import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Param, Post, Req } from '@nestjs/common';
+import type { FastifyRequest } from 'fastify';
 import {
   createDbAssignmentSchema,
   createDbInstanceSchema,
@@ -53,6 +54,13 @@ export class DbsController {
   @Get('assignments/:id')
   get(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.dbs.get(user, id);
+  }
+
+  /** 连接凭证（决策 91）：申请人或管理员；POST + no-store，每次读取落审计——与 OSS 的个人凭证同一形状 */
+  @Post('assignments/:id/credentials')
+  @Header('Cache-Control', 'no-store')
+  credentials(@Param('id') id: string, @CurrentUser() user: AuthUser, @Req() req: FastifyRequest) {
+    return this.dbs.credentials(user, id, req.ip);
   }
 
   @Post('assignments/:id/approve')
