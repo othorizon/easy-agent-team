@@ -23,7 +23,7 @@ import { feishuBindCodes, feishuBindings, feishuSettings, users } from '../../db
 import { decryptSecret, encryptSecret, sha256Hex } from '../../common/crypto';
 import { AuditService } from '../../audit/audit.service';
 import { loadConfig } from '../../config';
-import { FeishuApi } from './feishu-api';
+import { FeishuApi, FeishuApiError } from './feishu-api';
 
 type SettingsRow = typeof feishuSettings.$inferSelect;
 
@@ -38,6 +38,19 @@ export type BindResult =
   | { ok: false; reason: 'invalid' | 'disabled' };
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/**
+ * 权限两个接口文档里列出的错误码（「向管理员申请授权」「查询租户授权状态」，均为公开接口、无需额外权限），
+ * 翻成管理员能照着做的话；其余错误照飞书原文显示。
+ */
+const SCOPE_ERRORS: Record<number, string> = {
+  212001: '剩余未授权的都是高敏权限，不能通过接口申请，请在开发者后台提交，或请企业管理员在管理后台审批',
+  212002: '没有需要申请的权限，可能刚刚已全部授权，请点「检查状态」刷新',
+  212003: '这个版本向管理员申请授权的次数已达上限（每个版本 10 次），请直接联系企业管理员审批，或发布新版本后再申请',
+  212004: '已经申请过，正在等待企业管理员审批',
+  212100: '应用还没有在企业内安装：请在开发者后台「版本管理与发布」发布版本，并等待企业管理员审核通过',
+};
+const scopeError = (e: unknown) => (e instanceof FeishuApiError && SCOPE_ERRORS[e.code]) || message(e);
 const bindHash = (code: string) => sha256Hex(`feishu-bind:${code}`);
 
 /**
@@ -229,7 +242,7 @@ export class FeishuAppService {
           return { ...s, status: !grant ? 'missing' : grant.grant_status === 1 ? 'granted' : 'pending' };
         });
       } catch (e) {
-        result.scopesError = message(e);
+        result.scopesError = scopeError(e);
       }
     }
     await this.db
@@ -265,7 +278,8 @@ export class FeishuAppService {
     try {
       await this.client(row)!.applyScopes();
     } catch (e) {
-      return { applied: false, consoleUrl, message: `向管理员申请授权失败：${message(e)}` };
+      const known = e instanceof FeishuApiError && SCOPE_ERRORS[e.code];
+      return { applied: false, consoleUrl, message: known || `向管理员申请授权失败：${message(e)}` };
     }
     await this.audit.record({
       actorId,

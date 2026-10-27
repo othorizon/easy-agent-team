@@ -30,6 +30,9 @@ const feishu = {
   ] as { scope_name: string; grant_status: number; scope_type: string }[],
   nextMessage: 0,
   failSend: false,
+  /** 按官方文档：失败时 HTTP 400 + 业务错误码 */
+  applyCode: 0,
+  scopesCode: 0,
 };
 let fetchSpy: MockInstance<typeof fetch>;
 const sent = (path: string) => feishu.calls.filter((c) => c.path.startsWith(path));
@@ -126,8 +129,13 @@ beforeAll(async () => {
     }
     expect((init?.headers as Record<string, string>).authorization).toBe('Bearer t-token');
     if (path === '/bot/v3/info') return json({ code: 0, bot: { activate_status: 2, app_name: 'EAT 助手', avatar_url: 'https://example.com/a.png' } });
-    if (path === '/application/v6/scopes') return json({ code: 0, data: { scopes: feishu.scopes } });
-    if (path === '/application/v6/scopes/apply') return json({ code: 0, data: {} });
+    const fail = (code: number, msg: string) => new Response(JSON.stringify({ code, msg }), { status: 400 });
+    if (path === '/application/v6/scopes') {
+      return feishu.scopesCode ? fail(feishu.scopesCode, 'app not install') : json({ code: 0, data: { scopes: feishu.scopes } });
+    }
+    if (path === '/application/v6/scopes/apply') {
+      return feishu.applyCode ? fail(feishu.applyCode, 'duplicate apply') : json({ code: 0, msg: 'success', data: {} });
+    }
     if (path.startsWith('/im/v1/messages?receive_id_type=open_id')) {
       if (feishu.failSend) return json({ code: 230013, msg: 'bot has no availability to this user' });
       return json({ code: 0, data: { message_id: `om_card_${++feishu.nextMessage}` } });
@@ -191,9 +199,17 @@ describe('飞书自建应用：安装与检查', () => {
     const r = await api('POST', '/api/settings/feishu/scopes/apply');
     expect(r.body).toMatchObject({ applied: true, consoleUrl: feishuScopeApplyUrl(APP.appId, ['im:message.p2p_msg:readonly']) });
     expect(sent('/application/v6/scopes/apply')).toHaveLength(1);
-    feishu.scopes = [{ scope_name: 'im:message:send_as_bot', grant_status: 1, scope_type: 'tenant' }];
+    // 文档里的错误码翻成能照着做的提示
+    feishu.applyCode = 212004;
+    expect((await api('POST', '/api/settings/feishu/scopes/apply')).body).toMatchObject({ applied: false, message: '已经申请过，正在等待企业管理员审批' });
+    feishu.applyCode = 0;
+    // 官方文档的响应里不带 scope_type
+    feishu.scopes = [{ scope_name: 'im:message:send_as_bot', grant_status: 1 }] as typeof feishu.scopes;
     expect((await api('POST', '/api/settings/feishu/scopes/apply')).body).toMatchObject({ applied: false, consoleUrl: expect.stringContaining('p2p_msg') });
-    expect(sent('/application/v6/scopes/apply')).toHaveLength(1);
+    expect(sent('/application/v6/scopes/apply')).toHaveLength(2);
+    feishu.scopesCode = 212100;
+    expect((await api('POST', '/api/settings/feishu/check')).body.check.scopesError).toContain('还没有在企业内安装');
+    feishu.scopesCode = 0;
   });
 
   it('回调：未加密、签名错、token 错一律拒绝；地址验证通过后记下', async () => {
