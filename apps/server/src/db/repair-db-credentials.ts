@@ -71,7 +71,7 @@ export async function moveDbCredentialsOutOfEnvs<TSchema extends Record<string, 
         await tx
           .update(environments)
           .set({
-            description: `${env.description}\n\n数据库 ${row.dbName} 的连接凭证已移到数据库页（eat db pull ${row.dbName}），这里只保留后来加进来的变量。`.trim(),
+            description: `${env.description}\n\n数据库 ${row.dbName} 的连接凭证已移到数据库页（eat db credentials pull ${row.dbName}），这里只保留后来加进来的变量。`.trim(),
           })
           .where(eq(environments.id, env.id));
       }

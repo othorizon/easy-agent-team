@@ -3,6 +3,7 @@ import type { DbAssignmentInfo, DbCredentials, DbInstanceInfo } from '@eat/share
 import { Api } from '../client.js';
 import { mergeEnvFile, printWriteResult, writeEnvFile } from '../dotenv-file.js';
 import { formatDotenvLine, PRINT_FORMATS, renderPrinted, type PrintFormat } from '../dotenv-format.js';
+import { runWithEnv } from '../run-with-env.js';
 
 const STATUS_LABEL: Record<string, string> = {
   pending: '待批准',
@@ -41,7 +42,7 @@ export async function dbRequest(dbName: string, opts: { instance: string; purpos
     dbName,
     purpose: opts.purpose,
   });
-  console.log(`申请已提交（${r.dbName} @ ${r.instanceName}），等待管理员批准。批准后用 eat db pull ${r.dbName} 取连接凭证。`);
+  console.log(`申请已提交（${r.dbName} @ ${r.instanceName}），等待管理员批准。批准后用 eat db credentials pull ${r.dbName} 取连接凭证。`);
 }
 
 export async function dbList(): Promise<void> {
@@ -55,7 +56,7 @@ export async function dbList(): Promise<void> {
     const hint =
       r.status === 'active'
         ? r.hasCredentials
-          ? `凭证: eat db pull ${refOf(r, rows)}`
+          ? `凭证: eat db credentials pull ${refOf(r, rows)}`
           : '平台上没有这个账号的密码，请管理员在实例上重置'
         : r.error
           ? `错误: ${r.error}`
@@ -79,7 +80,7 @@ async function resolveAssignmentId(api: Api, ref: string): Promise<string> {
   if (hits.length === 1) return hits[0].id;
   if (hits.length > 1) {
     throw new Error(
-      `有 ${hits.length} 个名为 ${ref} 的库，请写成「库名@实例名」：\n${hits.map((h) => `  eat db pull ${h.dbName}@${h.instanceName}`).join('\n')}`,
+      `有 ${hits.length} 个名为 ${ref} 的库，请写成「库名@实例名」：\n${hits.map((h) => `  ${h.dbName}@${h.instanceName}`).join('\n')}`,
     );
   }
   const names = rows.filter((r) => r.status === 'active').map((r) => refOf(r, rows));
@@ -88,32 +89,44 @@ async function resolveAssignmentId(api: Api, ref: string): Promise<string> {
   );
 }
 
+/** `--print` 的格式：在 dotenv / shell / json 之外多一个 url——只输出连接串，`psql "$(…)"` 一行连上 */
+const CREDENTIAL_PRINT_FORMATS = [...PRINT_FORMATS, 'url'] as const;
+type CredentialPrintFormat = (typeof CREDENTIAL_PRINT_FORMATS)[number];
+
+async function fetchCredentials(ref: string): Promise<DbCredentials> {
+  const api = Api.fromSaved();
+  const id = await resolveAssignmentId(api, ref);
+  return api.request<DbCredentials>('POST', `/api/db/assignments/${id}/credentials`);
+}
+
 /**
- * 取数据库连接凭证（决策 91）：凭证只在数据库这里取，不在环境变量里。
+ * 取数据库连接凭证写进本地文件（决策 91）：凭证只在数据库这里取，不在环境变量里。
  * 落盘行为与 `eat env pull` 一致——默认写 ./.env，不是 eat 写的文件就中止（决策 63），
- * 已有手写 .env 的项目用 --merge 只改 DB_* 几行。
+ * 已有手写 .env 的项目用 --merge 只改 DB_* 几行；--print 只打印。
  */
-export async function dbPull(
+export async function dbCredentialsPull(
   ref: string,
   opts: { out?: string; print?: boolean; force?: boolean; merge?: boolean; format?: string },
 ): Promise<void> {
   if (opts.format !== undefined && !opts.print) {
-    throw new Error('--format 只用于 --print（写文件一律是 dotenv）；导出到当前 shell：eval "$(eat db pull <库> --print --format shell)"');
+    throw new Error(
+      '--format 只用于 --print（写文件一律是 dotenv）；连接串：eat db credentials pull <库> --print --format url',
+    );
   }
-  const format = (opts.format ?? 'dotenv') as PrintFormat;
-  if (!PRINT_FORMATS.includes(format)) throw new Error(`--format 只能是 ${PRINT_FORMATS.join(' / ')}，收到 ${opts.format}`);
+  const format = (opts.format ?? 'dotenv') as CredentialPrintFormat;
+  if (!CREDENTIAL_PRINT_FORMATS.includes(format)) {
+    throw new Error(`--format 只能是 ${CREDENTIAL_PRINT_FORMATS.join(' / ')}，收到 ${opts.format}`);
+  }
   if (opts.merge && opts.print) throw new Error('--merge 是合并进文件，不能和 --print 一起用');
   if (opts.merge && opts.force) throw new Error('--merge 只改同名 key、追加新 key，不会整份覆盖，不需要 --force');
 
-  const api = Api.fromSaved();
-  const id = await resolveAssignmentId(api, ref);
-  const cred = await api.request<DbCredentials>('POST', `/api/db/assignments/${id}/credentials`);
+  const cred = await fetchCredentials(ref);
   const values = dbCredentialsToEnv(cred);
-  const command = `eat db pull ${ref.trim()}`;
+  const command = `eat db credentials pull ${ref.trim()}`;
   const summary = `${cred.database} 的 ${values.length} 个连接变量`;
 
   if (opts.print) {
-    process.stdout.write(renderPrinted(values, format));
+    process.stdout.write(format === 'url' ? `${cred.url}\n` : renderPrinted(values, format as PrintFormat));
   } else if (opts.merge) {
     printWriteResult(mergeEnvFile({ file: opts.out ?? '.env', values, command }), `合并 ${summary}，其余内容原样保留`);
   } else {
@@ -126,4 +139,14 @@ export async function dbPull(
     });
     printWriteResult(written, summary);
   }
+}
+
+/**
+ * 把连接凭证注入子进程后运行命令：值只进这一个子进程、不落盘（同 `eat env run`）。
+ * 要和环境变量一起用就嵌套：eat env run <环境> -- eat db credentials run <库> -- <命令>
+ */
+export async function dbCredentialsRun(ref: string, command: string[]): Promise<void> {
+  if (command.length === 0) throw new Error('缺少要运行的命令：eat db credentials run <库> -- <命令...>');
+  const cred = await fetchCredentials(ref);
+  await runWithEnv(command, new Map(dbCredentialsToEnv(cred)));
 }

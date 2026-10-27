@@ -597,7 +597,7 @@ describe('存量凭证环境搬迁（决策 91）', () => {
       // 加过别的变量的环境保留：生成的五个删掉、别人加的留着、环境级授权留着、备注说清凭证去哪了
       const kept = await db.select().from(schema.envVariables).where(eq(schema.envVariables.environmentId, withExtra.env.id));
       expect(kept.map((v) => v.key)).toEqual(['MY_EXTRA']);
-      expect(envs[0].description).toContain('eat db pull legacy_b');
+      expect(envs[0].description).toContain('eat db credentials pull legacy_b');
       const grants = await db.select().from(schema.variableGrants).where(eq(schema.variableGrants.environmentId, withExtra.env.id));
       expect(grants).toHaveLength(1);
 

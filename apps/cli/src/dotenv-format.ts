@@ -174,7 +174,7 @@ export function formatShellLine(key: string, value: string): string {
   return `export ${key}=${shellQuote(value)}`;
 }
 
-/** `--print` 的输出格式：`eat env pull` 与 `eat db pull` 共用 */
+/** `--print` 的输出格式：`eat env pull` 与 `eat db credentials pull` 共用（后者另加 url） */
 export const PRINT_FORMATS = ['dotenv', 'shell', 'json'] as const;
 export type PrintFormat = (typeof PRINT_FORMATS)[number];
 

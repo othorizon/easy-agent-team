@@ -224,7 +224,7 @@ function dbTools(): EatToolDef[] {
     {
       name: 'get_db_credentials',
       description:
-        '读取我名下某个已开通（active）数据库的连接凭证：host / port / database / user / password 与拼好的 url（敏感操作，每次读取都会审计）。凭证只在这里取，不在环境变量里。只用于当前任务，别写进源码、日志或对话；要写进项目时用 eat db pull <库名>（默认写 .env，已有手写 .env 加 --merge）。',
+        '读取我名下某个已开通（active）数据库的连接凭证：host / port / database / user / password 与拼好的 url（敏感操作，每次读取都会审计）。凭证只在这里取，不在环境变量里。只用于当前任务，别写进源码、日志或对话；有 CLI 时别经你的上下文中转：写进项目用 eat db credentials pull <库名>（默认写 .env，已有手写 .env 加 --merge），只给一条命令用就 eat db credentials run <库名> -- <命令>。',
       inputSchema: {
         type: 'object',
         properties: {

@@ -71,7 +71,7 @@ export function DbAssignmentDetailPage() {
       </div>
 
       <ResourceRequests type="db" sourceId={r.id}/>
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <Card>
           <CardContent>
             <h2 className="mb-4 text-sm font-semibold">分配信息</h2>
@@ -199,7 +199,7 @@ function CredentialsCard({ r }: { r: DbAssignmentInfo }) {
 
 /**
  * 主机 / 端口 / 库名 / 账号本就在页上，密码打码；点「查看」才走正式的读取接口——
- * 服务端照常落 db_credentials.read 审计，与终端里 eat db pull 一视同仁。拿到后可复制密码、连接串、整段 .env
+ * 服务端照常落 db_credentials.read 审计，与终端里 eat db credentials pull 一视同仁。拿到后可复制密码、连接串、整段 .env
  */
 function CredentialsView({ r }: { r: DbAssignmentInfo }) {
   const [cred, setCred] = useState<DbCredentials | null>(null);
@@ -260,8 +260,10 @@ function CredentialsView({ r }: { r: DbAssignmentInfo }) {
         )}
       </dl>
       <div className="space-y-2">
-        <p className="text-sm leading-relaxed text-muted-foreground">在项目目录里直接写进 .env（已有手写的 .env 加 --merge）：</p>
-        <Cmd text={`eat db pull ${r.dbName}`} />
+        <p className="text-sm leading-relaxed text-muted-foreground">在项目目录里写进 .env（已有手写的 .env 加 --merge）：</p>
+        <Cmd text={`eat db credentials pull ${r.dbName}`} />
+        <p className="text-sm leading-relaxed text-muted-foreground">或只注入给一条命令，不落盘：</p>
+        <Cmd text={`eat db credentials run ${r.dbName} -- <命令>`} />
       </div>
       <p className="text-[13px] leading-relaxed text-muted-foreground">
         凭证只在这里取，不在环境变量里。只有申请人 <span className="font-medium text-foreground">{r.requesterName}</span>{' '}

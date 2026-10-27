@@ -289,7 +289,7 @@ AI 编程助手（Claude Code 等）已经进入日常工作，但团队协作�
 1. 管理员登记实例（类型、连接地址、管理凭证——凭证同样加密存储）；
 2. 成员发起「数据库申请」（选实例、填项目名和用途）或由管理员直接分配；
 3. 平台在实例上自动执行：建库 + 建账号 + 授权（也支持纯手工登记模式，兼容不能自动执行的场景）——PostgreSQL 建完库还要**把库里的 `public` schema 归到分配账号名下**，`CREATE DATABASE ... OWNER` 不管这件事（§10 决策 53）；
-4. **凭证存在分配记录上，只在数据库这里取**（§10 决策 91）：批准时生成的密码加密存进 `db_assignment.password_encrypted`，主机 / 端口取实例、库名 / 账号取分配记录；**不生成环境变量**。读取入口：控制台分配详情页「连接凭证」卡片（点「查看」才取密码，可复制连接串与整段 `.env`）、CLI `eat db pull <库名>`（落盘规则同 `eat env pull`：默认写 `./.env`、`--merge` / `--print` / `--format`）、MCP `get_db_credentials`；接口 `POST /api/db/assignments/:id/credentials`（no-store），**只有申请人与管理员能读**，每次读取落 `db_credentials.read` 审计；输出变量名沿用 `DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD`，另加 `DATABASE_URL`；
+4. **凭证存在分配记录上，只在数据库这里取**（§10 决策 91）：批准时生成的密码加密存进 `db_assignment.password_encrypted`，主机 / 端口取实例、库名 / 账号取分配记录；**不生成环境变量**。读取入口：控制台分配详情页「连接凭证」卡片（点「查看」才取密码，可复制连接串与整段 `.env`）、CLI `eat db credentials pull <库名>`（落盘规则同 `eat env pull`：默认写 `./.env`、`--merge` / `--print` / `--format`，另有 `--format url` 只输出连接串）与 `eat db credentials run <库名> -- <命令>`（只注入子进程，同 `eat env run`）、MCP `get_db_credentials`；接口 `POST /api/db/assignments/:id/credentials`（no-store），**只有申请人与管理员能读**，每次读取落 `db_credentials.read` 审计；输出变量名沿用 `DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD`，另加 `DATABASE_URL`；
 5. **不提供共享给其他成员的授权**：这是某个人的项目库账号，与 OSS 的个人 AK/SK 同一性质（§10 决策 91）；同事要用由申请人自行转交，或各自申请；
 6. 支持回收：禁用账号（可恢复，禁用期间不给凭证）；删除分配为**仅记录级软删除**（§10 决策 13）——删除平台记录并清掉平台上存的密码，实例上的库与账号**不做物理删除**，控制台二次确认时明确提示「只能到数据库实例上手动删除」；已删除（status=deleted）的分配**不再出现在任何列表**，记录仅留库内供审计（§10 决策 23）。
 
@@ -475,7 +475,8 @@ CLI 与本机 MCP Server 同一个产物分发（平台自托管下载：类 Uni
 | `eat app stop-build <app>` | 停止应用进行中的部署：中断正在构建的、撤下排队中的，已上线版本不受影响；等到构建真正停下才返回（决策 90） |
 | `eat self-update` | 把 CLI 更新到平台当前分发的版本（重拉 `/install/eat.js` 覆盖本地产物，跨平台同一条命令）（决策 26） |
 | `eat db list` | 查看自己名下的数据库账号与申请进度 |
-| `eat db pull <库名>` | 取连接凭证，默认写入 `./.env`（`--merge` / `--print` / `--format` / `--out` / `--force`，规则同 `eat env pull`）（决策 91） |
+| `eat db credentials pull <库名>` | 取连接凭证，默认写入 `./.env`（`--merge` / `--print` / `--format dotenv\|shell\|json\|url` / `--out` / `--force`，规则同 `eat env pull`）；别名 `eat db creds`（决策 91） |
+| `eat db credentials run <库名> -- <命令>` | 把连接凭证只注入子进程后运行命令，不落盘、退出码透传（同 `eat env run`）（决策 91） |
 
 ### MCP 工具
 
@@ -948,8 +949,8 @@ easy-agent-team/
 - **问题**：决策 39 及以前，批准数据库申请会生成一个环境（`db-<库名>`，五个 `DB_*` 变量），凭证的读取、授权、审计全走环境变量。结果是一个人的项目库账号混在团队的环境清单里（还专门为此加了「常规 / 数据库」页签）、可以被授权给别人、可以在环境页被改被删——删了 `DB_PASSWORD` 密码就再也找不回。凭证应当只在数据库这里，与 OSS 的个人 AK/SK 同一形状。
 - **存储与读取**：密码加密存 `db_assignment.password_encrypted`（同 EAT_KEK 信封加密），主机 / 端口取实例、库名 / 账号取分配记录；新接口 `POST /api/db/assignments/:id/credentials`（`Cache-Control: no-store`），只有申请人与管理员能读、`active` 才给（禁用期间回 409），每次读取 await 落 `db_credentials.read` 审计（带 token 与 IP）。乱写的 id 先挡成 404，别让 uuid 类型错误冒成 500。删除分配时清空密码。`DbAssignmentInfo` 去掉 `environmentId` / `environmentSlug`，加 `hasCredentials`。
 - **不提供共享**：没有「授权给别人读」这条路，同事要用由申请人转交或各自申请。管理员可读——实例的管理凭证本就在管理员手里，运维时（帮人把凭证配进应用 env）也需要。
-- **三端入口**：控制台分配详情页「连接凭证」卡片（密码打码，点「查看」才取，可复制密码 / 连接串 / 整段 `.env`；清单「凭证」列改为「查看凭证」入口）；CLI `eat db pull <库名|库名@实例名|id>`，落盘规则照搬 `eat env pull`（默认写 `./.env`、非 eat 文件中止、`--merge` / `--print --format dotenv|shell|json` / `--out` / `--force`）；MCP `get_db_credentials`（stdio / HTTP 两侧都有，名字不对时回 `DB_ASSIGNMENT_NOT_FOUND` / `DB_ASSIGNMENT_AMBIGUOUS` + 候选清单）。按名字找分配的判定 `matchDbAssignments()` 在 `packages/shared/src/db.ts`，三处共用（同决策 57 的理由）。输出变量名沿用 `DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD`（已有项目的 `.env` 与代码不用改），另加 `DATABASE_URL`（用户名、密码、库名做了 URL 编码），转换在 `dbCredentialsToEnv()`。
+- **三端入口**：控制台分配详情页「连接凭证」卡片（密码打码，点「查看」才取，可复制密码 / 连接串 / 整段 `.env`；清单「凭证」列改为「查看凭证」入口）；CLI `eat db credentials pull <库名|库名@实例名|id>`，落盘规则照搬 `eat env pull`（默认写 `./.env`、非 eat 文件中止、`--merge` / `--print --format dotenv|shell|json|url` / `--out` / `--force`，`url` 只输出连接串，`psql "$(…)"` 一行连上），`eat db credentials run <库名> -- <命令>` 只把凭证注入子进程（与 `eat env run` 共用 `apps/cli/src/run-with-env.ts`；要和环境变量一起用就嵌套 `eat env run <环境> -- eat db credentials run <库> -- <命令>`），`credentials` 有别名 `creds`。**刻意不叫 `eat db pull` / `eat db run`**：`db pull` 在 prisma（反推 schema）、supabase（拉 schema 生成迁移）、heroku `pg:pull`（拉整库数据）里都是拉库本身，读起来像「把库拉下来」；放进 `credentials` 名词组，与 `eat oss credentials`、MCP `get_db_credentials`、控制台「连接凭证」同名。用空格分层而不用 heroku 式的冒号（`credentials:pull`）：eat 全部命令都是空格分层，混进一种新风格更怪；MCP `get_db_credentials`（stdio / HTTP 两侧都有，名字不对时回 `DB_ASSIGNMENT_NOT_FOUND` / `DB_ASSIGNMENT_AMBIGUOUS` + 候选清单）。按名字找分配的判定 `matchDbAssignments()` 在 `packages/shared/src/db.ts`，三处共用（同决策 57 的理由）。输出变量名沿用 `DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD`（已有项目的 `.env` 与代码不用改），另加 `DATABASE_URL`（用户名、密码、库名做了 URL 编码），转换在 `dbCredentialsToEnv()`。
 - **环境侧**：`environment.source` 列删掉（迁移 `0036_db_credentials`），`EnvironmentInfo` 去掉 `source` / `dbAssignment`，`GET /api/envs` **破坏性地**去掉 `source` 参数与 `counts`（照决策 30 不留兼容层），控制台撤掉「常规 / 数据库」页签、范围筛选改为实心分段，环境详情页去掉凭证环境的徽标、来源行与提示。
 - **存量搬迁**（`apps/server/src/db/repair-db-credentials.ts`，随 `pnpm db:migrate` 每次启动幂等执行）：扫还挂着 `environment_id` 的分配，按环境里 `DB_PASSWORD` 的**当前值**搬过来（敏感的直接拷密文，被改成非敏感的就地加密）；环境里只有生成的五个变量 → 整个环境删除（变量、读值授权、权限申请随外键级联，角色模板里的引用一并清掉）；有人往里加过别的变量 → 环境保留、只删生成的五个、备注里补一句凭证去哪了；`DB_PASSWORD` 早被删掉的 → 照样断开，分配显示「无可用凭证」、读取回 `DB_CREDENTIALS_MISSING` 并提示找管理员重置。每搬一条落一条 `db_assignment.credentials_moved` 审计（记原环境 slug、是否删除、保留了哪些 key）。`db_assignment.environment_id` 列留着给搬迁读，新代码不读不写——线上可能有还没跑过搬迁的库，别在同一个版本里删它。存量环境上给别人的读值授权随环境一起消失，这是有意的：这条共享路径本身就是要撤掉的东西。实例被删后留下的孤儿凭证环境（分配记录已级联删掉，只剩环境）不在搬迁范围内，成为普通环境，Owner 可自行删除。
 - **验证**：e2e 覆盖批准后不生成环境、凭证接口的权限 / no-store / 审计 / 禁用 / 删除、真实 PG 上用取到的凭证连库建表、搬迁的三种存量形态与幂等、MCP 按库名取凭证与候选清单。
-- CLI 升 0.14.0、指南升 41（数据库一节重写：凭证用 `eat db pull` / `get_db_credentials` 取，不在环境变量里）。演示截图 `envs.png` / `db.png` 仍是旧版界面，待重拍。
+- CLI 升 0.14.0、指南升 41（数据库一节重写：凭证用 `eat db credentials pull|run` / `get_db_credentials` 取，不在环境变量里）。演示截图 `envs.png` / `db.png` 仍是旧版界面，待重拍。

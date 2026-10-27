@@ -288,7 +288,7 @@ export function DbsPage() {
     <div className="space-y-5">
       <PageHeader
         title="数据库"
-        description="团队共享的数据库实例（面向日常项目，非生产核心）。成员申请后由管理员批准，平台自动建库建号，连接凭证在分配详情里查看，或用 eat db pull 写进本地 .env。"
+        description="团队共享的数据库实例（面向日常项目，非生产核心）。成员申请后由管理员批准，平台自动建库建号，连接凭证在分配详情里查看，或用 eat db credentials pull 写进本地 .env。"
         actions={
           <>
             {isAdmin && (
