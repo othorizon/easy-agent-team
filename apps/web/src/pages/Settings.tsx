@@ -1,4 +1,5 @@
 import { GithubSettings } from './GithubSettings';
+import { FeishuSettings } from './FeishuSettings';
 import type {
   AiSettingsInfo,
   ConnectionTestResult,
@@ -13,7 +14,7 @@ import type {
 import { normalizeDomainSuffix, updateAiSettingsSchema, updateDokploySettingsSchema } from '@eat/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { BrainCircuit, Cloud, Globe2, LockKeyhole, Network, Server } from 'lucide-react';
+import { Bell, BrainCircuit, Cloud, Globe2, LockKeyhole, Network, Server } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
@@ -51,6 +52,7 @@ import { RegistrationSettingsCard } from './RegistrationSettings';
 const NONE = '__none__';
 const categories = [
   { group: '账号管理', items: [{ id: 'registration', label: '注册与登录', icon: LockKeyhole }] },
+  { group: '消息通知', items: [{ id: 'feishu', label: '飞书通知', icon: Bell }] },
   {
     group: 'AI 与模型',
     items: [
@@ -168,6 +170,7 @@ export function SettingsPage() {
               {id === 'llm-gateway' && <LlmGatewaySettingsCard active={active === id} />}
               {id === 'oss' && <OssSettingsCard active={active === id} />}
               {id === 'github' && <GithubSettings active={active === id} />}
+              {id === 'feishu' && <FeishuSettings active={active === id} />}
               {id === 'deployment' && <DokploySettingsCard active={active === id} />}
               {id === 'folio' && <FolioSettingsCard active={active === id} />}
               {id === 'folio-cdn' && <FolioCdnSettings active={active === id} />}

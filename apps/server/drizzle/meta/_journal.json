@@ -260,6 +260,13 @@
       "when": 1793072868060,
       "tag": "0036_db_credentials",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1793120693437,
+      "tag": "0037_feishu_app",
+      "breakpoints": true
     }
   ]
 }

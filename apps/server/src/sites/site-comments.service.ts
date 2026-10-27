@@ -12,8 +12,7 @@ import type { AuthUser } from '../auth/auth.decorators';
 import { AuditService } from '../audit/audit.service';
 import { DB, type Db } from '../db/db.module';
 import { siteComments, siteThreads, siteVersions, users } from '../db/schema';
-import { UserNotificationsService } from '../notify/user-notifications.service';
-import { WebhookService } from '../notify/webhook.service';
+import { NotifierService } from '../notify/notifier.service';
 import { SiteRuntime } from './site-config';
 import { SitesService, type SiteRow } from './sites.service';
 
@@ -23,8 +22,7 @@ export class SiteCommentsService {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly sites: SitesService,
-    private readonly webhook: WebhookService,
-    private readonly notifications: UserNotificationsService,
+    private readonly notifier: NotifierService,
     private readonly audit: AuditService,
     private readonly runtime: SiteRuntime,
   ) {}
@@ -254,12 +252,10 @@ export class SiteCommentsService {
     version: number,
     mentions: string[],
   ) {
-    // 每条不可变评论只产生一次提及事件。复用已有个人飞书配置与投递重试，不向 webhook 泄露访问凭据或正文。
+    // 每条不可变评论只产生一次提及事件。复用个人通知渠道与投递重试，不向飞书泄露访问凭据或正文。
     void (async () => {
       for (const userId of mentions) {
         if (userId === author.id) continue;
-        const profile = await this.notifications.webhookOf(userId, 'mention');
-        if (!profile) continue;
         const url = `${await this.runtime.platform()}/folios/${site.slug}?thread=${threadId}`;
         const card = {
           header: {
@@ -282,13 +278,7 @@ export class SiteCommentsService {
             },
           ],
         };
-        this.webhook.notify(
-          'site.comment.mentioned',
-          profile.url,
-          profile.secret,
-          card,
-          `comment=${commentId}; recipient=${userId}`,
-        );
+        this.notifier.notify(userId, 'mention', 'site.comment.mentioned', card, `comment=${commentId}; recipient=${userId}`);
       }
     })().catch(() => this.logger.warn('评论提及通知创建失败'));
   }

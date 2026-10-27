@@ -20,7 +20,8 @@ export class AuditService {
   async record(entry: AuditEntry, db: Pick<Db, 'insert'> = this.db): Promise<void> {
     await db.insert(auditLogs).values({
       actorId: entry.actorId ?? null,
-      actorTokenId: entry.actorTokenId ?? null,
+      // 飞书卡片回调代用户操作时没有登录令牌，空串按无令牌记
+      actorTokenId: entry.actorTokenId || null,
       action: entry.action,
       targetType: entry.targetType,
       targetId: entry.targetId,

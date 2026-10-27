@@ -7,11 +7,12 @@ import { DeployModule } from '../deploy/deploy.module';
 import { RequestsService } from './requests.service';
 import { RequestsController } from './requests.controller';
 import { RequestNotifications } from './requests.notifications';
+import { ApprovalCards } from './approval-cards.service';
 @Global()
 @Module({
   imports: [EnvsModule, McpConfigsModule, DbsModule, OssModule, DeployModule],
   controllers: [RequestsController],
-  providers: [RequestsService, RequestNotifications],
+  providers: [RequestsService, RequestNotifications, ApprovalCards],
   exports: [RequestsService],
 })
 export class RequestsModule {}

@@ -1,12 +1,14 @@
 import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import { randomInt, randomUUID } from 'node:crypto';
-import { feishuWebhookSchema, type NotificationPreferences } from '@eat/shared';
+import { feishuWebhookSchema, type NotificationPreferences, type NotificationSettings } from '@eat/shared';
 import { DB, type Db } from '../db/db.module';
 import { userNotifications } from '../db/schema';
 import { decryptSecret, encryptSecret, sha256Hex } from '../common/crypto';
 import { AuditService } from '../audit/audit.service';
 import { WebhookService } from './webhook.service';
+import { FeishuAppService } from './feishu/feishu-app.service';
+import { NotifierService } from './notifier.service';
 
 const CLEAR_CHALLENGE = {
   pendingUrl: null, pendingSecretEncrypted: null, challengeId: null,
@@ -19,14 +21,22 @@ export class UserNotificationsService {
     @Inject(DB) private readonly db: Db,
     private readonly webhook: WebhookService,
     private readonly audit: AuditService,
+    private readonly feishu: FeishuAppService,
+    private readonly notifier: NotifierService,
   ) {}
 
-  async settings(userId: string) {
+  async settings(userId: string): Promise<NotificationSettings> {
     const [row] = await this.db.select().from(userNotifications).where(eq(userNotifications.userId, userId));
+    const feishu = await this.feishu.row();
+    const feishuApp = await this.feishu.binding(userId, feishu);
+    const verified = !!row?.webhookUrl && !!row.verifiedAt;
     return {
+      channel: feishu.channel,
+      connected: feishu.channel === 'app' ? !!feishuApp?.bound : verified,
+      feishuApp,
       webhookUrl: row?.webhookUrl ?? '',
       hasWebhookSecret: !!row?.webhookSecretEncrypted,
-      verified: !!row?.webhookUrl && !!row.verifiedAt,
+      verified,
       notifyHelp: row?.notifyHelp ?? true,
       notifyReply: row?.notifyReply ?? true,
       notifyMention: row?.notifyMention ?? true,
@@ -110,6 +120,54 @@ export class UserNotificationsService {
     }).where(eq(userNotifications.userId, userId));
     await this.audit.record({ actorId: userId, action: 'notification.removed', targetType: 'user', targetId: userId });
     return this.settings(userId);
+  }
+
+  /** 当前渠道下能否收到通知（引导完善资料时的「通知已配置」口径） */
+  async connected(userId: string): Promise<boolean> {
+    const feishu = await this.feishu.row();
+    if (feishu.channel === 'app') return !!feishu.appId && (await this.feishu.openIdOf(userId, feishu.appId)) !== null;
+    const [row] = await this.db.select({ url: userNotifications.webhookUrl, verifiedAt: userNotifications.verifiedAt })
+      .from(userNotifications).where(eq(userNotifications.userId, userId));
+    return !!row?.url && !!row.verifiedAt;
+  }
+
+  async createFeishuBindCode(userId: string) {
+    if ((await this.feishu.binding(userId)) === null) {
+      throw new BadRequestException({ error: 'FEISHU_APP_UNCONFIGURED', message: '管理员还没有配置飞书自建应用' });
+    }
+    return this.feishu.createBindCode(userId);
+  }
+
+  async removeFeishuBinding(userId: string) {
+    await this.feishu.unbind(userId);
+    return this.settings(userId);
+  }
+
+  private readonly testSentAt = new Map<string, number>();
+
+  /** 按当前渠道给自己发一条测试通知，确认整条链路可用 */
+  async sendTest(userId: string) {
+    const last = this.testSentAt.get(userId) ?? 0;
+    if (Date.now() - last < 30_000) {
+      throw new BadRequestException({ error: 'RATE_LIMITED', message: '请 30 秒后再发送测试通知' });
+    }
+    const target = await this.notifier.target(userId);
+    if (!target) {
+      throw new BadRequestException({
+        error: 'NOTIFICATION_UNCONFIGURED',
+        message: (await this.feishu.channel()) === 'app' ? '请先绑定飞书账号' : '请先配置并验证飞书 Webhook',
+      });
+    }
+    this.testSentAt.set(userId, Date.now());
+    try {
+      await this.notifier.sendOnce(target, {
+        header: { template: 'turquoise', title: { tag: 'plain_text', content: 'EAT 测试通知' } },
+        elements: [{ tag: 'div', text: { tag: 'plain_text', content: '收到这条消息，说明你的 EAT 通知已经可以正常接收。' } }],
+      });
+    } catch (e) {
+      throw new BadRequestException({ error: 'NOTIFICATION_FAILED', message: `测试通知发送失败：${(e as Error).message}` });
+    }
+    return { ok: true };
   }
 
   async webhookOf(userId: string, kind: 'help' | 'reply' | 'mention') {

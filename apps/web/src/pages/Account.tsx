@@ -1,8 +1,10 @@
 import { GithubAccountPanel } from '../components/github';
-import type { AccountInfo, NotificationSettings, UpdateAccountRequest } from '@eat/shared';
+import type { AccountInfo, FeishuBindCode, NotificationSettings, UpdateAccountRequest } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState, type ReactNode } from 'react';
-import { Bell, Github, LockKeyhole, UserRound } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { AlertTriangle, Bell, Bot, CheckCircle2, ExternalLink, Github, LockKeyhole, RefreshCw, UserRound } from 'lucide-react';
+import { CopyButton } from '../components/code';
+import { formatDateTime } from '../lib/format';
 import { SettingsSection } from '../components/settings';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import './settings.css';
@@ -134,8 +136,17 @@ export function AccountPage({ completion = false }: { completion?: boolean }) {
           (data.onboarding.notificationComplete ? (
             <Card>
               <CardContent className="flex items-center justify-between py-5">
-                <span>飞书通知</span>
-                <Badge variant="success">已验证</Badge>
+                <span>{data.notification.channel === 'app' ? '飞书机器人' : '飞书通知'}</span>
+                <Badge variant="success">{data.notification.channel === 'app' ? '已绑定' : '已验证'}</Badge>
+              </CardContent>
+            </Card>
+          ) : data.notification.channel === 'app' ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>绑定飞书账号</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <FeishuBindForm settings={data.notification} />
               </CardContent>
             </Card>
           ) : (
@@ -204,15 +215,29 @@ export function AccountPage({ completion = false }: { completion?: boolean }) {
               {id === 'notifications' && (
                 <SettingsSection
                   title="通知设置"
-                  description="选择希望收到的消息，并绑定个人飞书群。通知偏好只影响你自己的消息。"
+                  description={
+                    data.notification.channel === 'app'
+                      ? '选择希望收到的消息，并绑定飞书账号。通知由 EAT 机器人私聊发送，审批卡片可直接在飞书里处理。'
+                      : '选择希望收到的消息，并绑定个人飞书群。通知偏好只影响你自己的消息。'
+                  }
                   status={
-                    <Badge variant={data.notification.verified ? 'success' : 'outline'}>
-                      {data.notification.verified ? '飞书已连接' : '飞书未连接'}
+                    <Badge variant={data.notification.connected ? 'success' : 'outline'}>
+                      {data.notification.connected ? '飞书已连接' : '飞书未连接'}
                     </Badge>
                   }
                 >
                   <NotificationPreferencesForm settings={data.notification} onSaved={refresh} />
-                  <NotificationForm settings={data.notification} completion={false} onSaved={refresh} />
+                  {data.notification.channel === 'app' ? (
+                    <section className="py-6" aria-label="绑定飞书账号">
+                      <h3 className="mb-1 text-sm font-semibold">绑定飞书账号</h3>
+                      <p className="mb-4 text-xs leading-5 text-muted-foreground">
+                        此绑定用于整个平台的个人通知，包括权限申请、审批结果、求助、回复和 Folio 评论提及。
+                      </p>
+                      <FeishuBindForm settings={data.notification} />
+                    </section>
+                  ) : (
+                    <NotificationForm settings={data.notification} completion={false} onSaved={refresh} />
+                  )}
                 </SettingsSection>
               )}
               {id === 'github' && (
@@ -519,9 +544,10 @@ function NotificationForm({
           </form>
         )}
         {settings.verified && (
-          <p className="text-sm text-muted-foreground">
-            更换地址或密钥后需重新验证；验证成功前继续使用原配置。
-          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <TestNotificationButton />
+            <p className="text-sm text-muted-foreground">更换地址或密钥后需重新验证；验证成功前继续使用原配置。</p>
+          </div>
         )}
         {!completion && (
           <>
@@ -542,6 +568,193 @@ function NotificationForm({
         )}
       </div>
     </details>
+  );
+}
+
+function TestNotificationButton() {
+  const test = useMutation({
+    mutationFn: () => api('POST', '/api/account/notification/test'),
+    onSuccess: () => toast.success('测试通知已发送，请在飞书中查看'),
+    onError,
+  });
+  return (
+    <Button type="button" variant="outline" size="sm" loading={test.isPending} onClick={() => test.mutate()}>
+      发送测试通知
+    </Button>
+  );
+}
+
+/**
+ * 飞书自建应用渠道的绑定（决策 92）：打开机器人 → 把绑定码私聊发给它。
+ * 绑定码 10 分钟有效、只在本页内存里出现；等待期间每 3 秒刷新一次账号状态，绑上了就自动切到已绑定。
+ */
+function FeishuBindForm({ settings }: { settings: NotificationSettings }) {
+  const client = useQueryClient();
+  const app = settings.feishuApp;
+  const [code, setCode] = useState<FeishuBindCode | null>(null);
+  const [rebinding, setRebinding] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  const refreshAccount = () =>
+    Promise.all([
+      client.invalidateQueries({ queryKey: ['account'] }),
+      client.invalidateQueries({ queryKey: ['onboarding'] }),
+    ]);
+  const generate = useMutation({
+    mutationFn: () => api<FeishuBindCode>('POST', '/api/account/notification/feishu/bind-code'),
+    onSuccess: (c) => {
+      setCode(c);
+      setNow(Date.now());
+    },
+    onError,
+  });
+  const unbind = useMutation({
+    mutationFn: () => api('DELETE', '/api/account/notification/feishu'),
+    onSuccess: async () => {
+      setCode(null);
+      setRebinding(false);
+      await refreshAccount();
+      toast.success('已解除飞书绑定');
+    },
+    onError,
+  });
+  const bound = !!app?.bound;
+  const waiting = !!app && (!bound || rebinding);
+  const remaining = code ? Math.max(0, Math.ceil((Date.parse(code.expiresAt) - now) / 1000)) : 0;
+  const live = remaining > 0;
+  useEffect(() => {
+    if (waiting && !code && !generate.isPending && !generate.isError) generate.mutate();
+  }, [waiting, code, generate.isPending, generate.isError, generate.mutate]);
+  useEffect(() => {
+    if (!code) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [code]);
+  useEffect(() => {
+    if (!waiting || !live) return;
+    const timer = setInterval(() => void refreshAccount(), 3000);
+    return () => clearInterval(timer);
+  }, [waiting, live]);
+  // boundAt 变化 = 刚完成（重新）绑定
+  const boundAt = app?.boundAt ?? null;
+  const lastBoundAt = useRef(boundAt);
+  useEffect(() => {
+    if (boundAt && boundAt !== lastBoundAt.current && code) {
+      toast.success('飞书账号已绑定，之后的通知会由机器人私聊发送');
+      setCode(null);
+      setRebinding(false);
+    }
+    lastBoundAt.current = boundAt;
+  }, [boundAt, code]);
+
+  if (!app)
+    return (
+      <p className="rounded-lg bg-muted/50 p-4 text-sm text-muted-foreground">
+        管理员还没有完成飞书自建应用的配置，暂时无法绑定。请稍后再来，或联系管理员。
+      </p>
+    );
+  const minutes = Math.floor(remaining / 60);
+  const seconds = String(remaining % 60).padStart(2, '0');
+  return (
+    <div className="space-y-5">
+      <a
+        href={app.openBotUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="group flex items-center gap-3 rounded-xl border bg-card p-4 shadow-xs transition-colors hover:border-primary/40 hover:bg-primary/5"
+      >
+        {app.botAvatarUrl ? (
+          <img src={app.botAvatarUrl} alt="" className="size-11 shrink-0 rounded-lg object-cover" />
+        ) : (
+          <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <Bot className="size-6" aria-hidden="true" />
+          </span>
+        )}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium">{app.botName ?? 'EAT 通知机器人'}</span>
+          <span className="block text-xs text-muted-foreground">飞书机器人 · 点击在飞书中打开对话</span>
+        </span>
+        <span className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-primary">
+          打开
+          <ExternalLink className="size-3.5" aria-hidden="true" />
+        </span>
+      </a>
+      {bound && !rebinding ? (
+        <div className="space-y-4 rounded-lg border border-success/30 bg-success/5 p-4">
+          <p className="flex items-start gap-2 text-sm">
+            <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
+            <span>
+              已绑定飞书账号{app.boundAt && <span className="text-muted-foreground"> · {formatDateTime(app.boundAt)}</span>}
+              <span className="mt-0.5 block text-xs text-muted-foreground">通知由机器人私聊发送；换了飞书账号可以重新绑定。</span>
+            </span>
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <TestNotificationButton />
+            <Button type="button" variant="outline" size="sm" onClick={() => setRebinding(true)}>
+              重新绑定
+            </Button>
+            <Confirm
+              title="解除飞书绑定？"
+              description="解除后将不再收到机器人通知。如果管理员要求配置通知，你需要重新绑定才能访问平台。"
+              confirmText="解除绑定"
+              onConfirm={() => unbind.mutate()}
+            >
+              <Button type="button" variant="outline-destructive" size="sm" loading={unbind.isPending}>
+                解除绑定
+              </Button>
+            </Confirm>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {app.stale && !rebinding && (
+            <p className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+              管理员更换了飞书应用，之前的绑定已失效，请重新绑定。
+            </p>
+          )}
+          <ol className="list-decimal space-y-1.5 pl-5 text-sm leading-6 text-muted-foreground">
+            <li>点击上方卡片，在飞书里打开机器人（电脑或手机均可）。</li>
+            <li>把下面的绑定码原样发给机器人，绑定会自动完成。</li>
+          </ol>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-lg bg-muted/50 p-4">
+            {code && live ? (
+              <span className="flex items-center gap-1.5">
+                <code aria-label="绑定码" className="font-mono text-2xl font-semibold tracking-[0.12em]">
+                  {code.code}
+                </code>
+                <CopyButton text={code.code} />
+              </span>
+            ) : (
+              <span className="text-sm text-muted-foreground">
+                {generate.isPending ? '正在生成绑定码…' : code ? '绑定码已过期，请重新生成' : '绑定码生成失败，请重试'}
+              </span>
+            )}
+            <span className="text-xs text-muted-foreground" aria-live="polite">
+              {code && live ? `${minutes}:${seconds} 后过期` : null}
+            </span>
+            <Button
+              type="button"
+              variant={code && !live ? 'default' : 'outline'}
+              size="sm"
+              className="ml-auto"
+              loading={generate.isPending}
+              onClick={() => generate.mutate()}
+            >
+              <RefreshCw />
+              重新生成
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {code && live ? '正在等待机器人确认，绑定成功后此页会自动更新。' : '绑定码 10 分钟内有效，过期后重新生成即可。'}
+            {rebinding && (
+              <button type="button" className="ml-2 text-primary hover:underline" onClick={() => setRebinding(false)}>
+                取消重新绑定
+              </button>
+            )}
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -603,9 +816,11 @@ function NotificationPreferencesForm({
         save.mutate();
       }}
     >
-      {!settings.verified && (
+      {!settings.connected && (
         <p className="settings-notice text-muted-foreground">
-          偏好可以提前保存。连接并验证飞书机器人后，通知才会发送。
+          {settings.channel === 'app'
+            ? '偏好可以提前保存。在下方绑定飞书账号后，通知才会发送。'
+            : '偏好可以提前保存。连接并验证飞书机器人后，通知才会发送。'}
         </p>
       )}
       {groups.map((group) => (

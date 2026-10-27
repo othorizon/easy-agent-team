@@ -30,3 +30,4 @@ export * from './account.js';
 
 export * from './github.js';
 export * from './requests.js';
+export * from './feishu-app.js';

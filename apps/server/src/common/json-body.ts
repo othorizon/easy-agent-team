@@ -14,8 +14,10 @@ import type { FastifyInstance } from 'fastify';
  */
 export function registerTolerantJsonParser(fastify: FastifyInstance): void {
   fastify.removeContentTypeParser('application/json');
-  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
     const raw = typeof body === 'string' ? body : body.toString('utf8');
+    // 飞书回调按原始请求体验签（决策 92），只给这一路留一份原文
+    if (req.url.startsWith('/api/feishu/')) (req as unknown as { rawBody?: string }).rawBody = raw;
     if (raw.trim() === '') {
       done(null, undefined);
       return;

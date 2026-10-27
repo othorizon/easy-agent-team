@@ -52,6 +52,82 @@ export const userNotifications = pgTable('user_notification', {
   attempts: integer('attempts').notNull().default(0),
 });
 
+/**
+ * 通知渠道与飞书自建应用（单行，决策 92）。
+ * channel 是平台级互斥单选；应用凭据与检查结果独立保存，切回 webhook 不清空。
+ */
+export const feishuSettings = pgTable(
+  'feishu_setting',
+  {
+    id: integer('id').primaryKey().default(1),
+    channel: text('channel').$type<import('@eat/shared').NotificationChannel>().notNull().default('webhook'),
+    appId: text('app_id').notNull().default(''),
+    appSecretEncrypted: text('app_secret_encrypted'),
+    verificationTokenEncrypted: text('verification_token_encrypted'),
+    encryptKeyEncrypted: text('encrypt_key_encrypted'),
+    botName: text('bot_name'),
+    botAvatarUrl: text('bot_avatar_url'),
+    lastCheck: jsonb('last_check').$type<import('@eat/shared').FeishuAppCheck>(),
+    /** 最近一次通过签名校验的飞书请求，说明开发者后台的请求地址已配好 */
+    callbackVerifiedAt: timestamp('callback_verified_at', { withTimezone: true }),
+    lastEventAt: timestamp('last_event_at', { withTimezone: true }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [check('feishu_setting_singleton', sql`${t.id} = 1`), check('feishu_setting_channel', sql`${t.channel} IN ('webhook','app')`)],
+);
+
+/** 成员与飞书账号的绑定。open_id 按应用区分：记下 app_id，管理员换应用后旧绑定自动失效 */
+export const feishuBindings = pgTable(
+  'feishu_binding',
+  {
+    userId: uuid('user_id')
+      .primaryKey()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    appId: text('app_id').notNull(),
+    openId: text('open_id').notNull(),
+    unionId: text('union_id'),
+    boundAt: timestamp('bound_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('feishu_binding_open_id_idx').on(t.appId, t.openId)],
+);
+
+/** 绑定码只存哈希：拿到绑定码的人能让自己的飞书账号代表该用户审批，按凭证对待 */
+export const feishuBindCodes = pgTable('feishu_bind_code', {
+  userId: uuid('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  codeHash: text('code_hash').notNull().unique(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** 机器人发出的审批卡片：申请状态变化（无论在哪处理）时按 state 回写成最新样子 */
+export const feishuCards = pgTable(
+  'feishu_card',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** 发卡片的应用；换应用后旧应用发出的卡片不再尝试更新 */
+    appId: text('app_id').notNull(),
+    messageId: text('message_id').notNull().unique(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    requestId: uuid('request_id').notNull(),
+    /** 卡片当前呈现的申请状态（`status:execution`），与申请不一致时需要更新 */
+    state: text('state').notNull(),
+    updateError: text('update_error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('feishu_card_request_idx').on(t.requestId)],
+);
+
+/** 飞书事件会重推，按 event_id 去重；定期清扫 */
+export const feishuEvents = pgTable('feishu_event', {
+  eventId: text('event_id').primaryKey(),
+  receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const ossSettings = pgTable('oss_setting', {
   id: integer('id').primaryKey().default(1),
   instanceId: uuid('instance_id').notNull().defaultRandom(),

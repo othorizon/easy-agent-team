@@ -57,4 +57,14 @@ export class AccountController {
 
   @Delete('notification')
   remove(@CurrentUser() user: AuthUser) { return this.notifications.remove(user.id); }
+
+  /** 飞书自建应用渠道：生成绑定码，私聊发给机器人完成绑定（决策 92） */
+  @Post('notification/feishu/bind-code')
+  bindCode(@CurrentUser() user: AuthUser) { return this.notifications.createFeishuBindCode(user.id); }
+
+  @Delete('notification/feishu')
+  unbindFeishu(@CurrentUser() user: AuthUser) { return this.notifications.removeFeishuBinding(user.id); }
+
+  @Post('notification/test')
+  test(@CurrentUser() user: AuthUser) { return this.notifications.sendTest(user.id); }
 }
