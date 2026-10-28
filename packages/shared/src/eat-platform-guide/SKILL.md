@@ -21,7 +21,7 @@ EAT（easy-agent-team）统一管理团队资源、权限与审计。终端可�
 | 创建应用、配置 env、部署或排查服务 | [应用与部署](references/applications.md) | Git 源、整体 env 覆盖、部署授权与日志 |
 | 发布网页、演示、报告或处理页面反馈 | [Folio](references/folio.md) | 静态产物、先确认访问范围、版本与评论 |
 | 分享或订阅 Skill、连接团队 MCP | [Skill 与 MCP](references/skills-and-mcp.md) | 多文件 Skill、订阅、个人 MCP 接入地址 |
-| 查团队经验、求助、查询用户或发送通知 | [经验与协作](references/collaboration.md) | 先 `search_experiences`，再发起求助 |
+| 查团队经验、求助、查询用户或发送通知 | [经验与协作](references/collaboration.md) | 先 `search_experiences`，再发起求助；Codex 会话中每次求助必须携带当前会话的 applink 回调 |
 | 同步落点、CLI/Skill 更新提示 | [同步与更新](references/updates.md) | 沿用配置落点，按用户授权范围更新 |
 
 本地文件路径相对于本 `SKILL.md` 所在目录，不是工作项目目录。远程 MCP 客户端没有本地文件时，先调用 `get_platform_guide` 获取本入口，再以 `path` 读取对应文件，例如 `get_platform_guide({"path":"references/llm-api.md"})`。

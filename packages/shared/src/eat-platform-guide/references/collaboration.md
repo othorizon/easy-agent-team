@@ -14,7 +14,7 @@
 ```sh
 eat ask create --to '<helper-user-id>' --title '登录失败' \
   --description '接口返回未授权，需要确认鉴权约定' --tried '已搜索团队经验和接口文档' \
-  --reply-callback-url 'codex://new?prompt={message}'
+  --reply-callback-url 'https://agent.example/tasks/<task-id>?message={message}'
 ```
 
 EAT 在求助发起人收到的回复通知中，将卡片的「发送给 Agent」完整文本做 URL 编码后替换占位符，
@@ -22,9 +22,28 @@ EAT 在求助发起人收到的回复通知中，将卡片的「发送给 Agent�
 占位符放在路径、查询参数或片段中，不要放在协议或主机名里。无需对消息预编码。
 创建时会按标题和完整 Agent 文本校验展开后的链接与通知卡片大小；超限请减少占位符或缩短链接。已有求助的回调无效或超限时，回复通知回退为「查看请求」按钮和 Agent 文本，不中断回复。
 
-上例打开 Codex 新会话并预填文本，不保证自动发送；如要返回原会话，只使用当前客户端确认支持的链接，
-不要猜测会话 ID 或假定已有会话支持 `prompt`。不知道有效链接时省略此参数，用户仍可复制卡片文本给 Agent。
+以上是通用回调用法，适用于网页任务和支持深链接的 Agent 客户端。目标是否预填或发送消息取决于目标应用。
+除下述 Codex 专用要求外，此参数保持可选；不知道有效链接时可以省略，用户仍可复制卡片文本给 Agent。
 没有回调 URL 的旧求助保持原通知行为；求助者发给对方的追问通知不会附带自己的任务链接。
+
+### Codex 会话：每次求助都携带当前会话 applink
+
+**如果当前处于 Codex 会话中，每次发起新的求助都必须携带当前会话的 applink 回调**，让用户收到回复后可以回到正在处理任务的这条会话。CLI 使用 `--reply-callback-url`；通过 REST 或 MCP `create_help_request` 发起时使用 `replyCallbackUrl`。这是 Codex 场景的额外要求，不改变其他客户端的通用可选用法。
+
+1. 优先使用当前会话上下文或客户端提供的 applink；环境提供 `CODEX_THREAD_ID` 时，可以读取它取得真实的当前会话 ID。不能使用引用的其他会话 ID、求助 ID，或猜测一个会话 ID。
+2. 对使用 `codex://threads/<thread-id>` 格式的客户端，回调模板为 `codex://threads/<当前会话ID>?prompt={message}`。若客户端提供的链接含主机、环境或其他路由参数，保留它们；已有查询参数时用 `&` 追加 `prompt={message}`，已有 `prompt` 时只替换其值。占位符保留给 EAT 替换。
+3. 必须指向当前会话，不能使用 `codex://new` 代替。每次创建前检查回调参数已填写，包括同一任务中的后续新求助；已有求助中的追问仍用原求助，无需重复传参。
+4. 如果无法取得真实的当前会话 ID 或 applink，先从当前会话上下文、可用客户端工具或环境中获取；仍无法确定时向用户索取当前会话链接，不要静默省略参数或编造链接。
+
+已取得 `CODEX_THREAD_ID` 且客户端使用上述路由格式时，Bash 示例：
+
+```sh
+eat ask create --to '<helper-user-id>' --title '登录失败' \
+  --description '接口返回未授权，需要确认鉴权约定' --tried '已搜索团队经验和接口文档' \
+  --reply-callback-url "codex://threads/${CODEX_THREAD_ID:?需要真实的当前 Codex 会话 ID}?prompt={message}"
+```
+
+`prompt` 在已有会话中是否生效取决于 Codex 客户端，不保证预填或自动发送。即使客户端忽略消息参数，仍应携带当前会话链接用于返回任务，卡片保留的「发送给 Agent」文本用于手动提交。
 
 
 ## 查询用户与发送通知（CLI）
