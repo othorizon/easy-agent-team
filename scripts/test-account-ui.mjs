@@ -339,7 +339,8 @@ try {
   assert.equal(admin.settings.requireBio, false); assert.equal(admin.settings.requireNotification, true);
   await screenshot(admin.page, 'registration-desktop');
   await admin.page.goto(`${base}/users`);
-  await admin.page.getByRole('button', { name: '编辑资料' }).click();
+  await admin.page.getByRole('button', { name: '测试用户 的操作', exact: true }).click();
+  await admin.page.getByRole('menuitem', { name: '编辑资料', exact: true }).click();
   await admin.page.locator('#admin-user-name').fill('管理员修改姓名');
   await admin.page.locator('#admin-user-bio').fill('管理员可编辑本人简介');
   await screenshot(admin.page, 'admin-edit-profile');

@@ -30,6 +30,7 @@ EAT 在求助发起人收到的回复通知中，将卡片的「发送给 Agent�
 
 一级命令 `eat users` 查询接收人，输出完整用户 ID、姓名、邮箱、角色、状态和飞书通知就绪情况。
 只返回正常账号，支持 `--search <姓名/邮箱/ID>` 和 `--json`；普通登录用户也可查询。禁用账号在 `/users` 管理页面查看，CLI 不提供状态筛选。
+`--json` 每项包含 `id`、`name`、`email`、`role`、`status`、`bio`、`canNotifyAll`、`notificationReady`；管理员额外获得 `github` 与 `notification` 状态摘要，不包含通知地址或凭证。就绪状态按平台当前飞书渠道判断，禁用账号不会被视为可投递；「已就绪」表示配置满足要求，不保证飞书实际投递成功。
 
 ```sh
 eat users --search 'lisi'

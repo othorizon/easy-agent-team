@@ -11,6 +11,7 @@ import {
   Inject,
   NotFoundException,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
 } from '@nestjs/common';
@@ -67,7 +68,7 @@ export class UsersController {
       const app = !feishuAppId ? 'none' : feishuAppId === feishu.appId ? 'bound' : 'stale';
       const notification: UserNotificationStatus = {
         channel: feishu.channel,
-        connected: feishu.channel === 'app' ? app === 'bound' : webhookVerified,
+        connected: user.status === 'active' && (feishu.channel === 'app' ? app === 'bound' : webhookVerified),
         webhookVerified, feishuApp: app,
         feishuBoundAt: app === 'bound' && feishuBoundAt ? feishuBoundAt.toISOString() : null,
       };
@@ -104,11 +105,11 @@ export class UsersController {
   @Patch(':id')
   @Roles('admin')
   async update(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body(new ZodValidationPipe(updateUserRequestSchema)) body: UpdateUserRequest,
     @CurrentUser() actor: AuthUser,
   ) {
-    if (id === actor.id && (body.role !== undefined || body.status !== undefined)) {
+    if (id.toLowerCase() === actor.id.toLowerCase() && (body.role !== undefined || body.status !== undefined)) {
       throw new BadRequestException({ error: 'BAD_REQUEST', message: '不能修改自己的角色或状态' });
     }
     const row = await this.db.transaction(async tx => {

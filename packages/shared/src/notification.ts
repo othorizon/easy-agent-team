@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { GithubOrgState } from './github.js';
+import type { UserNotificationStatus } from './feishu-app.js';
 
 export interface UserListItem {
   id: string;
@@ -12,6 +13,8 @@ export interface UserListItem {
   notificationReady: boolean;
   /** GitHub 简要信息只向管理员返回。 */
   github?: { login: string; orgState: GithubOrgState; needsAuthorization: boolean } | null;
+  /** 通知配置摘要只向管理员返回，不包含凭证。 */
+  notification?: UserNotificationStatus;
 }
 
 export const sendNotificationSchema = z.object({

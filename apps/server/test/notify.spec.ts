@@ -76,10 +76,15 @@ describe('CLI 通知与用户目录', () => {
     expect(result.body.every((u: any) => u.canNotifyAll === false)).toBe(true);
     expect(result.body.find((u: any) => u.id === readyId).notificationReady).toBe(true);
     expect(result.body.find((u: any) => u.id === missingId).notificationReady).toBe(false);
+    expect(result.body.find((u: any) => u.id === disabledId).notificationReady).toBe(false);
+    const fields = ['id', 'name', 'email', 'role', 'status', 'bio', 'canNotifyAll', 'notificationReady'];
+    expect(Object.keys(result.body[0]).sort()).toEqual(fields.sort());
     expect(JSON.stringify(result.body)).not.toMatch(/webhook|passwordHash|accessToken|github/i);
     const management = await api('GET', '/api/users', admin.token);
     expect(management.body.find((u: any) => u.id === readyId).github).toEqual({ login: 'ready-github', orgState: 'active', needsAuthorization: false });
     expect(management.body.find((u: any) => u.id === member.id).github).toBeNull();
+    expect(Object.keys(management.body[0]).sort()).toEqual([...fields, 'github', 'notification'].sort());
+    expect(management.body.find((u: any) => u.id === disabledId).notification.connected).toBe(false);
   });
   it('发送与预检查都要求登录；全员权限默认关闭，包括管理员', async () => {
     const body = { all: true, title: '通知', body: markdown };
@@ -96,6 +101,12 @@ describe('CLI 通知与用户目录', () => {
     expect((await api('PATCH', `/api/users/${admin.id}`, admin.token, { role: 'member', canNotifyAll: false })).status).toBe(400);
     expect((await api('PATCH', `/api/users/${admin.id}`, admin.token, { status: 'disabled' })).status).toBe(400);
     expect((await api('PATCH', `/api/users/${member.id}`, admin.token, { canNotifyAll: true })).status).toBe(200);
+  });
+  it('管理员自身角色/状态限制不能用 UUID 的不同写法绕过', async () => {
+    for (const id of [admin.id.toUpperCase(), admin.id.replaceAll('-', ''), `{${admin.id}}`]) {
+      expect((await api('PATCH', `/api/users/${encodeURIComponent(id)}`, admin.token, { role: 'admin' })).status).toBe(400);
+      expect((await api('PATCH', `/api/users/${encodeURIComponent(id)}`, admin.token, { status: 'active' })).status).toBe(400);
+    }
   });
   it('dry-run 校验全员范围、排除禁用用户，且不投递和不落投递记录', async () => {
     const result = await api('POST', '/api/notifications/send', member.token, { all: true, title: '检查', body: markdown, dryRun: true });
@@ -125,7 +136,8 @@ describe('CLI 通知与用户目录', () => {
       to: [readyId, failedId, missingId, disabledId], title: '混合结果', body: markdown,
     });
     expect(result.body.recipients.map((r: any) => r.status)).toEqual(['sent', 'failed', 'unavailable', 'unavailable']);
-    expect(hits.map(h => h.path)).toEqual(['/ready', '/ready', '/failed']);
+    // 通知并发投递，HTTP 到达顺序不保证；仍严格核对目标与每个目标的次数。
+    expect(hits.map(h => h.path).sort()).toEqual(['/failed', '/ready', '/ready']);
     const deliveries = await db.select().from(schema.webhookDeliveries);
     expect(deliveries.filter(r => r.status === 'success')).toHaveLength(2);
     expect(deliveries.find(r => r.status === 'failed')?.attempts).toBe(1);

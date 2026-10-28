@@ -36,6 +36,7 @@ try {
     assert.equal(await page.locator('tbody tr').count(), 2);
     await page.getByRole('textbox', { name: '搜索用户' }).fill('ready@notify.test');
     assert.equal(await page.locator('tbody tr').count(), 1);
+    if (width >= 1024) await page.getByText('Webhook 已验证', { exact: true }).waitFor();
     await page.getByRole('button', { name: '已配置 的操作', exact: true }).click();
     await page.getByRole('menuitem', { name: 'GitHub 详情' }).click();
     await page.getByRole('dialog').waitFor();
@@ -71,8 +72,19 @@ try {
     const maxHeight = await page.locator('tbody tr').evaluateAll(rows => Math.max(...rows.map(row => row.getBoundingClientRect().height)));
     assert.ok(maxHeight <= 80, `行高过大：${maxHeight}`);
     await page.screenshot({ path: `/tmp/eat-users-${width}.png`, fullPage: true });
+    if (width >= 1024) {
+      // 合并保留的飞书状态列：当前应用绑定、旧应用绑定和未绑定都应正确显示。
+      const people = await api('GET', '/api/users');
+      const states = ['bound', 'stale', 'none'];
+      await page.route('**/api/users', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify(
+        people.slice(0, 3).map((user, index) => ({ ...user, notification: { channel: 'app',
+          connected: index === 0, webhookVerified: false, feishuApp: states[index], feishuBoundAt: null } })),
+      ) }));
+      await page.reload();
+      for (const label of ['已绑定', '需重新绑定', '未绑定']) await page.getByText(label, { exact: true }).waitFor();
+    }
     assert.deepEqual(errors, []);
     await context.close();
   }
-  console.log('Users UI passed: desktop/mobile, compact rows, pagination/search, permission save, lazy GitHub, self protection and cancel.');
+  console.log('Users UI passed: desktop/mobile, compact rows, pagination/search, permission save, lazy GitHub, self protection, cancel and Webhook/app status badges.');
 } finally { await browser.close(); }

@@ -15,7 +15,7 @@ export async function listUsers(opts: { search?: string; json?: boolean }): Prom
   if (!rows.length) { console.log('没有匹配的用户'); return; }
   console.log('用户 ID\t姓名\t邮箱\t角色\t状态\t飞书通知');
   for (const user of rows) console.log([user.id, user.name, user.email, user.role === 'admin' ? '管理员' : '成员',
-    user.status === 'active' ? '正常' : '已禁用', user.notificationReady ? '已就绪' : '未配置/未验证'].map(oneLine).join('\t'));
+    user.status === 'active' ? '正常' : '已禁用', user.notificationReady ? '已就绪' : '未就绪'].map(oneLine).join('\t'));
 }
 
 export async function sendNotification(opts: {

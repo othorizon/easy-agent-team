@@ -70,7 +70,11 @@ beforeAll(async () => {
   await migrate(drizzle(pool), { migrationsFolder: oldFolder });
   await rm(oldFolder, { recursive: true, force: true });
   const hash = await bcrypt.hash('password123', 4);
-  for (const [name, id] of Object.entries(ids)) await db.insert(s.users).values({ id, name, email: `${name}@github.test`, passwordHash: hash, role: name === 'admin' ? 'admin' : 'member' });
+  // 这里仍是 0028 的旧结构，不能用当前 ORM schema 插入尚未迁移的新列。
+  for (const [name, id] of Object.entries(ids)) await pool.query(
+    'insert into "user" (id,name,email,password_hash,role) values ($1,$2,$3,$4,$5)',
+    [id, name, `${name}@github.test`, hash, name === 'admin' ? 'admin' : 'member'],
+  );
   await pool.query('insert into app(slug,name,owner_id,dokploy_application_id,repo_url,deploy_approved) values ($1,$2,$3,$4,$5,true)',
     ['legacy-github', 'legacy', ids.owner, 'old-dok', 'https://github.com/eat-org/legacy']);
   await pool.query('insert into app_member(app_id,user_id) select id,$1 from app where slug=$2', [ids.member, 'legacy-github']);
