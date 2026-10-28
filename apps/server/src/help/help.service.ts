@@ -149,7 +149,10 @@ export class HelpService {
 
     const [row] = await this.db
       .insert(helpRequests)
-      .values({ requesterId: user.id, helperId, skillId, title: dto.title, description: dto.description, tried: dto.tried })
+      .values({
+        requesterId: user.id, helperId, skillId, title: dto.title, description: dto.description, tried: dto.tried,
+        replyCallbackUrl: dto.replyCallbackUrl ?? null,
+      })
       .returning();
     await this.audit.record({ actorId: user.id, action: 'help.created', targetType: 'help_request', targetId: row.id });
 
@@ -254,7 +257,11 @@ export class HelpService {
     this.notifyUser(
       other,
       'help.replied',
-      { kind: 'reply', requestId: id, title: row.title, excerpt: content, from: user.name, url: `${loadConfig().publicUrl}/help/${id}` },
+      {
+        kind: 'reply', requestId: id, title: row.title, excerpt: content, from: user.name,
+        url: `${loadConfig().publicUrl}/help/${id}`,
+        replyCallbackUrl: other === row.requesterId ? row.replyCallbackUrl : null,
+      },
       `求助回复: ${row.title}`,
     );
     return this.detail(user, id);

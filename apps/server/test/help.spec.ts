@@ -11,7 +11,8 @@ import * as bcrypt from 'bcryptjs';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { createHmac, randomUUID } from 'node:crypto';
-import { helpListResultSchema } from '@eat/shared';
+import { helpListResultSchema, helpAgentPrompt, readReplyRedirectUrl, type HelpRequestInfo } from '@eat/shared';
+import { eq } from 'drizzle-orm';
 import * as http from 'node:http';
 import * as path from 'node:path';
 import { Pool } from 'pg';
@@ -20,6 +21,7 @@ import { AppModule } from '../src/app.module';
 import * as schema from '../src/db/schema';
 import { DB, type Db } from '../src/db/db.module';
 import { encryptSecret } from '../src/common/crypto';
+import { McpToolsService } from '../src/mcp-server/mcp-tools.service';
 
 let app: NestFastifyApplication;
 let helperToken: string;
@@ -685,5 +687,74 @@ describe('求助分页', () => {
         expect((await api('GET', `/api/help-requests/${direction}/page?${query}`, { token: requesterToken })).status).toBe(400);
       }
     }
+  });
+});
+
+describe('回复回调 URL 的持久化与通知', () => {
+  it('REST/MCP 保存模板，只有发起人收到回复时附带正确的中转按钮', async () => {
+    const db = app.get<Db>(DB);
+    const hash = await bcrypt.hash('callback-test-password', 4);
+    const [requester, helper] = await db.insert(schema.users).values([
+      { name: '回调求助者', email: 'callback-requester@test.dev', passwordHash: hash, bio: '测试' },
+      { name: '回调回答者', email: 'callback-helper@test.dev', passwordHash: hash, bio: '测试', allowHelp: true },
+    ]).returning();
+    await db.insert(schema.userNotifications).values([requester, helper].map((u) => ({
+      userId: u.id, webhookUrl, verifiedAt: new Date(),
+    })));
+    const login = async (email: string) => (await api('POST', '/api/auth/login', {
+      payload: { email, password: 'callback-test-password' },
+    })).body.token;
+    const requesterAuth = await login(requester.email);
+    const helperAuth = await login(helper.email);
+    const callback = 'codex://new?prompt={message}&path=%2Fwork%2Fproject';
+    const fields = { title: '回调 & 中文 # + 测试', description: '描述', tried: '查过文档', helperUserId: helper.id };
+    const created = await api('POST', '/api/help-requests', {
+      token: requesterAuth, payload: { ...fields, replyCallbackUrl: callback },
+    });
+    expect(created.status).toBe(201);
+    const id = created.body.id;
+    const stored = (await db.select().from(schema.helpRequests).where(eq(schema.helpRequests.id, id)))[0];
+    expect(stored.replyCallbackUrl).toBe(callback);
+
+    const findCard = (excerpt: string) => webhookHits.map((hit) => JSON.parse(hit.body).card)
+      .find((card) => JSON.stringify(card).includes(id) && JSON.stringify(card).includes(excerpt));
+    await waitFor(() => !!findCard('新求助'));
+    expect(findCard('新求助').elements.find((e: any) => e.tag === 'action').actions).toHaveLength(1);
+    expect((await api('POST', `/api/help-requests/${id}/reply`, {
+      token: helperAuth, payload: { content: '回答一：确认鉴权参数' },
+    })).status).toBe(201);
+    await waitFor(() => !!findCard('回答一：确认鉴权参数'));
+    const card = findCard('回答一：确认鉴权参数');
+    const actions = card.elements.find((e: any) => e.tag === 'action').actions;
+    expect(actions.map((a: any) => a.text.content)).toEqual(['回到任务处理回复', '查看请求']);
+    const target = new URL(readReplyRedirectUrl(new URL(actions[0].url).hash)!);
+    expect(target.searchParams.get('prompt')).toBe(helpAgentPrompt('reply', id, fields.title));
+    expect(target.searchParams.get('path')).toBe('/work/project');
+
+    await api('POST', `/api/help-requests/${id}/reply`, {
+      token: requesterAuth, payload: { content: '追问二：需要补充参数吗' },
+    });
+    await waitFor(() => !!findCard('追问二：需要补充参数吗'));
+    const followUp = findCard('追问二：需要补充参数吗');
+    expect(followUp.elements.find((e: any) => e.tag === 'action').actions).toHaveLength(1);
+    expect(JSON.stringify(followUp)).not.toContain('/redirect');
+
+    // 第二轮以及已解决后的纯补充也复用模板，不在首次通知时消耗它。
+    await api('POST', `/api/help-requests/${id}/resolve`, { token: requesterAuth });
+    const reply = await api('POST', `/api/help-requests/${id}/reply`, {
+      token: helperAuth, payload: { content: '补充三：额外说明', reopen: false },
+    });
+    expect(reply.body.status).toBe('resolved');
+    await waitFor(() => !!findCard('补充三：额外说明'));
+    expect(findCard('补充三：额外说明').elements.find((e: any) => e.tag === 'action').actions[0].url).toBe(actions[0].url);
+
+    const mcpResult = await app.get(McpToolsService).call(
+      { id: requester.id, name: requester.name, email: requester.email, role: 'member', tokenId: 'test', tokenKind: 'apikey' },
+      'create_help_request', { ...fields, replyCallbackUrl: callback },
+    ) as HelpRequestInfo;
+    expect((await db.select().from(schema.helpRequests).where(eq(schema.helpRequests.id, mcpResult.id)))[0].replyCallbackUrl).toBe(callback);
+    expect((await api('POST', '/api/help-requests', {
+      token: requesterAuth, payload: { ...fields, replyCallbackUrl: 'javascript:alert("{message}")' },
+    })).status).toBe(400);
   });
 });

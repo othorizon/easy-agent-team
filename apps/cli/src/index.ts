@@ -1,3 +1,4 @@
+import { registerNotifyCommands } from './commands/notify.js';
 import { registerRequestCommands } from './commands/requests.js';
 import { registerOssCommands } from './commands/oss.js';
 import { Command } from 'commander';
@@ -63,6 +64,7 @@ program
 program.command('logout').description('退出登录（删除本地凭证）').action(logout);
 program.command('whoami').description('查看当前登录身份').action(whoami);
 
+registerNotifyCommands(program);
 registerRequestCommands(program);
 registerFolioCommands(program);
 registerLlmCommands(program);
@@ -176,6 +178,7 @@ ask
   .requiredOption('--tried <tried>', '已经尝试过什么')
   .option('--to <userId>', '向登记的 helper 求助（用户 ID，eat ask targets 查看）')
   .option('--skill <slug>', '向某个 skill 的作者求助')
+  .option('--reply-callback-url <url>', '回复后返回任务的 URL，须含 {message} 占位符（自动 URL 编码替换）')
   .action(askCreate);
 ask.command('list').description('我发起的与找我的求助').action(askList);
 ask.command('show <id>').description('查看求助详情与对话（支持 ID 前缀）').action(askShow);

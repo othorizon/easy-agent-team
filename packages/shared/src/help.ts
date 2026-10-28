@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { slugSchema } from './common.js';
+import { replyCallbackUrlSchema } from './reply-callback.js';
 
 // ---------- 旧客户端个人资料兼容接口 ----------
 
@@ -56,6 +57,8 @@ export const createHelpRequestSchema = z
     helperUserId: z.string().optional(),
     /** 二选一：向某个允许求助的 skill 的作者求助 */
     skillSlug: slugSchema.optional(),
+    /** 回复通知返回原任务的 URL 模板；{message} 会替换为 URL 编码的「发送给 Agent」文本。 */
+    replyCallbackUrl: replyCallbackUrlSchema.optional(),
   })
   .refine((v) => (v.helperUserId ? !v.skillSlug : !!v.skillSlug), {
     message: 'helperUserId 与 skillSlug 必须且只能提供一个',

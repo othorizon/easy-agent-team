@@ -59,26 +59,33 @@ export class WebhookService {
     );
   }
 
+  /** 通用通知同步返回一次投递结果，避免调用方重试整批通知导致重复发送。 */
+  sendNotification(targetUrl: string, secret: string | null, card: Record<string, unknown>, summary: string): Promise<boolean> {
+    return this.deliver('notification.message', targetUrl, secret, card, summary, 1, false);
+  }
+
   private async deliver(
     eventType: string,
     targetUrl: string,
     secret: string | null,
     card: Record<string, unknown>,
     summary: string,
-  ): Promise<void> {
+    maxAttempts = MAX_ATTEMPTS,
+    includeBrand = true,
+  ): Promise<boolean> {
     const [row] = await this.db
       .insert(webhookDeliveries)
       .values({ eventType, targetUrl, summary })
       .returning({ id: webhookDeliveries.id });
 
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       if (BACKOFF_MS[attempt - 1]) await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt - 1]));
       try {
         const res = await fetch(targetUrl, {
           method: 'POST',
           redirect: 'error',
           headers: { 'content-type': 'application/json' },
-          body: this.buildFeishuBody(secret, card),
+          body: this.buildFeishuBody(secret, card, includeBrand),
           signal: AbortSignal.timeout(10_000),
         });
         const error = await this.feishuError(res);
@@ -87,23 +94,24 @@ export class WebhookService {
             .update(webhookDeliveries)
             .set({ status: 'success', attempts: attempt, updatedAt: sql`now()` })
             .where(eq(webhookDeliveries.id, row.id));
-          return;
+          return true;
         }
-        await this.markAttempt(row.id, attempt, error);
+        await this.markAttempt(row.id, attempt, error, maxAttempts);
       } catch (err) {
-        await this.markAttempt(row.id, attempt, (err as Error).message);
+        await this.markAttempt(row.id, attempt, (err as Error).message, maxAttempts);
       }
     }
+    return false;
   }
 
-  private buildFeishuBody(secret: string | null, card: Record<string, unknown>): string {
+  private buildFeishuBody(secret: string | null, card: Record<string, unknown>, includeBrand = true): string {
     const msg: Record<string, unknown> = {
       msg_type: 'interactive',
       card: {
         ...card,
         elements: [
           ...(Array.isArray(card.elements) ? card.elements : []),
-          { tag: 'note', elements: [{ tag: 'plain_text', content: 'EAT 平台通知' }] },
+          ...(includeBrand ? [{ tag: 'note', elements: [{ tag: 'plain_text', content: 'EAT 平台通知' }] }] : []),
         ],
       },
     };
@@ -125,10 +133,10 @@ export class WebhookService {
     return null;
   }
 
-  private async markAttempt(id: string, attempt: number, error: string): Promise<void> {
+  private async markAttempt(id: string, attempt: number, error: string, maxAttempts = MAX_ATTEMPTS): Promise<void> {
     await this.db
       .update(webhookDeliveries)
-      .set({ status: attempt >= MAX_ATTEMPTS ? 'failed' : 'pending', attempts: attempt, lastError: error, updatedAt: sql`now()` })
+      .set({ status: attempt >= maxAttempts ? 'failed' : 'pending', attempts: attempt, lastError: error, updatedAt: sql`now()` })
       .where(eq(webhookDeliveries.id, id));
   }
 }

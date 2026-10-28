@@ -253,6 +253,20 @@
       "when": 1793029956025,
       "tag": "0035_deployment_stop",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1793164622563,
+      "tag": "0036_help_reply_callback",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1793173723711,
+      "tag": "0037_notification_broadcast_permission",
+      "breakpoints": true
     }
   ]
 }

@@ -30,6 +30,7 @@ export async function askCreate(opts: {
   tried: string;
   to?: string;
   skill?: string;
+  replyCallbackUrl?: string;
 }): Promise<void> {
   const api = Api.fromSaved();
   if (!opts.to === !opts.skill) {
@@ -43,6 +44,7 @@ export async function askCreate(opts: {
     tried: opts.tried,
     helperUserId: opts.to,
     skillSlug: opts.skill,
+    replyCallbackUrl: opts.replyCallbackUrl,
   });
   console.log(`求助已发出（ID: ${r.id}），已通知 ${r.helperName}。`);
   console.log(`查看回复: eat ask show ${r.id}`);

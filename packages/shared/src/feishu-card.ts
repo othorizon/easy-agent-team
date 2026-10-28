@@ -8,6 +8,7 @@
  * 没有「复制到剪贴板」行为，因此“复制给 Agent”落地为卡片内的代码块——
  * 飞书客户端的代码块自带复制按钮，效果等价。
  */
+import { buildReplyRedirectUrl } from './reply-callback.js';
 
 export type HelpCardKind = 'request' | 'reply';
 
@@ -21,6 +22,8 @@ export interface HelpFeishuCardInput {
   from: string;
   /** 请求详情页地址 */
   url: string;
+  /** 仅发给求助发起人的回复通知携带。 */
+  replyCallbackUrl?: string | null;
 }
 
 /** 卡片里描述/回复的最大展示字数，超出截断加省略号 */
@@ -56,6 +59,10 @@ export function helpAgentPrompt(kind: HelpCardKind, requestId: string, title: st
 export function buildHelpFeishuCard(input: HelpFeishuCardInput): Record<string, unknown> {
   const isRequest = input.kind === 'request';
   const excerptLabel = isRequest ? '描述' : '回复';
+  const agentPrompt = helpAgentPrompt(input.kind, input.requestId, input.title);
+  const returnUrl = !isRequest && input.replyCallbackUrl
+    ? buildReplyRedirectUrl(new URL('../', input.url).toString(), input.replyCallbackUrl, agentPrompt)
+    : null;
   return {
     config: { wide_screen_mode: true },
     header: {
@@ -75,10 +82,16 @@ export function buildHelpFeishuCard(input: HelpFeishuCardInput): Record<string, 
       {
         tag: 'action',
         actions: [
+          ...(returnUrl ? [{
+            tag: 'button',
+            text: { tag: 'plain_text', content: '回到任务处理回复' },
+            type: 'primary',
+            url: returnUrl,
+          }] : []),
           {
             tag: 'button',
             text: { tag: 'plain_text', content: '查看请求' },
-            type: 'primary',
+            type: returnUrl ? 'default' : 'primary',
             url: input.url,
           },
         ],
@@ -86,7 +99,7 @@ export function buildHelpFeishuCard(input: HelpFeishuCardInput): Record<string, 
       { tag: 'hr' },
       {
         tag: 'markdown',
-        content: `**发送给 Agent**（复制发给你的 Agent，它即可接手）\n\`\`\`text\n${helpAgentPrompt(input.kind, input.requestId, input.title)}\n\`\`\``,
+        content: `**发送给 Agent**（复制发给你的 Agent，它即可接手）\n\`\`\`text\n${agentPrompt}\n\`\`\``,
       },
     ],
   };

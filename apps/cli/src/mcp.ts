@@ -153,6 +153,7 @@ export async function startMcpServer(): Promise<void> {
               tried: args.tried,
               helperUserId: args.helperUserId,
               skillSlug: args.skillSlug,
+              replyCallbackUrl: args.replyCallbackUrl,
             }),
           );
         }

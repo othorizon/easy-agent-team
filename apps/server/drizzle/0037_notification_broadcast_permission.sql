@@ -1,0 +1,1 @@
+ALTER TABLE "user" ADD COLUMN "can_notify_all" boolean DEFAULT false NOT NULL;

@@ -148,6 +148,7 @@ flowchart TB
 | 可求助登记 | 用户自助登记能力描述，并配置接收求助 / 接收回复两个开关 |
 | 飞书通知 | 飞书群自定义机器人 webhook（支持加签，密钥由用户填入），通知为卡片消息，包含「查看请求」按钮与「发送给 Agent」代码块 |
 | 多轮对话 | 求助 → 回复 → 追问 → 标记解决，CLI / MCP / 控制台三端均可读写 |
+| 回复后返回任务 | 创建时可传 `replyCallbackUrl`（CLI：`--reply-callback-url 'codex://new?prompt={message}'`），回复通知增加「回到任务处理回复」主按钮，经 EAT 中转页打开目标，并携带 URL 编码后的「发送给 Agent」文本 |
 | 频率限制 | 按用户限制每小时求助次数（可配置，见 `EAT_HELP_RATE_LIMIT`） |
 
 ### 经验沉淀
@@ -298,3 +299,14 @@ eat login --server http://<平台地址>
 | ≤ v0.24.0 | 上述两个入参不存在、被静默丢弃，部署归属降级为按时间推断（标注 `inferred`） |
 | v0.30.4（实测） | `project.all` 返回的应用条目不含 `appName` 与 `description`，控制台「从 Dokploy 选择应用」**无法按容器名搜索**，只能按应用显示名与 application id 搜索（清单本身可正常使用） |
 | v0.30.5（实测） | Git 来源的应用**构建一结束就把构建记录的 `title` / `description` 覆盖成提交信息**（`init` / `Commit: <hash>`），平台写入的 `eat:<id>` 标记只在排队与构建期间存在。`eat deploy` 会立刻轮询、通常赶在覆盖前完成精确认领并把认领方式记进平台库；MCP / 控制台触发后若无人及时查看，则回落为按时间推断（标注 `inferred`）。自助创建应用、SSH key 绑定、构建方式、env 读写、部署与日志均已在该版本真机验证 |
+
+### 用户查询与通知
+
+```sh
+eat users --search 'lisi'
+eat notify send --to 'lisi@example.com' --title '验收提醒' --body '**接口已完成联调**，请验收。'
+eat notify send --all --title '维护通知' --body-file ./notice.md --dry-run
+```
+
+`eat users` 是一级命令，只显示正常账号，支持 `--search` 和 `--json`。禁用账号在 `/users` 管理页面查看。通知正文支持飞书 Markdown，发送人固定显示在卡片底部。
+全员通知权限默认关闭（包含管理员），在用户管理的「权限设置」中开启；未验证飞书渠道的用户会明确报告无法投递。

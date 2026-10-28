@@ -135,6 +135,10 @@ function helpTools(mode: EatToolMode): EatToolDef[] {
           tried: { type: 'string', description: '已经尝试过什么（必填）' },
           helperUserId: { type: 'string', description: '向可求助的用户求助（其 userId，来自 list_helpers）' },
           skillSlug: { type: 'string', description: '向某个 skill 的作者求助（skill slug，来自 list_helpers）' },
+          replyCallbackUrl: {
+            type: 'string',
+            description: '可选：回复通知返回原任务的 URL 模板，须含 {message}（也接受 %7Bmessage%7D）；EAT 将其替换为 URL 编码的「发送给 Agent」完整文本，再通过中转页打开。仅在已知当前任务有效链接时填写，不要猜测会话 ID。只负责导航，不保证目标应用自动发送消息。',
+          },
         },
         required: ['title', 'description', 'tried'],
       },
