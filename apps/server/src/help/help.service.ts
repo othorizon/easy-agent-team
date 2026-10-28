@@ -7,7 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { and, desc, eq, gt, or, sql } from 'drizzle-orm';
-import { buildHelpFeishuCard, type HelpFeishuCardInput } from '@eat/shared';
+import { assertHelpReplyCallbackFits, buildHelpFeishuCard, type HelpFeishuCardInput } from '@eat/shared';
 import type { CreateHelpRequest, HelpListQuery, HelpListResult, HelpRequestDetail, HelpRequestInfo, HelpStatus } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
@@ -104,6 +104,11 @@ export class HelpService {
   }
 
   async create(user: AuthUser, dto: CreateHelpRequest): Promise<HelpRequestInfo> {
+    if (dto.replyCallbackUrl) {
+      try { assertHelpReplyCallbackFits(dto.replyCallbackUrl, dto.title, loadConfig().publicUrl); } catch (error) {
+        throw new BadRequestException({ error: 'VALIDATION_FAILED', message: (error as Error).message });
+      }
+    }
     // 频率限制
     const oneHourAgo = new Date(Date.now() - 3600_000);
     const [{ count }] = await this.db

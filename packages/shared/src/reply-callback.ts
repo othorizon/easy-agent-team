@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const REPLY_MESSAGE_PLACEHOLDER = '{message}';
 export const REPLY_REDIRECT_PATH = '/redirect';
+export const REPLY_REDIRECT_MAX_LENGTH = 65536;
 const placeholder = /\{message\}|%7Bmessage%7D/gi;
 const blockedSchemes = new Set([
   'javascript:', 'data:', 'vbscript:', 'file:', 'blob:', 'about:', 'filesystem:',
@@ -10,7 +11,7 @@ const blockedSchemes = new Set([
 
 /** 只作浏览器导航，绝不在服务端请求该地址。允许 HTTPS/HTTP 和应用的 scheme:// 深链接。 */
 export function isReplyRedirectUrl(value: string): boolean {
-  if (!value || value.length > 65536 || /[\s\\\u0000-\u001f\u007f]/u.test(value)) return false;
+  if (!value || value.length > REPLY_REDIRECT_MAX_LENGTH || /[\s\\\u0000-\u001f\u007f]/u.test(value)) return false;
   if (!/^[a-z][a-z0-9+.-]*:\/\/[^/?#]+/i.test(value)) return false;
   try {
     const url = new URL(value);
@@ -31,7 +32,9 @@ export const replyCallbackUrlSchema = z.string().max(4096).refine((value) => {
 
 export function resolveReplyCallbackUrl(template: string, message: string): string {
   replyCallbackUrlSchema.parse(template);
-  return template.replace(placeholder, () => encodeURIComponent(message));
+  const target = template.replace(placeholder, () => encodeURIComponent(message));
+  if (!isReplyRedirectUrl(target)) throw new Error('回复回调 URL 展开后无效或过长，请减少消息占位符或缩短链接');
+  return target;
 }
 
 /** 用片段包裹完整目标，避免目标 URL 和消息被发送到中转页的 HTTP 日志。 */

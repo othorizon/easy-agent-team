@@ -28,6 +28,8 @@ export interface HelpFeishuCardInput {
 
 /** 卡片里描述/回复的最大展示字数，超出截断加省略号 */
 export const HELP_CARD_EXCERPT_LIMIT = 100;
+/** 为飞书消息封装、加签及平台落款预留空间，与通用通知保持相同的卡片预算。 */
+export const HELP_CARD_MAX_BYTES = 25000;
 
 function truncate(text: string, limit = HELP_CARD_EXCERPT_LIMIT): string {
   const oneLine = text.replace(/\s+/g, ' ').trim();
@@ -57,12 +59,37 @@ export function helpAgentPrompt(kind: HelpCardKind, requestId: string, title: st
 
 /** 构建卡片 JSON（不含加签字段；timestamp/sign 由发送方按飞书规范附加） */
 export function buildHelpFeishuCard(input: HelpFeishuCardInput): Record<string, unknown> {
+  if (input.kind === 'reply' && input.replyCallbackUrl) {
+    try { return buildCallbackCard(input); } catch {
+      // 存量模板、平台地址或文本变化不能中断回复通知，退回原卡片。
+    }
+  }
+  return buildCard(input, null);
+}
+
+function buildCallbackCard(input: HelpFeishuCardInput): Record<string, unknown> {
+  const prompt = helpAgentPrompt('reply', input.requestId, input.title);
+  const returnUrl = buildReplyRedirectUrl(new URL('../', input.url).toString(), input.replyCallbackUrl!, prompt);
+  const card = buildCard(input, returnUrl);
+  if (new TextEncoder().encode(JSON.stringify(card)).length > HELP_CARD_MAX_BYTES) {
+    throw new Error('回复回调 URL 展开后导致通知卡片过大，请减少消息占位符或缩短链接');
+  }
+  return card;
+}
+
+/** 创建前验证未来回复卡片；UUID 长度固定，并为姓名和回复摘要预留最大 JSON 编码空间。 */
+export function assertHelpReplyCallbackFits(template: string, title: string, baseUrl = 'https://eat.invalid'): void {
+  const requestId = '00000000-0000-4000-8000-000000000000';
+  buildCallbackCard({ kind: 'reply', requestId, title, replyCallbackUrl: template,
+    url: `${baseUrl.replace(/\/$/, '')}/help/${requestId}`,
+    // 每个 UTF-16 单元最多被 JSON 编码为 6 字节（例如 \u0000）。姓名上限 100，摘要另含省略号。
+    from: '\u0000'.repeat(100), excerpt: '\u0000'.repeat(HELP_CARD_EXCERPT_LIMIT + 1) });
+}
+
+function buildCard(input: HelpFeishuCardInput, returnUrl: string | null): Record<string, unknown> {
   const isRequest = input.kind === 'request';
   const excerptLabel = isRequest ? '描述' : '回复';
   const agentPrompt = helpAgentPrompt(input.kind, input.requestId, input.title);
-  const returnUrl = !isRequest && input.replyCallbackUrl
-    ? buildReplyRedirectUrl(new URL('../', input.url).toString(), input.replyCallbackUrl, agentPrompt)
-    : null;
   return {
     config: { wide_screen_mode: true },
     header: {

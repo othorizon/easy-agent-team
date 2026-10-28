@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { slugSchema } from './common.js';
 import { replyCallbackUrlSchema } from './reply-callback.js';
+import { assertHelpReplyCallbackFits } from './feishu-card.js';
 
 // ---------- 旧客户端个人资料兼容接口 ----------
 
@@ -62,6 +63,12 @@ export const createHelpRequestSchema = z
   })
   .refine((v) => (v.helperUserId ? !v.skillSlug : !!v.skillSlug), {
     message: 'helperUserId 与 skillSlug 必须且只能提供一个',
+  })
+  .superRefine((v, ctx) => {
+    if (!v.replyCallbackUrl || !replyCallbackUrlSchema.safeParse(v.replyCallbackUrl).success) return;
+    try { assertHelpReplyCallbackFits(v.replyCallbackUrl, v.title); } catch (error) {
+      ctx.addIssue({ code: 'custom', path: ['replyCallbackUrl'], message: (error as Error).message });
+    }
   });
 export type CreateHelpRequest = z.infer<typeof createHelpRequestSchema>;
 

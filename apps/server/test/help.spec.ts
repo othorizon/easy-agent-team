@@ -691,6 +691,57 @@ describe('求助分页', () => {
 });
 
 describe('回复回调 URL 的持久化与通知', () => {
+  it('REST/MCP 拒绝展开超限且不入库；存量坏模板回复仍成功保存并投递原通知', async () => {
+    const db = app.get<Db>(DB);
+    const hash = await bcrypt.hash('size-test-password', 4);
+    const [requester, helper] = await db.insert(schema.users).values([
+      { name: '长度测试求助者', email: 'size-requester@test.dev', passwordHash: hash, bio: '测试' },
+      { name: '长度测试回答者', email: 'size-helper@test.dev', passwordHash: hash, bio: '测试', allowHelp: true },
+    ]).returning();
+    await db.insert(schema.userNotifications).values([requester, helper].map(u => ({ userId: u.id, webhookUrl, verifiedAt: new Date() })));
+    const login = async (email: string) => (await api('POST', '/api/auth/login', { payload: { email, password: 'size-test-password' } })).body.token;
+    const requesterAuth = await login(requester.email), helperAuth = await login(helper.email);
+    const fields = { title: '中'.repeat(200), description: '描述', tried: '已尝试', helperUserId: helper.id };
+    const actor = { id: requester.id, name: requester.name, email: requester.email, role: 'member' as const, tokenId: 'test', tokenKind: 'apikey' as const };
+    const template = (count: number) => 'codex://new?' + Array.from({ length: count }, (_, i) => `p${i}={message}`).join('&');
+    for (const count of [8, 30]) {
+      const payload = { ...fields, replyCallbackUrl: template(count) };
+      expect((await api('POST', '/api/help-requests', { token: requesterAuth, payload })).status).toBe(400);
+      await expect(app.get(McpToolsService).call(actor, 'create_help_request', payload)).rejects.toThrow();
+    }
+    // 契约默认平台地址可通过，但实际部署子路径很长时仍须在写入前拒绝。
+    const previousUrl = process.env.EAT_PUBLIC_URL;
+    try {
+      process.env.EAT_PUBLIC_URL = 'https://eat.example/' + 'a'.repeat(20000);
+      expect((await api('POST', '/api/help-requests', { token: requesterAuth, payload: { ...fields, replyCallbackUrl: template(1) } })).status).toBe(400);
+    } finally {
+      if (previousUrl === undefined) delete process.env.EAT_PUBLIC_URL;
+      else process.env.EAT_PUBLIC_URL = previousUrl;
+    }
+    expect(await db.select().from(schema.helpRequests).where(eq(schema.helpRequests.requesterId, requester.id))).toHaveLength(0);
+
+    const created = await api('POST', '/api/help-requests', { token: requesterAuth, payload: { ...fields, replyCallbackUrl: template(1) } });
+    expect(created.status).toBe(201);
+    const id = created.body.id;
+    const findCard = (text: string) => webhookHits.map(hit => JSON.parse(hit.body).card)
+      .find(card => JSON.stringify(card).includes(id) && JSON.stringify(card).includes(text));
+    await waitFor(() => !!findCard('新求助'));
+    for (const [index, callback] of [template(8), template(30), 'javascript:alert(1)'].entries()) {
+      await db.update(schema.helpRequests).set({ replyCallbackUrl: callback }).where(eq(schema.helpRequests.id, id));
+      const content = `存量回调兜底回复 ${index}`;
+      expect((await api('POST', `/api/help-requests/${id}/reply`, { token: helperAuth, payload: { content } })).status).toBe(201);
+      await waitFor(() => !!findCard(content));
+      const card = findCard(content);
+      expect(card.elements.find((element: any) => element.tag === 'action').actions).toEqual([
+        expect.objectContaining({ type: 'primary', text: { tag: 'plain_text', content: '查看请求' } }),
+      ]);
+      expect(card.elements.at(-2).content).toContain(helpAgentPrompt('reply', id, fields.title));
+      expect(Buffer.byteLength(JSON.stringify(card))).toBeLessThan(25000);
+      expect(JSON.stringify(card)).not.toContain('/redirect');
+    }
+    expect(await db.select().from(schema.helpMessages).where(eq(schema.helpMessages.requestId, id))).toHaveLength(3);
+  });
+
   it('REST/MCP 保存模板，只有发起人收到回复时附带正确的中转按钮', async () => {
     const db = app.get<Db>(DB);
     const hash = await bcrypt.hash('callback-test-password', 4);
