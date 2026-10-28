@@ -54,13 +54,14 @@ export const createUserRequestSchema = z.object({
 });
 export type CreateUserRequest = z.infer<typeof createUserRequestSchema>;
 
-/** 管理员更新用户角色/状态（禁止操作自己，避免锁死唯一管理员） */
+/** 管理员更新角色/状态/全员通知权限（仅角色与状态禁止操作自己） */
 export const updateUserRequestSchema = z
   .object({
     role: z.enum(['admin', 'member']).optional(),
     status: z.enum(['active', 'disabled']).optional(),
+    canNotifyAll: z.boolean().optional(),
   })
-  .refine((v) => v.role !== undefined || v.status !== undefined, { message: '至少提供一个要修改的字段' });
+  .refine((v) => v.role !== undefined || v.status !== undefined || v.canNotifyAll !== undefined, { message: '至少提供一个要修改的字段' });
 export type UpdateUserRequest = z.infer<typeof updateUserRequestSchema>;
 
 /** 管理员重置用户密码（重置后该用户所有 Token 吊销，需重新登录） */

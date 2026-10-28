@@ -83,14 +83,20 @@ export class NotifierService {
   }
 
   /** 同步发一次，失败抛错；用于需要即时知道结果的场景（测试消息、管理员告警） */
-  async sendOnce(target: NotifyTarget, card: Record<string, unknown>): Promise<void> {
+  async sendOnce(target: NotifyTarget, card: Record<string, unknown>, includeBrand = true): Promise<void> {
     if (target.channel === 'webhook') {
-      await this.webhook.sendCardOnce(target.url, target.secret, card);
+      await this.webhook.sendCardOnce(target.url, target.secret, card, includeBrand);
       return;
     }
     const api = this.feishu.client(await this.feishu.row());
     if (!api || api.appId !== target.appId) throw new Error('飞书自建应用已更换或未配置');
-    await api.sendCard(target.openId, withFooter(card));
+    await api.sendCard(target.openId, includeBrand ? withFooter(card) : card);
+  }
+
+  /** CLI 通知同步返回一次投递结果，卡片已包含一行发送人落款。 */
+  async sendNotification(target: NotifyTarget, card: Record<string, unknown>, summary: string): Promise<boolean> {
+    if (target.channel === 'webhook') return this.webhook.sendNotification(target.url, target.secret, card, summary);
+    return this.deliverToApp('notification.message', target, card, summary, 1, false);
   }
 
   private async deliverToApp(
@@ -98,25 +104,27 @@ export class NotifierService {
     target: Extract<NotifyTarget, { channel: 'app' }>,
     card: Record<string, unknown>,
     summary: string,
-  ): Promise<void> {
+    maxAttempts = BACKOFF_MS.length,
+    includeBrand = true,
+  ): Promise<boolean> {
     const [log] = await this.db
       .insert(webhookDeliveries)
       .values({ eventType, targetUrl: `feishu-app:${target.appId}:${target.openId}`, summary })
       .returning({ id: webhookDeliveries.id });
-    for (let attempt = 1; attempt <= BACKOFF_MS.length; attempt++) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       if (BACKOFF_MS[attempt - 1]) await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt - 1]));
       try {
-        await this.sendOnce(target, card);
+        await this.sendOnce(target, card, includeBrand);
         await this.db
           .update(webhookDeliveries)
           .set({ status: 'success', attempts: attempt, updatedAt: sql`now()` })
           .where(eq(webhookDeliveries.id, log.id));
-        return;
+        return true;
       } catch (e) {
         await this.db
           .update(webhookDeliveries)
           .set({
-            status: attempt >= BACKOFF_MS.length ? 'failed' : 'pending',
+            status: attempt >= maxAttempts ? 'failed' : 'pending',
             attempts: attempt,
             lastError: (e as Error).message,
             updatedAt: sql`now()`,
@@ -124,5 +132,6 @@ export class NotifierService {
           .where(eq(webhookDeliveries.id, log.id));
       }
     }
+    return false;
   }
 }

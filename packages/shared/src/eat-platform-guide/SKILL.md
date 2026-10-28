@@ -1,6 +1,6 @@
 ---
 name: eat-platform-guide
-description: 通过团队 EAT 平台获取内部配置与密钥、申请数据库或 OSS 存储、管理或调用 LLM API、创建部署应用、发布 Folio、同步 Skill/MCP、查询团队经验与求助。当任务涉及 EAT 资源、eat CLI、平台 MCP 或这些平台操作报错时使用；普通编程和非 EAT 服务不需要本 Skill。
+description: 通过团队 EAT 平台获取内部配置与密钥、申请数据库或 OSS 存储、管理或调用 LLM API、创建部署应用、发布 Folio、同步 Skill/MCP、查询团队经验与求助、查询用户和发送通知。当任务涉及 EAT 资源、eat CLI、平台 MCP 或这些平台操作报错时使用；普通编程和非 EAT 服务不需要本 Skill。
 ---
 
 # eat 平台使用指南
@@ -21,7 +21,7 @@ EAT（easy-agent-team）统一管理团队资源、权限与审计。终端可�
 | 创建应用、配置 env、部署或排查服务 | [应用与部署](references/applications.md) | Git 源、整体 env 覆盖、部署授权与日志 |
 | 发布网页、演示、报告或处理页面反馈 | [Folio](references/folio.md) | 静态产物、先确认访问范围、版本与评论 |
 | 分享或订阅 Skill、连接团队 MCP | [Skill 与 MCP](references/skills-and-mcp.md) | 多文件 Skill、订阅、个人 MCP 接入地址 |
-| 查团队经验或向同事求助 | [经验与协作](references/collaboration.md) | 先 `search_experiences`，再发起求助 |
+| 查团队经验、求助、查询用户或发送通知 | [经验与协作](references/collaboration.md) | 先 `search_experiences`，再发起求助 |
 | 同步落点、CLI/Skill 更新提示 | [同步与更新](references/updates.md) | 沿用配置落点，按用户授权范围更新 |
 
 本地文件路径相对于本 `SKILL.md` 所在目录，不是工作项目目录。远程 MCP 客户端没有本地文件时，先调用 `get_platform_guide` 获取本入口，再以 `path` 读取对应文件，例如 `get_platform_guide({"path":"references/llm-api.md"})`。

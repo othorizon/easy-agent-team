@@ -1,3 +1,4 @@
+import { MessagesController } from './messages.controller';
 import { Global, Module } from '@nestjs/common';
 import { WebhookService } from './webhook.service';
 import { UserNotificationsService } from './user-notifications.service';
@@ -8,7 +9,7 @@ import { FeishuController } from './feishu/feishu.controller';
 
 @Global()
 @Module({
-  controllers: [FeishuController],
+  controllers: [FeishuController, MessagesController],
   providers: [WebhookService, UserNotificationsService, NotifierService, FeishuAppService, FeishuCallbackService],
   exports: [WebhookService, UserNotificationsService, NotifierService, FeishuAppService, FeishuCallbackService],
 })

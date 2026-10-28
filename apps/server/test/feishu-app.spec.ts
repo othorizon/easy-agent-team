@@ -308,6 +308,32 @@ describe('飞书自建应用：成员绑定', () => {
     expect((await api('GET', '/api/users', 'member')).body[0].notification).toBeUndefined();
   });
 
+  it('CLI 通知按当前应用渠道投递，dry-run 不发消息，固定署名只出现一行', async () => {
+    const request = { to: [ids.member], title: 'CLI 通知测试', body: '**验收通过**' };
+    const count = sent('/im/v1/messages?').length;
+    const dryRun = await api('POST', '/api/notifications/send', 'member', { ...request, dryRun: true });
+    expect(dryRun.status).toBe(201);
+    expect(dryRun.body.recipients[0].status).toBe('ready');
+    expect(sent('/im/v1/messages?')).toHaveLength(count);
+    expect((await api('GET', '/api/users', 'member')).body.find((u: any) => u.id === ids.member).notificationReady).toBe(true);
+    const result = await api('POST', '/api/notifications/send', 'member', request);
+    expect(result.status).toBe(201);
+    expect(result.body.recipients[0].status).toBe('sent');
+    const outbound = sent('/im/v1/messages?').at(-1)!.body;
+    expect(outbound.receive_id).toBe(openIds.member);
+    const card = JSON.parse(outbound.content);
+    expect(card.elements).toHaveLength(3);
+    expect(card.elements[0].content).toBe(request.body);
+    expect(card.elements.at(-1).elements[0].content).toMatch(/^发送人：member · .* · EAT$/);
+    const log = (await pool.query("SELECT status,attempts FROM webhook_delivery WHERE event_type='notification.message' ORDER BY created_at DESC LIMIT 1")).rows[0];
+    expect(log).toMatchObject({ status: 'success', attempts: 1 });
+    feishu.failSend = true;
+    try {
+      const failed = await api('POST', '/api/notifications/send', 'member', request);
+      expect(failed.body.recipients[0].status).toBe('failed');
+    } finally { feishu.failSend = false; }
+  });
+
   it('测试通知与求助通知走机器人私聊', async () => {
     const before = sent('/im/v1/messages?receive_id_type=open_id').length;
     expect((await api('POST', '/api/account/notification/test', 'member')).status).toBe(201);

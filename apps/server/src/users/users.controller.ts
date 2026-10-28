@@ -1,3 +1,4 @@
+import { FeishuAppService } from '../notify/feishu/feishu-app.service';
 import { GithubStore } from '../github/github.store';
 import { GithubService } from '../github/github.service';
 import { OssService } from '../oss/oss.service';
@@ -31,8 +32,7 @@ import { AuditService } from '../audit/audit.service';
 import { CurrentUser, Roles, type AuthUser } from '../auth/auth.decorators';
 import { ZodValidationPipe } from '../common/zod.pipe';
 import { DB, type Db } from '../db/db.module';
-import { apiTokens, feishuBindings, userNotifications, users } from '../db/schema';
-import { FeishuAppService } from '../notify/feishu/feishu-app.service';
+import { apiTokens, users, userNotifications, githubAccounts, feishuBindings } from '../db/schema';
 import { LlmGatewayService } from '../llm-gateway/llm-gateway.service';
 
 @Controller('api/users')
@@ -47,32 +47,32 @@ export class UsersController {
     private readonly feishu: FeishuAppService,
   ) {}
 
-  /** 用户列表（登录即可见——授权、求助都需要选人）。管理员额外看到每人的通知状态（决策 92） */
+  /** 用户列表（登录即可见——授权、求助都需要选人） */
   @Get()
   async list(@CurrentUser() actor: AuthUser) {
-    const rows = await this.db
-      .select({
-        id: users.id, name: users.name, email: users.email, role: users.role, status: users.status, bio: users.bio,
-        webhookUrl: userNotifications.webhookUrl, verifiedAt: userNotifications.verifiedAt,
-        feishuAppId: feishuBindings.appId, feishuBoundAt: feishuBindings.boundAt,
-      })
-      .from(users)
+    const rows = await this.db.select({
+      id: users.id, name: users.name, email: users.email, role: users.role, status: users.status, bio: users.bio,
+      canNotifyAll: users.canNotifyAll,
+      webhookUrl: userNotifications.webhookUrl, verifiedAt: userNotifications.verifiedAt,
+      feishuAppId: feishuBindings.appId, feishuBoundAt: feishuBindings.boundAt,
+      ...(actor.role === 'admin' ? { github: { login: githubAccounts.login, orgState: githubAccounts.orgState, needsAuthorization: githubAccounts.needsAuthorization } } : {}),
+    }).from(users)
       .leftJoin(userNotifications, eq(userNotifications.userId, users.id))
       .leftJoin(feishuBindings, eq(feishuBindings.userId, users.id))
+      .leftJoin(githubAccounts, eq(githubAccounts.userId, users.id))
       .orderBy(asc(users.createdAt));
-    const feishu = actor.role === 'admin' ? await this.feishu.row() : null;
+    const feishu = await this.feishu.row();
     return rows.map(({ webhookUrl, verifiedAt, feishuAppId, feishuBoundAt, ...user }) => {
-      if (!feishu) return user;
       const webhookVerified = !!webhookUrl && !!verifiedAt;
       const app = !feishuAppId ? 'none' : feishuAppId === feishu.appId ? 'bound' : 'stale';
       const notification: UserNotificationStatus = {
         channel: feishu.channel,
         connected: feishu.channel === 'app' ? app === 'bound' : webhookVerified,
-        webhookVerified,
-        feishuApp: app,
+        webhookVerified, feishuApp: app,
         feishuBoundAt: app === 'bound' && feishuBoundAt ? feishuBoundAt.toISOString() : null,
       };
-      return { ...user, notification };
+      return { ...user, notificationReady: notification.connected,
+        ...(actor.role === 'admin' ? { notification } : {}) };
     });
   }
 
@@ -100,7 +100,7 @@ export class UsersController {
     return row;
   }
 
-  /** 修改角色/启用禁用（仅管理员；禁止操作自己）。禁用时吊销该用户全部 Token */
+  /** 修改角色/启用禁用/通知权限（仅管理员；角色与状态禁止操作自己）。禁用时吊销该用户全部 Token */
   @Patch(':id')
   @Roles('admin')
   async update(
@@ -108,15 +108,15 @@ export class UsersController {
     @Body(new ZodValidationPipe(updateUserRequestSchema)) body: UpdateUserRequest,
     @CurrentUser() actor: AuthUser,
   ) {
-    if (id === actor.id) {
+    if (id === actor.id && (body.role !== undefined || body.status !== undefined)) {
       throw new BadRequestException({ error: 'BAD_REQUEST', message: '不能修改自己的角色或状态' });
     }
     const row = await this.db.transaction(async tx => {
       const [updated] = await tx
       .update(users)
-      .set({ ...(body.role ? { role: body.role } : {}), ...(body.status ? { status: body.status } : {}) })
+      .set({ ...(body.role ? { role: body.role } : {}), ...(body.status ? { status: body.status } : {}), ...(body.canNotifyAll !== undefined ? { canNotifyAll: body.canNotifyAll } : {}) })
       .where(eq(users.id, id))
-      .returning({ id: users.id, name: users.name, email: users.email, role: users.role, status: users.status });
+      .returning({ id: users.id, name: users.name, email: users.email, role: users.role, status: users.status, canNotifyAll: users.canNotifyAll });
       if (updated && body.status === 'disabled') await this.github.userChanged(tx, id);
       return updated;
     });
@@ -134,7 +134,7 @@ export class UsersController {
       action: 'user.updated',
       targetType: 'user',
       targetId: id,
-      meta: { role: body.role, status: body.status },
+      meta: { role: body.role, status: body.status, canNotifyAll: body.canNotifyAll },
     });
     return { ...row, llmGatewaySyncPending, ossSyncPending };
   }

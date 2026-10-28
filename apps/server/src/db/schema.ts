@@ -21,6 +21,7 @@ export const users = pgTable('user', {
   name: text('name').notNull(),
   bio: text('bio').notNull().default(''),
   allowHelp: boolean('allow_help').notNull().default(true),
+  canNotifyAll: boolean('can_notify_all').notNull().default(false),
   email: text('email').notNull().unique(),
   role: text('role', { enum: ['admin', 'member'] })
     .notNull()
@@ -905,6 +906,7 @@ export const helpRequests = pgTable(
     title: text('title').notNull(),
     description: text('description').notNull(),
     tried: text('tried').notNull().default(''),
+    replyCallbackUrl: text('reply_callback_url'),
     status: text('status', { enum: ['open', 'answered', 'resolved', 'closed'] })
       .notNull()
       .default('open'),

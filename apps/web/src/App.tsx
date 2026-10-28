@@ -46,6 +46,7 @@ import { EnvDetailPage } from './pages/EnvDetail';
 import { EnvsPage } from './pages/Envs';
 import { HelpPage } from './pages/Help';
 import { HelpDetailPage } from './pages/HelpDetail';
+import { ReplyRedirectPage } from './pages/ReplyRedirect';
 import { InstallPage } from './pages/Install';
 import { LoginPage } from './pages/Login';
 import { McpConfigsPage } from './pages/McpConfigs';
@@ -308,6 +309,7 @@ export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/redirect" element={<ReplyRedirectPage />} />
       <Route path="/complete-profile" element={<AccountPage completion />} />
       <Route path="/account" element={<RequireAuth><AccountPage /></RequireAuth>} />
       <Route path="/" element={<RequireAuth><EnvsPage /></RequireAuth>} />

@@ -267,6 +267,13 @@
       "when": 1793120693437,
       "tag": "0037_feishu_app",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1793176823363,
+      "tag": "0038_notify_and_reply_callback",
+      "breakpoints": true
     }
   ]
 }
