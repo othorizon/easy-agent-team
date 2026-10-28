@@ -568,7 +568,7 @@ interface UserRow {
   name: string;
   email: string;
   role: 'admin' | 'member';
-  status: 'active' | 'disabled';
+  status?: 'active' | 'disabled';
 }
 
 function AddSubscriberDialog({
@@ -586,7 +586,7 @@ function AddSubscriberDialog({
   const users = useQuery({ queryKey: ['users'], queryFn: () => api<UserRow[]>('GET', '/api/users') });
   // 已订阅的与已禁用的不再列出——选了也只会被服务端拒掉
   const options = (users.data ?? [])
-    .filter((u) => u.status === 'active' && !existing.includes(u.id))
+    .filter((u) => u.status !== 'disabled' && !existing.includes(u.id))
     .map((u) => ({ value: u.id, label: u.name, hint: u.email }));
 
   return (

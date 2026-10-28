@@ -7,7 +7,8 @@ export interface UserListItem {
   name: string;
   email: string;
   role: 'admin' | 'member';
-  status: 'active' | 'disabled';
+  /** 仅管理员返回；普通用户目录只包含正常账号，不返回状态字段。 */
+  status?: 'active' | 'disabled';
   bio: string;
   canNotifyAll: boolean;
   notificationReady: boolean;

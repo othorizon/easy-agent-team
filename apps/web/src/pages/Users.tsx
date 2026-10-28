@@ -23,7 +23,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input, Textarea } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 
-type UserRow = UserListItem;
+type UserRow = UserListItem & { status: 'active' | 'disabled' };
 /** 按平台当前的通知渠道展示：自建应用看飞书绑定，Webhook 看是否验证过 */
 function NotificationBadge({ status }: { status?: UserNotificationStatus }) {
   if (!status) return null;

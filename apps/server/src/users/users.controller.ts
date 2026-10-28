@@ -61,6 +61,7 @@ export class UsersController {
       .leftJoin(userNotifications, eq(userNotifications.userId, users.id))
       .leftJoin(feishuBindings, eq(feishuBindings.userId, users.id))
       .leftJoin(githubAccounts, eq(githubAccounts.userId, users.id))
+      .where(actor.role === 'admin' ? undefined : eq(users.status, 'active'))
       .orderBy(asc(users.createdAt));
     const feishu = await this.feishu.row();
     return rows.map(({ webhookUrl, verifiedAt, feishuAppId, feishuBoundAt, ...user }) => {
@@ -72,8 +73,9 @@ export class UsersController {
         webhookVerified, feishuApp: app,
         feishuBoundAt: app === 'bound' && feishuBoundAt ? feishuBoundAt.toISOString() : null,
       };
-      return { ...user, notificationReady: notification.connected,
-        ...(actor.role === 'admin' ? { notification } : {}) };
+      const { status, ...profile } = user;
+      return { ...profile, notificationReady: notification.connected,
+        ...(actor.role === 'admin' ? { status, notification } : {}) };
     });
   }
 

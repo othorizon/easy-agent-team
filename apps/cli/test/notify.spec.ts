@@ -19,6 +19,19 @@ function setup() {
 }
 afterEach(() => { vi.restoreAllMocks(); process.exitCode = 0; });
 describe('notify/users CLI', () => {
+  it('普通用户响应不含 status 时仍正常查询，JSON 不补充状态字段', async () => {
+    const { status, ...member } = users[0];
+    const { request, log, run } = setup(); request.mockResolvedValue([member]);
+    await run(['users', '--search', 'ZHANG@', '--json']);
+    expect(JSON.parse(log.mock.calls[0][0])).toEqual([member]);
+  });
+  it('列表只显示五列，兼容管理员和旧服务端的状态字段并过滤禁用账号', async () => {
+    const { request, log, run } = setup(); request.mockResolvedValue(users);
+    await run(['users']);
+    expect(log.mock.calls.map(call => call[0])).toEqual([
+      '用户 ID\t姓名\t邮箱\t角色\t飞书通知', 'one\t张三\tzhang@example.com\t成员\t已就绪',
+    ]);
+  });
   it.each([[], ['--search', 'example.com'], ['--search', 'ZHANG@']])('users 只返回正常账号，支持搜索与 JSON：%j', async (...args) => {
     const { request, log, run } = setup(); request.mockResolvedValue(users);
     await run(['users', ...args, '--json']);

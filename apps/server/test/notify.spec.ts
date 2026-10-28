@@ -76,14 +76,17 @@ describe('CLI 通知与用户目录', () => {
     expect(result.body.every((u: any) => u.canNotifyAll === false)).toBe(true);
     expect(result.body.find((u: any) => u.id === readyId).notificationReady).toBe(true);
     expect(result.body.find((u: any) => u.id === missingId).notificationReady).toBe(false);
-    expect(result.body.find((u: any) => u.id === disabledId).notificationReady).toBe(false);
-    const fields = ['id', 'name', 'email', 'role', 'status', 'bio', 'canNotifyAll', 'notificationReady'];
-    expect(Object.keys(result.body[0]).sort()).toEqual(fields.sort());
+    expect(result.body).toHaveLength(5);
+    expect(result.body.some((u: any) => u.id === disabledId)).toBe(false);
+    const fields = ['id', 'name', 'email', 'role', 'bio', 'canNotifyAll', 'notificationReady'];
+    for (const user of result.body) expect(Object.keys(user).sort()).toEqual([...fields].sort());
     expect(JSON.stringify(result.body)).not.toMatch(/webhook|passwordHash|accessToken|github/i);
     const management = await api('GET', '/api/users', admin.token);
     expect(management.body.find((u: any) => u.id === readyId).github).toEqual({ login: 'ready-github', orgState: 'active', needsAuthorization: false });
     expect(management.body.find((u: any) => u.id === member.id).github).toBeNull();
-    expect(Object.keys(management.body[0]).sort()).toEqual([...fields, 'github', 'notification'].sort());
+    expect(management.body).toHaveLength(6);
+    expect(Object.keys(management.body[0]).sort()).toEqual([...fields, 'status', 'github', 'notification'].sort());
+    expect(management.body.find((u: any) => u.id === disabledId).status).toBe('disabled');
     expect(management.body.find((u: any) => u.id === disabledId).notification.connected).toBe(false);
   });
   it('发送与预检查都要求登录；全员权限默认关闭，包括管理员', async () => {

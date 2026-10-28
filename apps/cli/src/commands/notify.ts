@@ -9,13 +9,13 @@ const oneLine = (text: string) => text.replace(/[\r\n\t\x1b]/g, ' ');
 export async function listUsers(opts: { search?: string; json?: boolean }): Promise<void> {
   const all = await Api.fromSaved().request<UserListItem[]>('GET', '/api/users');
   const search = opts.search?.trim().toLowerCase();
-  const rows = all.filter(user => user.status === 'active'
+  const rows = all.filter(user => user.status !== 'disabled'
     && (!search || [user.id, user.name, user.email].some(v => v.toLowerCase().includes(search))));
   if (opts.json) { console.log(JSON.stringify(rows, null, 2)); return; }
   if (!rows.length) { console.log('没有匹配的用户'); return; }
-  console.log('用户 ID\t姓名\t邮箱\t角色\t状态\t飞书通知');
+  console.log('用户 ID\t姓名\t邮箱\t角色\t飞书通知');
   for (const user of rows) console.log([user.id, user.name, user.email, user.role === 'admin' ? '管理员' : '成员',
-    user.status === 'active' ? '正常' : '已禁用', user.notificationReady ? '已就绪' : '未就绪'].map(oneLine).join('\t'));
+    user.notificationReady ? '已就绪' : '未就绪'].map(oneLine).join('\t'));
 }
 
 export async function sendNotification(opts: {

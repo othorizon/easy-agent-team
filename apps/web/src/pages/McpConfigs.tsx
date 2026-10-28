@@ -530,7 +530,7 @@ interface UserRow {
   name: string;
   email: string;
   role: 'admin' | 'member';
-  status: 'active' | 'disabled';
+  status?: 'active' | 'disabled';
 }
 
 /**
@@ -574,7 +574,7 @@ function SubscribersDialog({ config, onClose }: { config: McpConfigInfo; onClose
 
   const rows = subscribers.data ?? [];
   const options = (users.data ?? [])
-    .filter((u) => u.status === 'active' && !rows.some((r) => r.userId === u.id))
+    .filter((u) => u.status !== 'disabled' && !rows.some((r) => r.userId === u.id))
     .map((u) => ({ value: u.id, label: u.name, hint: u.email }));
 
   const subscriberColumns: DataTableColumn<McpSubscriber>[] = [
