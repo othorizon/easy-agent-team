@@ -204,7 +204,7 @@ async function main() {
   if (reqRejected) {
     await api('POST', `/api/access-requests/${reqRejected.id}/decision`, {
       token: T.liwei,
-      body: { decision: 'rejected' },
+      body: { decision: 'rejected', reason: '签名密钥不下发到前端，请经 BFF 调网关。' },
     });
   }
   console.log('  + 待审批 2 条 / 已批准 1 条 / 已驳回 1 条');
@@ -561,7 +561,7 @@ description: 设计稿 token 到 Tailwind 变量的映射表（草稿）。
   for (const [who, description] of HELPERS) {
     await api('PUT', '/api/helpers/me', {
       token: T[who],
-      body: { description, available: true, notifyHelp: true, notifyReply: true },
+      body: { description, available: true },
     });
     console.log(`  + ${who}`);
   }
@@ -681,19 +681,6 @@ curl "$WECOM_WEBHOOK" -H 'content-type: application/json' -d @msg.json
     });
   }
   console.log('  + 待回复 / 已回复 / 已解决（含沉淀经验）各一条');
-
-  // 登记完求助再补通知配置：避免上面的求助真去投递一个演示用的 webhook 地址
-  await api('PUT', '/api/helpers/me', {
-    token: T.liwei,
-    body: {
-      description: HELPERS[0][1],
-      available: true,
-      notifyHelp: true,
-      notifyReply: true,
-      webhookUrl: 'https://open.feishu.cn/open-apis/bot/v2/hook/00000000-demo-0000-0000-000000000000',
-      webhookSecret: 'demo-sign-secret',
-    },
-  });
 
   // -------------------------------------------------------------- 数据库
   step('数据库实例与分配');

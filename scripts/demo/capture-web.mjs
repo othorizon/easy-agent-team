@@ -59,7 +59,7 @@ const clickTab = (name) => async (page) => {
 const SHOTS = [
   { name: 'envs', as: 'admin', url: '/', wait: '内部 API 网关' },
   { name: 'env-detail', as: 'admin', url: '/envs/internal-api', wait: 'INTERNAL_API_TOKEN' },
-  { name: 'requests', as: 'liwei', url: '/requests?tab=inbox', wait: 'INTERNAL_API_TOKEN' },
+  { name: 'requests', as: 'liwei', url: '/requests?tab=inbox', wait: '企业微信自建应用' },
   { name: 'skills', as: 'admin', url: '/skills', wait: 'CRM 数据查询' },
   { name: 'skill-detail', as: 'admin', url: '/skills/crm-data-query', wait: '统计口径' },
   { name: 'mcp', as: 'admin', url: '/mcp-configs', wait: 'CRM 只读数据库' },
@@ -89,7 +89,7 @@ const SHOTS = [
       await clickTab('环境变量')(page);
     } },
   { name: 'users', as: 'admin', url: '/users', wait: '李维' },
-  { name: 'settings', as: 'admin', url: '/settings', wait: '部署后台', fullPage: true },
+  { name: 'settings', as: 'admin', url: '/settings', wait: '注册与登录', fullPage: true },
   { name: 'install', as: 'wumin', url: '/install', wait: 'install.sh', fullPage: true },
   { name: 'login', as: null, url: '/login', wait: '登录' },
   { name: 'mobile-apps', as: 'admin', url: '/apps', wait: '客户看板', viewport: MOBILE },
