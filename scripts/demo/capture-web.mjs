@@ -45,11 +45,6 @@ async function login(who) {
   return res.json();
 }
 
-/** 点开某个应用的详情弹窗（应用详情是 /apps 页面上的 Dialog，没有独立路由） */
-const openApp = (name) => async (page) => {
-  await page.getByRole('button', { name }).first().click();
-  await page.waitForTimeout(600);
-};
 const clickTab = (name) => async (page) => {
   await page.getByRole('tab', { name }).click();
   await page.waitForTimeout(600);
@@ -72,27 +67,21 @@ const SHOTS = [
     } },
   { name: 'db', as: 'admin', url: '/db?tab=all', wait: 'crm_dashboard' },
   { name: 'db-instances', as: 'admin', url: '/db?tab=instances', wait: '测试 PostgreSQL' },
-  { name: 'apps', as: 'admin', url: '/apps', wait: '客户看板' },
-  { name: 'app-detail', as: 'admin', url: '/apps', wait: '客户看板', prepare: openApp('客户看板') },
-  { name: 'app-deployments', as: 'admin', url: '/apps', wait: '客户看板', prepare: async (page) => {
-      await openApp('客户看板')(page);
-      await clickTab('部署记录')(page);
-    } },
-  { name: 'app-build-logs', as: 'admin', url: '/apps', wait: '客户看板', prepare: async (page) => {
-      await openApp('客户看板')(page);
+  // 应用清单默认是「我的」页签（管理员名下没有应用），要挂上 scope=all
+  { name: 'apps', as: 'admin', url: '/apps?scope=all', wait: '客户看板' },
+  { name: 'app-detail', as: 'admin', url: '/apps/crm-dashboard', wait: '客户看板' },
+  { name: 'app-deployments', as: 'admin', url: '/apps/crm-dashboard', wait: '客户看板', prepare: clickTab('部署记录') },
+  { name: 'app-build-logs', as: 'admin', url: '/apps/crm-dashboard', wait: '客户看板', prepare: async (page) => {
       await clickTab('部署记录')(page);
       await page.getByRole('button', { name: '构建日志' }).click();
       await page.waitForTimeout(2500);
     } },
-  { name: 'app-env', as: 'sunhao', url: '/apps', wait: '客户看板', prepare: async (page) => {
-      await openApp('客户看板')(page);
-      await clickTab('环境变量')(page);
-    } },
+  { name: 'app-env', as: 'sunhao', url: '/apps/crm-dashboard', wait: '客户看板', prepare: clickTab('环境变量') },
   { name: 'users', as: 'admin', url: '/users', wait: '李维' },
   { name: 'settings', as: 'admin', url: '/settings', wait: '注册与登录', fullPage: true },
   { name: 'install', as: 'wumin', url: '/install', wait: 'install.sh', fullPage: true },
   { name: 'login', as: null, url: '/login', wait: '登录' },
-  { name: 'mobile-apps', as: 'admin', url: '/apps', wait: '客户看板', viewport: MOBILE },
+  { name: 'mobile-apps', as: 'admin', url: '/apps?scope=all', wait: '客户看板', viewport: MOBILE },
   { name: 'mobile-nav', as: 'admin', url: '/skills', wait: 'CRM 数据查询', viewport: MOBILE, prepare: async (page) => {
       await page.getByRole('button').first().click();
       await page.waitForTimeout(600);
