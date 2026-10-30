@@ -202,7 +202,9 @@ export class ExperiencesService {
         r.req.requesterId === user.id ||
         r.req.helperId === user.id,
     );
-    const results: ExperienceSearchResult[] = [];
+    // Agent 搜经验时习惯一次给几个关键词（「用量异常 周末 判断」）：按空白拆开，命中任一个就算，命中得越多排得越前
+    const terms = (q ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+    const results: Array<ExperienceSearchResult & { hits: number }> = [];
     for (const r of visible) {
       const version = (
         await this.db
@@ -213,15 +215,18 @@ export class ExperiencesService {
           .limit(1)
       )[0];
       const haystack = `${r.skill.name}\n${r.skill.description}\n${version?.content ?? ''}`;
-      if (q) {
-        const idx = haystack.toLowerCase().indexOf(q.toLowerCase());
-        if (idx < 0) continue;
+      if (terms.length) {
+        const lower = haystack.toLowerCase();
+        const found = terms.filter((t) => lower.includes(t));
+        if (!found.length) continue;
+        const idx = lower.indexOf(found[0]);
         results.push({
           skillSlug: r.skill.slug,
           name: r.skill.name,
           description: r.skill.description,
           public: r.exp.public,
           snippet: haystack.slice(Math.max(0, idx - 40), idx + 80).replace(/\n/g, ' '),
+          hits: found.length,
         });
       } else {
         results.push({
@@ -230,9 +235,14 @@ export class ExperiencesService {
           description: r.skill.description,
           public: r.exp.public,
           snippet: '',
+          hits: 0,
         });
       }
     }
-    return results.slice(0, 50);
+    // 稳定排序：命中数相同的保持按创建时间倒序
+    return results
+      .sort((a, b) => b.hits - a.hits)
+      .slice(0, 50)
+      .map((r) => ({ skillSlug: r.skillSlug, name: r.name, description: r.description, public: r.public, snippet: r.snippet }));
   }
 }
