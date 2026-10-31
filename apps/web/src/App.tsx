@@ -24,7 +24,7 @@ import type { OnboardingStatus, ApprovalRequestPage } from '@eat/shared';
 import { AccountPage } from './pages/Account';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { api, clearSession, getStoredUser, getToken } from './api';
-import { BrandIcon } from './components/brand-icon';
+import { BrandLogo } from './components/brand-logo';
 import { Badge } from './components/ui/badge';
 import { Button } from './components/ui/button';
 import {
@@ -128,9 +128,8 @@ function isActive(item: NavItem, pathname: string): boolean {
 
 function Brand() {
   return (
-    <Link to="/" className="flex items-center gap-2 px-2 outline-none">
-      <BrandIcon className="size-7 shrink-0" />
-      <span className="text-[15px] font-semibold tracking-tight">EASY AGENT TEAM</span>
+    <Link to="/" aria-label="EAT 首页" className="flex items-center rounded-sm px-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
+      <BrandLogo className="h-9 w-auto shrink-0" />
     </Link>
   );
 }

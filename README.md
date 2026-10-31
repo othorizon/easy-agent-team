@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="eat — easy agent team" width="560" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg" />
+    <img src="docs/assets/logo.svg" alt="eat — Easy Agent Team" width="240" />
+  </picture>
 </p>
 
 # easy-agent-team（EAT）
@@ -12,7 +15,7 @@ AI 已经能写代码、跑分析、做出一个完整的应用；在企业里�
 EAT 是人和 Agent 与企业上下文之间的协调层，把这些障碍收进同一套账号、权限与审计里：
 团队里少数人负责建设能力，其他成员——包括不写代码的同事——由自己的 Agent 按权限直接用起来。
 
-> **[在线体验 EAT →](https://demo-lobby.1object.cn/)**　不用部署，选一个工作场景，4–10 分钟走完一遍：一句话需求变成能打开的应用、
+> **[在线体验 EAT →](https://easyagentteam.dev/)**　不用部署，选一个工作场景，4–10 分钟走完一遍：一句话需求变成能打开的应用、
 > Agent 带着上下文来找人求助、把客诉分析交给研发，或者直接进控制台四处看看。每次体验都是独立环境，业务数据为虚构。
 
 ## 能力矩阵
@@ -57,7 +60,7 @@ EAT 是人和 Agent 与企业上下文之间的协调层，把这些障碍收进
 
 ## 快速开始
 
-只想先看看效果？直接去[演示站](https://demo-lobby.1object.cn/)，不用部署。下面是在自己团队落地的步骤。
+只想先看看效果？直接去[演示站](https://easyagentteam.dev/)，不用部署。下面是在自己团队落地的步骤。
 
 ### 团队成员：让自己的 Agent 接入
 

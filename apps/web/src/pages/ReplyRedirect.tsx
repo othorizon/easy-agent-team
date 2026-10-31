@@ -2,7 +2,7 @@ import { readReplyRedirectUrl } from '@eat/shared';
 import { ArrowUpRight, Copy } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { BrandIcon } from '../components/brand-icon';
+import { BrandLogo } from '../components/brand-logo';
 import { Button } from '../components/ui/button';
 
 /** 飞书到 Agent 的公共中转页：无需登录，不向服务端发送目标或消息。 */
@@ -59,7 +59,7 @@ export function ReplyRedirectPage() {
   return (
     <main className="flex min-h-dvh items-center justify-center bg-muted/30 px-4 py-10">
       <section className="w-full max-w-lg space-y-5 rounded-xl border bg-card p-6 shadow-sm sm:p-8">
-        <div className="flex items-center gap-2 text-sm font-semibold"><BrandIcon className="size-6" />EASY AGENT TEAM</div>
+        <BrandLogo className="h-9 w-auto" />
         <h1 className="text-xl font-semibold">回到任务处理回复</h1>
         {!target ? (
           <p role="alert" className="text-sm text-muted-foreground">任务链接缺失或无效。请重新打开求助回复通知中的按钮，或使用卡片里的“发送给 Agent”文本。</p>
