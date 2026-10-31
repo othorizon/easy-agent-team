@@ -240,7 +240,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-dvh">
       {/* 桌面侧边栏 */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 flex-col border-r bg-sidebar lg:flex">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-48 flex-col border-r bg-sidebar lg:flex">
         <div className="flex h-14 items-center border-b px-3">
           <Brand />
         </div>
@@ -274,7 +274,7 @@ function Shell({ children }: { children: React.ReactNode }) {
       </header>
 
       {/* 内容区 */}
-      <main className="lg:pl-60">
+      <main className="lg:pl-48">
         <div className={cn(
           'mx-auto w-full px-4 py-6 sm:px-6 lg:py-8',
           pathname === '/folios' ? 'max-w-[1600px]' : pathname === '/settings' ? 'max-w-6xl' : 'max-w-5xl',
