@@ -33,7 +33,7 @@
 ## 3. 在 Dokploy 上部署
 
 1. **建数据库**：Dokploy → Databases → 创建 PostgreSQL（记下内部连接串），或使用自有实例；
-2. **建应用**：Applications → Create → 来源选本仓库（Git Provider 或 Git URL），构建方式选 **Dockerfile**（仓库根目录已提供；国内网络环境把 Dockerfile 路径指定为 `Dockerfile_cn`，依赖安装走 npmmirror 源，基础镜像慢的话按其文件头注释配置 Docker 镜像加速）；
+2. **建应用**：Applications → Create → 来源选本仓库（Git Provider 或 Git URL），构建方式选 **Dockerfile**（仓库根目录已提供；国内网络环境把 Dockerfile 路径指定为 `Dockerfile_cn`，基础镜像默认走 DaoCloud 代理，Corepack/npm/pnpm 走 npmmirror，Debian 软件源走阿里云；替换源的方法见 §5）；
 3. **配置环境变量**：按上表填入（`DATABASE_URL` 用 Dokploy 数据库的内部地址）；
 4. **域名**：Domains 里绑定域名并开启 HTTPS，容器端口填 `3000`；
 5. **部署**：点击 Deploy。容器启动序：迁移 → 种子 → 服务；
@@ -53,6 +53,26 @@ docker build -t easy-agent-team .          # 国内网络: docker build -f Docke
 cp .env.example .env                        # 填入 DATABASE_URL / EAT_KEK / EAT_PUBLIC_URL
 docker run -d --name eat -p 3000:3000 --env-file .env easy-agent-team
 ```
+
+`Dockerfile_cn` 的构建阶段和运行阶段共用国内源配置，不需要另行修改 Docker 守护进程。
+镜像源可通过构建参数覆盖（Dokploy 中对应 Build Args，不是运行时环境变量）：
+
+| 构建参数 | 默认值 | 用途 |
+|---|---|---|
+| `NODE_IMAGE` | `docker.m.daocloud.io/library/node:22-slim` | 完整的 Node 基础镜像引用；可替换为团队同步到国内仓库的 Node 22 Debian slim 镜像 |
+| `NPM_REGISTRY` | `https://registry.npmmirror.com` | Corepack 下载 pnpm，以及 npm/pnpm 安装和部署依赖 |
+| `APT_MIRROR` | `https://mirrors.aliyun.com` | Debian 主仓库及安全更新源的地址前缀，不带末尾 `/`；当前构建不执行 apt 安装 |
+
+例如，显式指定国内源构建：
+
+```bash
+docker build -f Dockerfile_cn -t easy-agent-team \
+  --build-arg NODE_IMAGE=docker.m.daocloud.io/library/node:22-slim \
+  --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
+  --build-arg APT_MIRROR=https://mirrors.aliyun.com .
+```
+
+若公共镜像代理不可用，可用 `NODE_IMAGE` 指向团队可访问的镜像仓库；构建机器需能访问所选镜像源及其下载重定向域名。
 
 注意：随手生成的 `EAT_KEK` 只适合一次性试用——换 KEK 等于丢弃所有已加密数据。
 
