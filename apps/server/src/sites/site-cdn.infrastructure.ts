@@ -150,7 +150,20 @@ export function configDigest(configs: any[]) {
     )
     .digest('hex');
 }
-class CdnProbeError extends SiteSetupError {}
+const unreachableProbeCodes = new Set(['ENETUNREACH', 'EHOSTUNREACH', 'EAFNOSUPPORT', 'EADDRNOTAVAIL']);
+class CdnProbeError extends SiteSetupError {
+  readonly networkUnreachable: boolean;
+  constructor(error: NodeJS.ErrnoException) {
+    const networkUnreachable =
+      error.syscall === 'connect' && error.code !== undefined && unreachableProbeCodes.has(error.code);
+    super(
+      networkUnreachable
+        ? 'HTTPS 目标网络不可达，请检查容器的 IPv4/IPv6 出站路由'
+        : probeConnectionError(error.code),
+    );
+    this.networkUnreachable = networkUnreachable;
+  }
+}
 function probeConnectionError(code?: string) {
   switch (code) {
     case 'ERR_TLS_CERT_ALTNAME_INVALID':
@@ -243,30 +256,24 @@ export class SiteCdnInfrastructure {
   }
   async probe(
     host: string,
-    address: string,
+    ip: string,
     path: string,
     headers: Record<string, string> = {},
     servername = host,
   ) {
-    const ips = await this.infra.addresses(address);
-    if (!ips.length) throw new SiteSetupError('链路检查目标无法解析');
     return new Promise<{ status: number; body: string; headers: Record<string, any>; fingerprint: string }>(
       (resolve, reject) => {
         const req = request(
           {
-            hostname: host,
+            // A literal IP avoids a synchronous lookup starting the connection during TLS setup.
+            hostname: ip,
             servername,
             port: 443,
             // Each check must reach its pinned address, including successive edge checks.
-            // Node's default keep-alive pool ignores changes to lookup for the same Host/SNI.
             agent: false,
             path,
             method: 'GET',
             headers: { ...headers, host },
-            lookup: (_hostname: any, options: any, callback: any) =>
-              options?.all
-                ? callback(null, [{ address: ips[0], family: isIP(ips[0]) }])
-                : callback(null, ips[0], isIP(ips[0])),
             timeout: 10_000,
           },
           (res) => {
@@ -284,14 +291,10 @@ export class SiteCdnInfrastructure {
                 fingerprint,
               }),
             );
-            res.on('error', (e: NodeJS.ErrnoException) =>
-              reject(new CdnProbeError(probeConnectionError(e.code))),
-            );
+            res.on('error', (e: NodeJS.ErrnoException) => reject(new CdnProbeError(e)));
           },
         );
-        req.on('error', (e: NodeJS.ErrnoException) =>
-          reject(new CdnProbeError(probeConnectionError(e.code))),
-        );
+        req.on('error', (e: NodeJS.ErrnoException) => reject(new CdnProbeError(e)));
         req.on('timeout', () => req.destroy(Object.assign(new Error('probe timeout'), { code: 'ETIMEDOUT' })));
         req.end();
       },
@@ -301,17 +304,21 @@ export class SiteCdnInfrastructure {
     const stage = edge ? 'CDN 接入检查' : '源站直连检查';
     const destinations = await this.infra.addresses(address);
     if (!destinations.length) throw new SiteSetupError(`${stage}失败：目标地址无法解析`);
-    const targetAddress = destinations[0];
+    let targetAddress = destinations[0];
+    const host = cdnProbeHost(base);
+    const servername = edge ? host : cdnSni(base);
     const path = `/__eat/cdn-probe/${base.resourceKey}`;
+    const check = (ip: string) => this.probe(host, ip, path, {}, servername);
     let res: Awaited<ReturnType<SiteCdnInfrastructure['probe']>>;
     try {
-      res = await this.probe(
-        cdnProbeHost(base),
-        targetAddress,
-        path,
-        {},
-        edge ? cdnProbeHost(base) : cdnSni(base),
-      );
+      res = await check(targetAddress).catch((e: unknown) => {
+        if (!(e instanceof CdnProbeError && e.networkUnreachable)) throw e;
+        const family = isIP(targetAddress);
+        const alternate = destinations.find((ip) => isIP(ip) !== family);
+        if (!alternate) throw e;
+        targetAddress = alternate;
+        return check(alternate);
+      });
     } catch (e) {
       throw new SiteSetupError(`${stage}失败：${e instanceof CdnProbeError ? e.message : probeConnectionError()}`);
     }
@@ -337,8 +344,8 @@ export class SiteCdnInfrastructure {
       if (res.fingerprint !== row.resources.certificateFingerprint)
         throw new SiteSetupError('CDN 边缘证书尚未与源站同步，禁止切换 DNS');
       const asset = `/__eat/cdn/health/${base.resourceKey}/probe.css`;
-      const first = await this.probe(cdnProbeHost(base), targetAddress, asset);
-      const second = await this.probe(cdnProbeHost(base), targetAddress, asset);
+      const first = await this.probe(host, targetAddress, asset);
+      const second = await this.probe(host, targetAddress, asset);
       if (
         first.status !== 200 ||
         second.status !== 200 ||

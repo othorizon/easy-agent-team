@@ -1,7 +1,7 @@
 import { beforeAll, afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { constants, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { X509Certificate } from 'node:crypto';
 import https from 'node:https';
@@ -243,6 +243,48 @@ describe('CDN certificate, signing and DNS adapter contracts', () => {
         f.service.probe(cdnProbeHost(base), '127.0.0.1', '/probe', {}, 'wrong.example.test'),
       ).rejects.toThrow('HTTPS 证书域名与 SNI 不匹配');
       expect(requests).toHaveLength(1);
+    } finally {
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+  it('handles an immediate IPv6 routing failure and pins the remaining checks to the reachable IPv4 edge', async () => {
+    const f = fixture();
+    const ipv6 = '2001:db8::1';
+    const cname = 'cdn.example.net';
+    f.infra.addresses = async (address) => (address === cname ? [ipv6, '127.0.0.1'] : [address]);
+    const requests: string[] = [];
+    const server = https.createServer({ cert: pem, key }, (req, res) => {
+      const path = req.url!;
+      requests.push(path);
+      const asset = path.endsWith('/probe.css');
+      res.setHeader('cache-control', asset ? 'public, max-age=2592000' : 'private, no-store');
+      if (asset) res.setHeader('x-cache', 'HIT');
+      res.end(cdnMarker(row, path));
+    });
+    const realRequest = https.request;
+    try {
+      await new Promise<void>((resolve, reject) =>
+        server.once('error', reject).listen(0, '127.0.0.1', resolve),
+      );
+      const port = (server.address() as { port: number }).port;
+      vi.spyOn(https, 'request').mockImplementation(
+        ((options: https.RequestOptions, callback: Parameters<typeof realRequest>[2]) =>
+          realRequest({ ...options, port, ca: pem }, callback)) as typeof https.request,
+      );
+      syncBuiltinESMExports();
+      // Inject the immediate OS failure while exercising Node's actual TCP, TLS and HTTP error path.
+      const { TCP } = (process as any).binding('tcp_wrap');
+      const connect6 = vi.spyOn(TCP.prototype, 'connect6').mockReturnValue(-constants.errno.ENETUNREACH);
+      const edge = { ...row, resources: { certificateFingerprint: new X509Certificate(pem).fingerprint256 } };
+      await expect(f.service.verify(base, edge, cname, true)).resolves.toBeUndefined();
+      const asset = `/__eat/cdn/health/${base.resourceKey}/probe.css`;
+      expect(requests).toEqual([`/__eat/cdn-probe/${base.resourceKey}`, asset, asset]);
+      expect(connect6).toHaveBeenCalledTimes(1);
+      await expect(f.service.verify(base, edge, ipv6, true)).rejects.toThrow(
+        'CDN 接入检查失败：HTTPS 目标网络不可达',
+      );
     } finally {
       vi.restoreAllMocks();
       syncBuiltinESMExports();
