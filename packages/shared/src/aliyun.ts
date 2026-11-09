@@ -25,12 +25,16 @@ export const updateAliyunConnectionSchema = z
     message: '更换管理凭证时需同时填写 AccessKey ID 和 Secret',
     path: ['accessKeySecret'],
   });
+export const aliyunCleanupStateSchema = z.enum(['pending', 'running', 'failed']).nullable();
+export const aliyunCleanupStageSchema = z.enum(['verify', 'keys', 'bindings', 'users', 'local']).nullable();
+export const deleteAliyunConnectionSchema = z.object({ confirmName: aliyunConnectionNameSchema });
 export const aliyunConnectionInfoSchema = z.object({
   id: z.string().uuid(),
   name: aliyunConnectionNameSchema,
   accountId: z.string(),
   defaultRegion: z.string(),
   status: z.enum(['enabled', 'paused']),
+  cleanupState: aliyunCleanupStateSchema, cleanupStage: aliyunCleanupStageSchema, cleanupError: z.string().nullable(),
   accessKeyIdMasked: z.literal('********'),
   accessKeySecretMasked: z.literal('********'),
   createdAt: z.string(),
@@ -44,7 +48,8 @@ export const aliyunConnectionStatusSchema = z.object({
 export const aliyunConnectionValidationSchema = z.object({
   accountId: z.string(),
 });
-export const aliyunDeleteResultSchema = z.object({ ok: z.literal(true) });
+export const aliyunDeleteResultSchema = z.object({ ok: z.boolean(), cleanupState: aliyunCleanupStateSchema.optional(), cleanupStage: aliyunCleanupStageSchema.optional(), cleanupError: z.string().nullable().optional() });
+export type AliyunDeleteResult = z.infer<typeof aliyunDeleteResultSchema>;
 export type CreateAliyunConnectionRequest = z.infer<
   typeof createAliyunConnectionSchema
 >;
@@ -87,8 +92,13 @@ export const aliyunIdentityAccountInfoSchema = z.object({
   connectionStatus: z.enum(['enabled', 'paused']), identityId: z.string().uuid(), ramName: z.string(),
   customPolicyCount: z.number().int().nonnegative().nullable(), error: z.string().nullable(),
 });
+export const aliyunDriftSnapshotSchema = z.object({ missing: z.array(z.string()), extra: z.array(z.string()), checkedAt: z.string().datetime(), error: z.string().nullable(), repairError: z.string().nullable().optional() });
+export type AliyunDriftSnapshot = z.infer<typeof aliyunDriftSnapshotSchema>;
+export const aliyunIdentityDriftSchema = aliyunDriftSnapshotSchema.extend({ identityId: z.string().uuid(), userId: z.string().uuid(), userName: z.string(), connectionId: z.string().uuid(), connectionName: z.string(), ramName: z.string(), canRepair: z.boolean() });
+export type AliyunIdentityDrift = z.infer<typeof aliyunIdentityDriftSchema>;
+export const aliyunRepairResultSchema = z.object({ ok: z.boolean(), drift: aliyunIdentityDriftSchema });
 export const aliyunGrantsResultSchema = z.object({
-  grants: z.array(aliyunGrantInfoSchema), accounts: z.array(aliyunIdentityAccountInfoSchema),
+  grants: z.array(aliyunGrantInfoSchema), accounts: z.array(aliyunIdentityAccountInfoSchema), drift: z.array(aliyunIdentityDriftSchema).optional(),
 });
 export type GrantAliyunPermissionRequest = z.infer<typeof grantAliyunPermissionSchema>;
 export type RevokeAliyunGrantRequest = z.infer<typeof revokeAliyunGrantSchema>;

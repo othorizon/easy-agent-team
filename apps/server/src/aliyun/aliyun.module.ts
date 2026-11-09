@@ -1,3 +1,4 @@
+import { AliyunMaintenanceService } from './aliyun-maintenance.service';
 import { AliyunCredentialsController } from './aliyun-credentials.controller';
 import { AliyunCredentialsService } from './aliyun-credentials.service';
 import { AliyunRequests } from './aliyun-requests';
@@ -13,7 +14,7 @@ import { AliyunGrantsService } from './aliyun-grants.service';
 @Module({
   imports: [RamModule, CloudIdentitiesModule],
   controllers: [AliyunController, AliyunGrantsController, AliyunCredentialsController, AliyunRequestsController],
-  providers: [AliyunService, AliyunGrantsService, AliyunCredentialsService, AliyunRequests],
+  providers: [AliyunService, AliyunMaintenanceService, AliyunGrantsService, AliyunCredentialsService, AliyunRequests],
   exports: [AliyunService, AliyunGrantsService, AliyunRequests],
 })
 export class AliyunModule {}

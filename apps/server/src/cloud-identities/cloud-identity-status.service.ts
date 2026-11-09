@@ -45,7 +45,7 @@ export class CloudIdentityStatusService {
   async tick() {
     const rows = await this.db.select({ id: cloudIdentities.id }).from(cloudIdentities)
       .innerJoin(users, eq(users.id, cloudIdentities.userId))
-      .where(and(or(eq(cloudIdentities.syncPending, true), sql`${cloudIdentities.userEnabled} <> (${users.status} = 'active')`),
+      .where(and(or(eq(cloudIdentities.cleanupPending, false), eq(users.status, 'disabled')), or(eq(cloudIdentities.syncPending, true), sql`${cloudIdentities.userEnabled} <> (${users.status} = 'active')`),
         or(isNull(cloudIdentities.nextSyncAt), lte(cloudIdentities.nextSyncAt, new Date()))));
     for (const row of rows) { if (this.stopped) return; await this.sync(row.id); }
   }
@@ -58,7 +58,7 @@ export class CloudIdentityStatusService {
         // Another process may have completed or backed off while this worker waited for the lock.
         const [current] = await this.db.select({ identity: cloudIdentities, status: users.status }).from(cloudIdentities)
           .innerJoin(users, eq(users.id, cloudIdentities.userId)).where(eq(cloudIdentities.id, id));
-        if (!current) return;
+        if (!current || (current.identity.cleanupPending && current.status === 'active')) return;
         const complete = !current.identity.syncPending && current.identity.userEnabled === (current.status === 'active');
         const backedOff = current.identity.nextSyncAt && current.identity.nextSyncAt.getTime() > Date.now();
         if (!force && (complete || backedOff)) return;

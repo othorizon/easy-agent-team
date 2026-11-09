@@ -41,6 +41,7 @@ export function AliyunSettingsCard({ active }: { active: boolean }) {
     queryFn: () =>
       api<AliyunConnectionInfo[]>('GET', '/api/aliyun/connections'),
     enabled: active,
+    refetchInterval: q => q.state.data?.some(c => !!c.cleanupState) ? 5_000 : false,
   });
   const action = useMutation({
     mutationFn: ({
@@ -50,18 +51,19 @@ export function AliyunSettingsCard({ active }: { active: boolean }) {
       connection: AliyunConnectionInfo;
       action: 'validate' | 'status' | 'delete';
     }) =>
-      api(
+      api<{ ok?: boolean; cleanupError?: string }>(
         action === 'delete' ? 'DELETE' : 'POST',
         `/api/aliyun/connections/${connection.id}${action === 'delete' ? '' : `/${action}`}`,
         action === 'status'
           ? { status: connection.status === 'enabled' ? 'paused' : 'enabled' }
-          : undefined,
+          : action === 'delete' ? { confirmName: connection.name } : undefined,
       ),
-    onSuccess: async (_, { action }) => {
+    onSuccess: async (result, { action }) => {
       await client.invalidateQueries({ queryKey: ['aliyun'] });
-      toast.success(action === 'validate' ? '管理凭证校验通过' : '接入已更新');
+      if (result.ok === false) toast.error(result.cleanupError ?? '清理失败，请重试');
+      else toast.success(action === 'validate' ? '管理凭证校验通过' : action === 'delete' ? '接入已删除' : '接入已更新');
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error) => { toast.error(e.message); void client.invalidateQueries({ queryKey: ['aliyun'] }); },
   });
   const columns: DataTableColumn<AliyunConnectionInfo>[] = [
     {
@@ -77,10 +79,12 @@ export function AliyunSettingsCard({ active }: { active: boolean }) {
     },
     {
       header: '状态',
-      cell: ({ row }) => (
-        <Badge variant="secondary">
-          {row.original.status === 'enabled' ? '已启用' : '已暂停'}
-        </Badge>
+      cell: ({ row: { original: c } }) => (
+        <div className="space-y-1">
+          <Badge variant={c.cleanupState === 'failed' ? 'destructive' : 'secondary'}>{c.cleanupState ? c.cleanupState === 'failed' ? '清理失败' : '正在清理' : c.status === 'enabled' ? '已启用' : '已暂停'}</Badge>
+          {c.cleanupStage && <p className="text-xs text-muted-foreground">阶段：{{ verify: '核对来源', keys: '清理 Key', bindings: '解绑权限点', users: '删除个人身份', local: '删除接入记录' }[c.cleanupStage]}</p>}
+          {c.cleanupError && <p className="max-w-64 break-words text-xs text-destructive">{c.cleanupError}</p>}
+        </div>
       ),
     },
     {
@@ -113,12 +117,12 @@ export function AliyunSettingsCard({ active }: { active: boolean }) {
           >
             校验
           </Button>
-          <Tip content="暂停后拒绝新的申请、授予和凭证领取；管理查询与目录刷新仍可使用。">
-            <span tabIndex={action.isPending ? 0 : undefined}>
+          <Tip content="暂停后拒绝新的申请、授予和 Key 创建；已有 Key 可读，撤销与安全停用继续。">
+            <span tabIndex={action.isPending || !!c.cleanupState ? 0 : undefined}>
               <Button
                 size="sm"
                 variant="ghost"
-                disabled={action.isPending}
+                disabled={action.isPending || !!c.cleanupState}
                 onClick={() =>
                   action.mutate({ connection: c, action: 'status' })
                 }
@@ -129,11 +133,12 @@ export function AliyunSettingsCard({ active }: { active: boolean }) {
           </Tip>
           <Confirm
             title={`删除接入 ${c.name}？`}
-            description="删除前须先撤销此接入的全部授权。"
+            description="此操作会清理 EAT 创建的个人身份、全部 Key 与权限点绑定，并删除接入。删除前须先撤销全部授权；OSS 使用的身份会保留。清理失败会显示原因，可重试继续。"
+            confirmText={c.cleanupState ? '重试清理' : '确认删除接入'}
             onConfirm={() => action.mutate({ connection: c, action: 'delete' })}
           >
             <Button size="sm" variant="ghost" disabled={action.isPending}>
-              删除
+              {c.cleanupState ? '重试清理' : '删除'}
             </Button>
           </Confirm>
         </div>

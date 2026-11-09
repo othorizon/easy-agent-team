@@ -11,8 +11,8 @@ export class CloudIdentityCredentialsService {
   constructor(@Inject(DB) private readonly db: Db) {}
   async forAccount(accountId: string): Promise<RamCredentials> {
     const [connection] = await this.db.select().from(aliyunConnections).where(eq(aliyunConnections.accountId, accountId));
-    const [oss] = connection ? [] : await this.db.select().from(ossSettings).where(eq(ossSettings.accountId, accountId));
-    const source = connection ?? oss;
+    const [oss] = connection && !connection.cleanupState ? [] : await this.db.select().from(ossSettings).where(eq(ossSettings.accountId, accountId));
+    const source = oss ?? connection;
     if (!source) throw new ServiceUnavailableException('缺少此云账号的管理凭证，请检查接入或 OSS 配置');
     return { accessKeyId: decryptSecret(source.accessKeyIdEncrypted), accessKeySecret: decryptSecret(source.accessKeySecretEncrypted) };
   }

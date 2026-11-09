@@ -307,7 +307,7 @@ describe('阿里云接入与策略发现', () => {
         ).body.some((a: { targetId: string }) => a.targetId === c.id),
       ).toBe(true);
     expect(
-      (await api('DELETE', `/api/aliyun/connections/${c.id}`)).body,
+      (await api('DELETE', `/api/aliyun/connections/${c.id}`, admin, { confirmName: c.name })).body,
     ).toEqual({ ok: true });
     expect(
       (await api('GET', '/api/aliyun/status', member)).body.available,

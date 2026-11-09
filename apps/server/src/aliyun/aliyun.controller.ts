@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import {
   createAliyunConnectionSchema,
+  deleteAliyunConnectionSchema,
   updateAliyunConnectionSchema,
   aliyunConnectionStatusSchema,
   type CreateAliyunConnectionRequest,
@@ -19,10 +20,11 @@ import {
 import { CurrentUser, Roles, type AuthUser } from '../auth/auth.decorators';
 import { ZodValidationPipe } from '../common/zod.pipe';
 import { AliyunService } from './aliyun.service';
+import { AliyunMaintenanceService } from './aliyun-maintenance.service';
 
 @Controller('api/aliyun')
 export class AliyunController {
-  constructor(private readonly aliyun: AliyunService) {}
+  constructor(private readonly aliyun: AliyunService, private readonly maintenance: AliyunMaintenanceService) {}
   @Get('status')
   status() {
     return this.aliyun.availability();
@@ -72,12 +74,18 @@ export class AliyunController {
   ) {
     return this.aliyun.setConnectionStatus(user, id, dto.status);
   }
+  @Post('connections/:id/identities/:identityId/repair')
+  @Roles('admin')
+  repair(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Param('identityId', ParseUUIDPipe) identityId: string) {
+    return this.maintenance.repair(user, id, identityId);
+  }
   @Delete('connections/:id')
   @Roles('admin')
   remove(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(deleteAliyunConnectionSchema)) dto: { confirmName: string },
   ) {
-    return this.aliyun.removeConnection(user, id);
+    return this.maintenance.remove(user, id, dto.confirmName);
   }
 }

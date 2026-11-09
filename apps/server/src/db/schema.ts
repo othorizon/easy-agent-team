@@ -1310,6 +1310,12 @@ export const aliyunConnections = pgTable('aliyun_connection', {
   accessKeySecretEncrypted: text('access_key_secret_encrypted').notNull(),
   defaultRegion: text('default_region').notNull().default(''),
   status: text('status', { enum: ['enabled', 'paused'] }).notNull().default('enabled'),
+  cleanupState: text('cleanup_state', { enum: ['pending', 'running', 'failed'] }),
+  cleanupStage: text('cleanup_stage', { enum: ['verify', 'keys', 'bindings', 'users', 'local'] }),
+  cleanupError: text('cleanup_error'),
+  cleanupAttempts: integer('cleanup_attempts').notNull().default(0),
+  cleanupActorId: uuid('cleanup_actor_id').references(() => users.id),
+  cleanupRetryAt: timestamp('cleanup_retry_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -1330,6 +1336,8 @@ export const aliyunPermissions = pgTable('aliyun_permission', {
 
 /** Shared by OSS and Aliyun permissions; independent of either capability's settings. */
 export const cloudIdentities = pgTable('cloud_identity', {
+  cleanupPending: boolean('cleanup_pending').notNull().default(false),
+  drift: jsonb('drift').$type<import('@eat/shared').AliyunDriftSnapshot>(),
   id: uuid('id').primaryKey().defaultRandom(),
   accountId: text('account_id').notNull(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),

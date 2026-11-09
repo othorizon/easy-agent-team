@@ -9,6 +9,7 @@ import { aliyunConnections, aliyunGrants, aliyunOperations, aliyunPermissions, c
 import { NotifierService } from '../notify/notifier.service';
 import { RamCloudError } from '../ram/ram-cloud';
 import { AliyunService } from './aliyun.service';
+import { AliyunMaintenanceService } from './aliyun-maintenance.service';
 
 type Permission = typeof aliyunPermissions.$inferSelect;
 type Grant = typeof aliyunGrants.$inferSelect;
@@ -22,7 +23,7 @@ export class AliyunGrantsService {
   private recovery?: Promise<void>;
   private stopped = false;
   constructor(@Inject(DB) private readonly db: Db, private readonly aliyun: AliyunService,
-    private readonly identities: CloudIdentitiesService, private readonly audit: AuditService, private readonly notifier: NotifierService) {}
+    private readonly identities: CloudIdentitiesService, private readonly audit: AuditService, private readonly notifier: NotifierService, private readonly maintenance: AliyunMaintenanceService) {}
   onModuleInit() { this.timer = setInterval(() => this.wake(), 30_000); this.timer.unref(); this.wake(); }
   private wake() {
     if (this.stopped || this.recovery) return;
@@ -58,6 +59,7 @@ export class AliyunGrantsService {
     return this.identities.run(c.accountId, dto.userId, this.aliyun.credentials(c), async session => {
       const p = await this.permission(permissionId), connection = await this.aliyun.connection(p.connectionId);
       this.manage(actor, p);
+      this.aliyun.assertWritable(connection);
       if (connection.status === 'paused') throw new ConflictException(PAUSED);
       if (!p.cloudExists) throw new ConflictException('权限点在云端已删除，不能授予');
       const [user] = await this.db.select().from(users).where(eq(users.id, dto.userId));
@@ -65,6 +67,9 @@ export class AliyunGrantsService {
       if (user.status !== 'active') throw new ConflictException('停用的 EAT 用户不能被授予');
       session.guard();
       const g = await this.db.transaction(async tx => {
+        const [currentConnection] = await tx.select().from(aliyunConnections).where(eq(aliyunConnections.id, connection.id)).for('update');
+        if (!currentConnection) throw new NotFoundException('接入不存在');
+        this.aliyun.assertWritable(currentConnection);
         const [g] = await tx.insert(aliyunGrants).values({ permissionId, userId: dto.userId, grantedBy: actor.id, source })
           .onConflictDoUpdate({ target: [aliyunGrants.permissionId, aliyunGrants.userId], set: {
             state: 'pending', error: null, source, grantedBy: actor.id, revokedBy: null, revocationReason: null, relinquished: false, updatedAt: new Date(),
@@ -90,6 +95,7 @@ export class AliyunGrantsService {
       const g = await this.grant(grantId), current = await this.permission(g.permissionId);
       if (relinquished) { if (g.userId !== actor.id) throw new ForbiddenException('只能放弃自己的授权'); }
       else this.manage(actor, current);
+      await this.maintenance.checkDrift(session, c.accountId, g.userId);
       if (g.state === 'revoked') return this.info(actor, g.id);
       session.guard();
       await this.db.transaction(async tx => {
@@ -110,6 +116,7 @@ export class AliyunGrantsService {
       const currentPermission = await this.permission(g.permissionId);
       if (!(op.kind === 'revoke' && g.relinquished && g.userId === actor.id)) this.manage(actor, currentPermission);
       if (op.state === 'complete') return this.info(actor, id);
+      if (op.kind === 'grant') this.aliyun.assertWritable(await this.aliyun.connection(p.connectionId));
       if (op.kind === 'grant' && (await this.aliyun.connection(p.connectionId)).status === 'paused') throw new ConflictException(PAUSED);
       session.guard();
       await this.db.update(aliyunOperations).set({ state: 'pending', retryAt: new Date(), updatedAt: new Date() }).where(eq(aliyunOperations.id, op.id));
@@ -126,7 +133,7 @@ export class AliyunGrantsService {
   private async execute(op: Operation, session: IdentitySession) {
     if (op.state === 'complete') return;
     const g = await this.grant(op.grantId), p = await this.permission(g.permissionId), c = await this.aliyun.connection(p.connectionId);
-    if (op.kind === 'grant' && c.status === 'paused') return;
+    if (op.kind === 'grant' && (c.status === 'paused' || c.cleanupState)) return;
     session.guard();
     await this.db.update(aliyunOperations).set({ state: 'running', attempts: op.attempts + 1, updatedAt: new Date() }).where(eq(aliyunOperations.id, op.id));
     try {
@@ -164,7 +171,7 @@ export class AliyunGrantsService {
     for (const op of pending) {
       if (this.stopped) return;
       const g = await this.grant(op.grantId), p = await this.permission(g.permissionId), c = await this.aliyun.connection(p.connectionId);
-      if (op.kind === 'grant' && c.status === 'paused') continue;
+      if (op.kind === 'grant' && (c.status === 'paused' || c.cleanupState)) continue;
       try {
         await this.identities.run(c.accountId, g.userId, this.aliyun.credentials(c), async session => {
           const current = await this.operation(g.id);
@@ -196,7 +203,7 @@ export class AliyunGrantsService {
         accounts.push({ accountId: c.accountId, connectionId: c.id, connectionName: c.name, connectionStatus: c.status, identityId: identity.id, ramName: identity.ramName, customPolicyCount, error });
       }
     }
-    return { grants, accounts };
+    return { grants, accounts, drift: manage ? await this.maintenance.inspectAll(actor) : [] };
   }
   private async info(actor: AuthUser, id: string): Promise<AliyunGrantInfo> {
     // The holder may relinquish an authorization that is not visible in the management list.

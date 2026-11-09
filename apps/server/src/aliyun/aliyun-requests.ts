@@ -10,6 +10,7 @@ import type { RequestAction, RequestType } from '../requests/request-types';
 import { AliyunService } from './aliyun.service';
 import { AliyunGrantsService } from './aliyun-grants.service';
 
+const CLEANUP = '接入正在删除或清理失败，不能申请或批准新的授权；请管理员完成清理';
 const PAUSED = '接入已暂停，不能申请或批准新的授权；请管理员恢复接入后重试';
 @Injectable()
 export class AliyunRequests {
@@ -64,10 +65,11 @@ export class AliyunRequests {
     }
   }
   private async validate(client: PoolClient, user: AuthUser, id: string) {
-    const { rows: [p] } = await client.query(`SELECT p.*,c.name connection_name,c.account_id,c.status connection_status FROM aliyun_permission p JOIN aliyun_connection c ON c.id=p.connection_id WHERE p.id=$1 FOR SHARE OF p,c`, [id]);
+    const { rows: [p] } = await client.query(`SELECT p.*,c.name connection_name,c.account_id,c.status connection_status,c.cleanup_state FROM aliyun_permission p JOIN aliyun_connection c ON c.id=p.connection_id WHERE p.id=$1 FOR SHARE OF p,c`, [id]);
     if (!p) throw new NotFoundException('权限点不存在');
     if (!p.cloud_exists) throw new ConflictException('权限点在云端已删除');
     if (!p.open) throw new ConflictException('权限点未开放申请');
+    if (p.cleanup_state) throw new ConflictException(CLEANUP);
     if (p.connection_status === 'paused') throw new ConflictException(PAUSED);
     const { rows: [target] } = await client.query('SELECT status FROM "user" WHERE id=$1', [user.id]);
     if (!target || target.status !== 'active') throw new ForbiddenException('停用的 EAT 用户不能申请授权');
@@ -120,7 +122,7 @@ export class AliyunRequests {
       owner: `(SELECT p.owner_id FROM aliyun_permission p JOIN "user" u ON u.id=p.owner_id AND u.status='active' WHERE p.id=r.resource_id AND p.open)`,
       resourceExists: 'EXISTS(SELECT 1 FROM aliyun_permission WHERE id=r.resource_id AND cloud_exists AND open)',
       invalidReason: `CASE WHEN NOT EXISTS(SELECT 1 FROM aliyun_permission WHERE id=r.resource_id AND cloud_exists) THEN '权限点在云端已删除' END`,
-      approvalBlocker: `(SELECT CASE WHEN c.status='paused' THEN '${PAUSED}' END FROM aliyun_permission p JOIN aliyun_connection c ON c.id=p.connection_id WHERE p.id=r.resource_id)`,
+      approvalBlocker: `(SELECT CASE WHEN c.cleanup_state IS NOT NULL THEN '${CLEANUP}' WHEN c.status='paused' THEN '${PAUSED}' END FROM aliyun_permission p JOIN aliyun_connection c ON c.id=p.connection_id WHERE p.id=r.resource_id)`,
       presentationDetails: `(SELECT jsonb_build_object('ownerNotice',CASE WHEN u.status='disabled' THEN 'Owner 已停用，由管理员审批' ELSE NULL END) FROM aliyun_permission p LEFT JOIN "user" u ON u.id=p.owner_id WHERE p.id=r.resource_id)`,
       approve: ({ row, user }) => this.grants.give(user, row.resource_id, { userId: row.requester_id }, 'approval', row.id),
       async reject({ row, client, user, decision }) {

@@ -1,4 +1,4 @@
-import { ALIYUN_CREDENTIAL_NOTE, type AliyunCredentials, grantAliyunPermissionSchema, revokeAliyunGrantSchema, type AliyunGrantInfo, type AliyunGrantsResult, type AliyunPermissionInfo, type GrantAliyunPermissionRequest, type RevokeAliyunGrantRequest, type UserPublic } from '@eat/shared';
+import { ALIYUN_CREDENTIAL_NOTE, type AliyunCredentials, grantAliyunPermissionSchema, revokeAliyunGrantSchema, type AliyunIdentityDrift, type AliyunGrantInfo, type AliyunGrantsResult, type AliyunPermissionInfo, type GrantAliyunPermissionRequest, type RevokeAliyunGrantRequest, type UserPublic } from '@eat/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -33,6 +33,10 @@ export function AliyunGrants({ manage = false }: { manage?: boolean }) {
     onSuccess: r => { if (r.error) toast.error(r.error); else toast.success(r.state === 'revoked' ? (r.relinquished ? '已放弃授权' : '授权已撤销') : '授权已生效'); invalidate(); },
     onError: (e: Error) => toast.error(e.message),
   });
+  const repair = useMutation({ mutationFn: (row: AliyunIdentityDrift) => api<{ ok: boolean; drift: AliyunIdentityDrift }>('POST', `/api/aliyun/connections/${row.connectionId}/identities/${row.identityId}/repair`),
+    onSuccess: r => { if (r.ok) toast.success('已按 EAT 记录修复'); else toast.error(r.drift.error ?? r.drift.repairError ?? '仍有云端不一致，请重试'); invalidate(); },
+    onError: (e: Error) => toast.error(e.message),
+  });
   const columns: DataTableColumn<AliyunGrantInfo>[] = [
     { id: 'permission', header: '权限点', cell: ({ row: { original: r } }) => <div className="space-y-1"><Tip content={r.policyName}><span className="block max-w-64 truncate font-mono text-xs">{r.policyName}</span></Tip><p className="text-xs text-muted-foreground break-all">{r.connectionName} · {r.accountId}</p></div> },
     ...(manage ? [{ accessorKey: 'userName', header: '持有人', meta: { className: 'w-28' } } satisfies DataTableColumn<AliyunGrantInfo>] : []),
@@ -51,6 +55,18 @@ export function AliyunGrants({ manage = false }: { manage?: boolean }) {
       <p className="text-sm">已绑定的自定义策略：{a.customPolicyCount === null ? '暂时无法读取' : `${a.customPolicyCount} 条`}</p>
       <AliyunKeyCard connectionId={a.connectionId} connectionName={a.connectionName} paused={a.connectionStatus === 'paused'} authorized={result.data!.grants.some(g => g.accountId === a.accountId && g.state === 'active')} />
       {a.error && <p role="alert" className="break-words text-sm text-destructive">{a.error}</p>}
+    </section>)}
+    {manage && result.data?.drift?.filter(d => d.error || d.repairError || d.missing.length || d.extra.length).map(d => <section key={d.identityId} className="space-y-2 rounded-xl border border-destructive/30 bg-card p-4">
+      <div className="flex flex-wrap items-center gap-2"><Badge variant="destructive">云端不一致</Badge><span className="text-sm font-medium break-all">{d.userName} · {d.connectionName}</span></div>
+      {d.missing.length > 0 && <p className="text-sm break-all">云端缺少：{d.missing.join('、')}</p>}
+      {d.extra.length > 0 && <p className="text-sm break-all">云端多出：{d.extra.join('、')}</p>}
+      {d.error && <p role="alert" className="text-sm break-words text-destructive">{d.error}</p>}
+      {d.repairError && d.repairError !== d.error && <p role="alert" className="text-sm break-words text-destructive">上次修复失败：{d.repairError}</p>}
+      <p className="text-xs text-muted-foreground">仅核对 eat-perm- 自定义策略。页面核对不会覆盖云端绑定。</p>
+      <Confirm title="按 EAT 记录修复绑定？" description="会补齐记录中缺少的权限点绑定，并解绑记录之外的 eat-perm- 自定义策略；无关策略不受影响。" confirmText="修复绑定" onConfirm={() => repair.mutate(d)}>
+        <Button size="sm" variant="outline" disabled={!d.canRepair || repair.isPending}>按 EAT 记录修复</Button>
+      </Confirm>
+      {!d.canRepair && <p className="text-xs text-muted-foreground">接入已暂停或正在清理，暂不能修复。</p>}
     </section>)}
     {manage && <h2 className="text-sm font-semibold">授权清单</h2>}
     <DataTable columns={columns} data={result.data?.grants} loading={result.isPending} getRowId={g => g.id} empty={<Empty text={manage ? '暂无可管理的授权' : '暂无阿里云授权'} />} />

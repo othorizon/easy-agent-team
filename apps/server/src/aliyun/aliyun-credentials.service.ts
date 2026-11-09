@@ -37,6 +37,7 @@ export class AliyunCredentialsService {
     return this.identities.run(initial.accountId, actor.id, this.aliyun.credentials(initial), async session => {
       await this.authorized(actor.id, connectionId);
       const c = await this.aliyun.connection(connectionId);
+      this.aliyun.assertWritable(c);
       if (reset && c.status === 'paused') throw new ConflictException('接入已暂停，不能重置个人 Key');
       const key = await session.key({ reset, allowCreate: c.status !== 'paused' });
       if (!key) throw new ConflictException('接入已暂停，不能领取新 Key；已有 Key 照常可读');
@@ -62,6 +63,7 @@ export class AliyunCredentialsService {
             .innerJoin(aliyunPermissions, eq(aliyunPermissions.id, aliyunGrants.permissionId))
             .where(and(eq(aliyunGrants.userId, identity.userId), eq(aliyunGrants.state, 'active'), eq(aliyunPermissions.connectionId, c.id), eq(aliyunPermissions.cloudExists, true))).limit(1);
           const current = await this.aliyun.connection(c.id);
+          if (current.cleanupState || identity.cleanupPending) return;
           await session.key({ resume: true, allowCreate: current.status === 'enabled' && user?.status === 'active' && !!grant });
         });
       } catch { this.logger.warn(`个人 Key 待恢复（${identity.id}）`); }

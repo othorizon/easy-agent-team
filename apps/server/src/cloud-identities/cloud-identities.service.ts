@@ -2,7 +2,7 @@ import { ConflictException, ForbiddenException, Inject, Injectable, Logger, NotF
 import { and, eq, sql } from 'drizzle-orm';
 import { Pool } from 'pg';
 import { DB, PG_POOL, type Db } from '../db/db.module';
-import { cloudIdentities, users } from '../db/schema';
+import { aliyunConnections, cloudIdentities, users } from '../db/schema';
 import { loadConfig } from '../config';
 import { encryptSecret, decryptSecret } from '../common/crypto';
 import { RamCloud, ramMissing, type RamCredentials, type RamPolicy, type RamUser } from '../ram/ram-cloud';
@@ -39,7 +39,10 @@ export interface IdentitySession {
   ensure(): Promise<CloudIdentity>;
   syncUserStatus(): Promise<void>;
   setPolicy(policyName: string, attached: boolean): Promise<CloudIdentity | undefined>;
-  inspect(): Promise<{ identity?: CloudIdentity; policies: RamPolicy[] }>;
+  repairPolicy(policyName: string, attached: boolean): Promise<void>;
+  inspect(): Promise<{ identity?: CloudIdentity; cloudUser?: RamUser; policies: RamPolicy[] }>;
+  /** Deletes only a verified EAT user; non eat-perm bindings block the entire cleanup. */
+  cleanup(stage: (stage: 'keys' | 'bindings' | 'users') => Promise<void>): Promise<void>;
 }
 
 /** One cloud identity per account/user. OSS supplies its own credentials to this same module. */
@@ -57,7 +60,7 @@ export class CloudIdentitiesService {
   async onModuleDestroy() { await this.lockPool.end(); }
 
   /** The lock namespace must also be used by key lifecycle and OSS migration callers. */
-  async run<T>(accountId: string, userId: string, credentials: RamCredentials, work: (session: IdentitySession) => Promise<T>): Promise<T> {
+  async run<T>(accountId: string, userId: string, credentials: RamCredentials, work: (session: IdentitySession) => Promise<T>, externalGuard: () => void = () => undefined): Promise<T> {
     // PostgreSQL UUIDs are case-insensitive; the advisory-lock key and RAM name must use the same canonical form.
     userId = userId.toLowerCase();
     const c = await this.lockPool.connect();
@@ -65,6 +68,7 @@ export class CloudIdentitiesService {
     let held = false, lost = false, closed = false;
     const onError = () => { lost = true; };
     const guard = () => {
+      externalGuard();
       if (lost || closed) throw new ConflictException('个人身份操作锁已中断，未完成操作将自动恢复');
     };
     c.on('error', onError);
@@ -87,7 +91,15 @@ export class CloudIdentitiesService {
         try { user = await call(() => this.ram.getUser(credentials, identity.ramName)); }
         catch (e) { if (ramMissing(e)) return { identity, policies: [] }; throw e; }
         verify(identity, user);
-        return { identity, policies: await call(() => this.ram.userPolicies(credentials, identity.ramName)) };
+        return { identity, cloudUser: user, policies: await call(() => this.ram.userPolicies(credentials, identity.ramName)) };
+      };
+      const requireWritable = async () => {
+        const identity = await row();
+        if (identity?.cleanupPending) throw new ConflictException('个人身份正在删除或清理失败，不能恢复、创建或重置个人凭证');
+        if (!identity) {
+          const [connection] = await this.db.select().from(aliyunConnections).where(eq(aliyunConnections.accountId, accountId));
+          if (connection?.cleanupState) throw new ConflictException('接入正在删除，不能创建个人身份');
+        }
       };
       const requireActive = async () => {
         guard();
@@ -103,11 +115,21 @@ export class CloudIdentitiesService {
       };
       const ensure = async () => {
         guard();
+        await requireWritable();
         const user = await requireActive();
         let identity = await row();
         if (!identity) {
           guard();
-          [identity] = await this.db.insert(cloudIdentities).values({ accountId, userId, ramName: `eat-${userId.replaceAll('-', '')}` }).returning();
+          identity = await this.db.transaction(async tx => {
+            // Publish new identities against the same account barrier as connection deletion.
+            // A newly inserted row must either be included in cleanup's target barriers, or
+            // observe the barrier and stop before creating any RAM resource.
+            const [connection] = await tx.select().from(aliyunConnections).where(eq(aliyunConnections.accountId, accountId)).for('update');
+            if (connection?.cleanupState) throw new ConflictException('接入正在删除，不能创建个人身份');
+            guard();
+            const [created] = await tx.insert(cloudIdentities).values({ accountId, userId, ramName: `eat-${userId.replaceAll('-', '')}` }).returning();
+            return created;
+          });
         }
         // The status hook may have scanned before this identity was inserted. Recheck after persistence.
         await requireActive();
@@ -129,12 +151,39 @@ export class CloudIdentitiesService {
       };
       return await work({
         guard, ensure, inspect,
+        cleanup: async stage => {
+          const actual = await inspect();
+          const identity = actual.identity;
+          if (!identity || !actual.cloudUser) return;
+          if (!identity.cloudUserId || identity.cloudUserId !== actual.cloudUser.id)
+            throw new ConflictException('个人身份缺少已核实的云端 UserId，请先恢复身份来源记录后重试');
+          if (actual.policies.some(p => p.type !== 'Custom' || !p.name.startsWith('eat-perm-')))
+            throw new ConflictException('个人身份仍有非 EAT 权限点的策略绑定，请管理员在 RAM 控制台确认并处理后重试；EAT 不会解绑无关策略');
+          await stage('keys');
+          for (const key of await call(() => this.ram.keys(credentials, identity.ramName))) {
+            await call(() => this.ram.keyStatus(credentials, identity.ramName, key.id, false));
+            await call(() => this.ram.deleteKey(credentials, identity.ramName, key.id));
+          }
+          await call(() => this.ram.deleteLoginProfile(credentials, identity.ramName));
+          await stage('bindings');
+          // Recheck provenance and the full binding set before each destructive phase.
+          const latest = await inspect();
+          if (latest.policies.some(p => p.type !== 'Custom' || !p.name.startsWith('eat-perm-')))
+            throw new ConflictException('发现非 EAT 策略绑定，已停止清理，请管理员处理后重试');
+          for (const policy of latest.policies) await call(() => this.ram.detachPolicy(credentials, identity.ramName, policy.name));
+          await stage('users');
+          const final = await inspect();
+          if (final.cloudUser) await call(() => this.ram.deleteUser(credentials, identity.ramName));
+        },
         syncUserStatus: async () => {
           const identity = await row();
           if (!identity) return;
           const [user] = await this.db.select().from(users).where(eq(users.id, userId));
           if (!user) throw new NotFoundException('EAT 用户不存在');
           const enabled = user.status === 'active';
+          // Cleanup is a durable barrier against restoring a partially deleted identity.
+          // A disable still lists and cuts off every key, including manually added keys.
+          if (enabled && identity.cleanupPending) return;
           let cloud: RamUser | undefined;
           try { cloud = await call(() => this.ram.getUser(credentials, identity.ramName)); }
           catch (e) { if (!ramMissing(e)) throw e; }
@@ -149,7 +198,7 @@ export class CloudIdentitiesService {
               if (enabled && key.id !== managed) continue;
               try {
                 // A restore racing a new disable must never enable another Key afterwards.
-                if (enabled) await requireActive();
+                if (enabled) { await requireWritable(); await requireActive(); }
                 await call(() => this.ram.keyStatus(credentials, identity.ramName, key.id, enabled));
               } catch (e) { failure ??= e; }
             }
@@ -166,16 +215,34 @@ export class CloudIdentitiesService {
             .where(and(eq(cloudIdentities.id, identity.id), sql`exists (select 1 from ${users} where ${users.id} = ${userId} and ${users.status} = ${user.status})`));
         },
         key: async (options = {}) => {
+          await requireWritable();
           await requireActive();
           const identity = options.allowCreate === false ? await row() : await ensure();
           if (!identity) return;
           await inspect(); // Never mutate keys on a foreign/replaced cloud user.
-          return this.key(identity, credentials, guard, options, requireActive);
+          return this.key(identity, credentials, guard, options, async () => { await requireWritable(); return requireActive(); });
+        },
+        repairPolicy: async (policyName, attached) => {
+          await requireWritable();
+          const actual = await inspect();
+          if (!actual.identity || !actual.cloudUser || !actual.identity.cloudUserId)
+            throw new ConflictException('个人身份云端用户缺失或来源记录不完整，请管理员处理后重试');
+          if (!policyName.startsWith('eat-perm-')) throw new ConflictException('只能修复 EAT 权限点的策略绑定');
+          const bound = actual.policies.some(p => p.type === 'Custom' && p.name === policyName);
+          if (attached && !bound) await call(() => this.ram.attachPolicy(credentials, actual.identity!.ramName, policyName));
+          if (!attached && bound) await call(() => this.ram.detachPolicy(credentials, actual.identity!.ramName, policyName));
         },
         setPolicy: async (policyName, attached) => {
-          const identity = attached ? await ensure() : await row();
+          if (attached) await requireWritable();
+          let identity = attached ? await ensure() : await row();
           if (!identity) return;
           const actual = await inspect(); // Verify provenance and actual binding before changing exactly this policy.
+          // Recover the stable UserId from a response-lost EAT CreateUser before a revoke.
+          // The unguessable identity marker has already been verified by inspect().
+          if (!identity.cloudUserId && actual.cloudUser) {
+            guard();
+            [identity] = await this.db.update(cloudIdentities).set({ cloudUserId: actual.cloudUser.id, updatedAt: new Date() }).where(eq(cloudIdentities.id, identity.id)).returning();
+          }
           const bound = actual.policies.some(p => p.type === 'Custom' && p.name === policyName);
           if (attached && !bound) await call(() => this.ram.attachPolicy(credentials, identity.ramName, policyName));
           if (!attached && bound) await call(() => this.ram.detachPolicy(credentials, identity.ramName, policyName));

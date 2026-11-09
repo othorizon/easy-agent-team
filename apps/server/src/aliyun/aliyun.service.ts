@@ -42,6 +42,7 @@ export class AliyunService {
       accountId: c.accountId,
       defaultRegion: c.defaultRegion,
       status: c.status,
+      cleanupState: c.cleanupState, cleanupStage: c.cleanupStage, cleanupError: c.cleanupError,
       accessKeyIdMasked: '********',
       accessKeySecretMasked: '********',
       createdAt: c.createdAt.toISOString(),
@@ -105,6 +106,7 @@ export class AliyunService {
       const db = drizzle(lock, { schema });
       const connection = await this.connection(id, db),
         credentials = this.credentials(connection);
+      this.assertWritable(connection);
       const found = new Map<string, string>(),
         markers = new Set<string>();
       let marker: string | undefined;
@@ -182,6 +184,9 @@ export class AliyunService {
       .where(eq(aliyunConnections.id, id));
     if (!c) throw new NotFoundException('接入不存在');
     return c;
+  }
+  assertWritable(c: Connection) {
+    if (c.cleanupState) throw new ConflictException('接入正在删除或清理失败，请先重试完成清理；不能新增申请、授予或修复');
   }
   credentials(c: Connection): RamCredentials {
     return {
@@ -307,6 +312,7 @@ export class AliyunService {
     id: string,
     status: 'enabled' | 'paused',
   ) {
+    this.assertWritable(await this.connection(id));
     return this.db.transaction(async (tx) => {
       const [c] = await tx
         .update(aliyunConnections)
@@ -329,22 +335,5 @@ export class AliyunService {
       );
       return this.info(c);
     });
-  }
-  async removeConnection(user: AuthUser, id: string) {
-    await this.connection(id);
-    await this.db.transaction(async (tx) => {
-      await tx.delete(aliyunConnections).where(eq(aliyunConnections.id, id));
-      await this.audit.record(
-        {
-          actorId: user.id,
-          actorTokenId: user.tokenId,
-          action: 'aliyun.connection.delete',
-          targetType: 'aliyun_connection',
-          targetId: id,
-        },
-        tx,
-      );
-    });
-    return { ok: true as const };
   }
 }
