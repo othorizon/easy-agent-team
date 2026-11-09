@@ -107,3 +107,38 @@ OSS 仍引用的个人身份始终保留，包括已回收全部空间但仍保�
 管理员打开授权管理视图、以及撤销前，都会现取 RAM 绑定并与 EAT 记录比较，只核对 `eat-perm-` 自定义策略。管理页标出云端缺少、多出的绑定或核对失败原因；核对不会改云端。管理员明确点击「按 EAT 记录修复」后才补绑缺少项、解绑多余受管项；无关自定义策略、系统策略及策略原文都不修改。暂停和清理期间不能修复。删除开始、失败、完成与修复结果均写入审计。
 
 验证入口：`aliyun-cleanup-drift.spec.ts` 使用完整 HTTP 应用、本地专用 PostgreSQL 与唯一内存 RAM 边界，覆盖删除屏障、确认、来源冲突、全目标预核、失败重启与重试、暂停、安全停用、OSS 保留，以及缺少/多余绑定和显式修复。
+
+## 独立真实云契约验证
+
+`apps/server/scripts/run-ram-contract.ts` 直接调用 RAM 适配层，并用 OSS V4 数据面验证旧 Key 改名前后仍能读取同一私有对象。它不启动 Nest 服务、生产 OSS 迁移器或数据库迁移，也不属于默认 `pnpm test`。没有显式 `EAT_REAL_RAM_CONTRACT=1` 时只输出 `{"skipped":true}`，不读本机凭证配置、不创建云客户端。
+
+在仓库根目录运行：
+
+```sh
+pnpm --filter @eat/server exec tsc --noEmit -p tsconfig.ram-contract.json
+pnpm --filter @eat/server exec vitest run test/ram-contract-safety.spec.ts
+EAT_REAL_RAM_CONTRACT=1 pnpm --filter @eat/server exec tsx scripts/run-ram-contract.ts
+```
+
+管理凭证仅在内存读取本机 `~/.aliyun/config.json` 当前选中的 AK profile；可通过 `EAT_REAL_RAM_PROFILE` 选择另一条已配置的 AK profile。脚本拒绝非 AK 模式、缺少凭证或地域的配置，不修改配置，不运行会打印完整凭证的 `aliyun configure get`。终端只输出资源名、步骤、脱敏错误码、耗时、尝试次数和最终核对结果；私有 manifest 不保存 SK，Key ID 仅用于恢复清理。
+
+管理身份需有 STS GetCallerIdentity；RAM 的 Get/Create/Update/DeleteUser、Get/Create/DeletePolicy、ListPolicyVersions、DeletePolicyVersion、ListPoliciesForUser、AttachPolicyToUser、DetachPolicyFromUser、List/Create/Update/DeleteAccessKey；OSS 的 PutBucket、GetBucketInfo、GetBucketTagging、DeleteBucket、ListObjects/ListObjectVersions，以及本轮对象的 Put/Get/DeleteObject/DeleteObjectVersion。创建 Bucket 时必须支持 [PutBucket 原子标签头](https://help.aliyun.com/zh/oss/developer-reference/putbucket)。个人 Key 的策略仅允许本轮 Bucket 内两个预登记对象的 PutObject/GetObject。脚本不会授予个人 Key 列 Bucket、列对象或清理 Bucket 的管理权限。
+
+每轮新 UUID 派生 `eat-ram-contract-<UUID 去连字符>-*` 的用户、11 条自定义策略与临时私有 Bucket。不会使用线上权限点的 `eat-perm-` 前缀。逐 action 默认拒绝的 RAM 安全层禁止账号扫描；所有写操作先核精确资源名单、marker 和稳定 UserId，改名目标必须不存在。Bucket 创建必须原子带本轮标签，后续写入和删除前复核标签、Owner、地域和私有 ACL；不补标记接管来源不明的 Bucket，不读取既有 `eat-oss-*` 身份或其他 Bucket。
+
+验证包括：创建用户；原 Key 改名后实际读取；新 Key 的实际生效耗时（第一次即成功也有效）；第三把 Key 的 quota 分类；绑定前 10 条策略后尝试第 11 条并记录实际 quota 错误码；绑定中的策略删除失败，解绑后删除成功。首探针在精确策略原文与绑定回读后，允许 InvalidAccessKeyId/AccessDenied 在 120 秒内有界重试；第二把 Key 还以前一把 Key 已成功的读取为基线。签名、时钟、Bucket/对象不存在等错误直接失败。配额是当前账号的实测契约，不能从一次测试推出所有账号的固定值；[RAM 使用限制](https://help.aliyun.com/zh/ram/product-overview/limits) 也区分可调整的策略配额与不可调整的 Key 数量。若第 11 条策略或第三把 Key 意外成功，脚本先登记并清理全部本轮资源，再以非零退出码报告契约冲突，不继续扩建策略或修改账号配额。
+
+manifest 默认位于 server 工作目录的 `.ram-contract/<runId>.json`（目录 0700、文件 0600），每个创建/改名/绑定/Key intent 都先原子写入并 fsync，再执行云操作；结果立即持久保存。可用 `EAT_RAM_CONTRACT_MANIFEST_DIR` 指定持久私有目录。清理时只接受完整且 UUID 派生名单一致的 manifest，并用 STS 核对同一云账号，不接受环境变量传入任意资源名。脚本使用独占 lease，拒绝同时运行同一份 manifest；显式清理可自动回收已死亡进程的 lease，仍存活的 PID 会被拒绝。
+
+成功、失败以及 SIGINT/SIGTERM 都进入同一个 finally 清理流程：信号只设置停止标记，等待在途请求返回，再按 intent/精确 marker 恢复响应丢失的资源；逐项解绑、删本轮 Key、删用户、删策略，最后完整分页检查并清空临时 Bucket 的预登记对象、版本和删除标记，再删 Bucket。某项失败仍继续清理其他项。清理预算独立于探针 deadline；出现未登记对象或归属不符时拒绝删除。SIGKILL、断电或清理失败后保留 manifest，用原账号显式重试：
+
+```sh
+EAT_REAL_RAM_CONTRACT=1 pnpm --filter @eat/server exec tsx scripts/run-ram-contract.ts \
+  --cleanup /absolute/private-directory/<runId>.json
+```
+
+最终 `cleanup.remaining`、`cleanup.unknown`、`cleanup.errors` 均为空且 `passed:true` 才算整轮成功。零残留核对逐个 Get manifest 中所有创建 intent 的精确名字，包含改名前后两端，不调用 ListUsers/ListPolicies/listBuckets。仅资源级精确 `NoSuchUser`/`EntityNotExist.User`、`NoSuchPolicy`/`EntityNotExist.Policy`、`NoSuchBucket` 被算作不存在；权限、网络及未知错误会留在 unknown/errors 并非零退出。此处的零只证明本轮登记名单已清理，不声称扫描整个账号。
+
+2026-11-09 真实验证：最终完整轮次 `e028a8b5-c4bb-47dd-ad36-26667cf23b12` 用时 74.814 秒，`passed:true`，三个清理数组全部为空；改名前后用户、11 条策略和临时 Bucket 共 14 个精确名称均确认不存在。首把与第二把 Key 均首次 V4 探针即成功，创建到观测成功分别为 1819 / 1754 毫秒（含 RAM 创建、归属核对及请求开销，不是纯传播时延或 SLA）。旧 Key 改名后读取同一对象成功；第三把 Key 返回 `LimitExceeded.User.AccessKey`，第 11 条策略绑定返回 `LimitExceeded.User.Policy`，绑定中删除返回 `DeleteConflict.Policy.User`，解绑后删除成功。此前失败轮次也已通过持久 manifest 显式清理并逐名核零。
+
+SDK 注意：ali-oss 6.x V4 的分页 query 必须彻底省略未设置的 `marker`、`keyMarker`、`versionIdMarker`，不能传值为 `undefined` 的键，否则可能签名不一致。离线安全测试覆盖这一故障及显式恢复路径；真实最终轮已验证正常 finally 清理成功。

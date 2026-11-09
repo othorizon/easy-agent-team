@@ -10,3 +10,4 @@ coverage/
 .demo-casts/
 data/static-sites/
 .scratch/
+.ram-contract/

@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["scripts/ram-contract.ts", "scripts/run-ram-contract.ts"],
+  "exclude": ["node_modules", "dist", "test", "vitest.config.ts"]
+}
