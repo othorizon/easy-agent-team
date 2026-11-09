@@ -1,3 +1,4 @@
+import { OssMigrationPreviewService } from './oss-migration-preview.service';
 import { OssToolsService } from './oss-tools.service';
 import { Module } from '@nestjs/common';
 import { OssCloud } from './oss-cloud';
@@ -10,7 +11,7 @@ import { OssController, OssSettingsController } from './oss.controller';
 @Module({
   imports: [RamModule],
   controllers: [OssController, OssSettingsController],
-  providers: [OssCloud, OssStore, OssProvisioner, OssService, OssToolsService],
-  exports: [OssService, OssToolsService],
+  providers: [OssCloud, OssStore, OssProvisioner, OssService, OssToolsService, OssMigrationPreviewService],
+  exports: [OssService, OssToolsService, OssMigrationPreviewService],
 })
 export class OssModule {}

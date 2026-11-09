@@ -25,6 +25,7 @@ import { CurrentUser, Roles, type AuthUser } from '../auth/auth.decorators';
 import { ZodValidationPipe } from '../common/zod.pipe';
 import { AuditService } from '../audit/audit.service';
 import { OssService } from './oss.service';
+import { OssMigrationPreviewService } from './oss-migration-preview.service';
 
 @Controller('api/oss')
 export class OssController {
@@ -114,6 +115,7 @@ export class OssSettingsController {
   constructor(
     private readonly oss: OssService,
     private readonly audit: AuditService,
+    private readonly migrationPreview: OssMigrationPreviewService,
   ) {}
   @Get() get() {
     return this.oss.store.info();
@@ -131,6 +133,9 @@ export class OssSettingsController {
       targetId: '1',
     });
     return result;
+  }
+  @Get('migration-preview') @Header('Cache-Control', 'no-store') preview() {
+    return this.migrationPreview.preview();
   }
   @Get('domains') domains() {
     return this.oss.store.domains();

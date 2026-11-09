@@ -14,6 +14,7 @@ import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
 import { Switch } from '../components/ui/switch';
 import { Confirm } from '../components/confirm';
+import { OssMigrationPreview } from './OssMigrationPreview';
 
 export function OssSettingsCard({ active }: { active: boolean }) {
   const cache = useQueryClient();
@@ -327,6 +328,7 @@ export function OssSettingsCard({ active }: { active: boolean }) {
               ))}
             </ul>
           </SettingsGroup>
+          <OssMigrationPreview disabled={busy || dirty || !data.configured} />
         </>
       )}
     </SettingsSection>
