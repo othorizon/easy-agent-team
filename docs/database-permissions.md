@@ -62,6 +62,18 @@ CLI 使用 `eat db run <库名>[@实例名] -- <命令>`，与 `eat db credentia
 
 同一实例的操作由独立连接池上的 PostgreSQL 会话 advisory lock 串行化，不占住业务连接池等待锁。持锁连接中断时，执行器在提交前检查锁状态，未完成记录等待恢复。目标实例的权限事务与 EAT 元数据事务分开执行，来源标记保证重试只复用本记录创建的角色。
 
+## 云端不一致与删除
+
+管理员打开目录时会读取实际组成员关系，显示缺失的个人成员关系、额外加入另一组或已撤销后仍在组中的个人角色，以及未获授权的其他成员。读取只报告，不改数据库。管理账号为连接 EAT 库而继承只读组的关系，以及 PG16 创建角色时保留的纯 ADMIN 关系，都属于管理所需关系。
+
+管理员可显式选择「按 EAT 记录修复」，补回缺失成员关系、撤掉额外关系，保留无关角色关系；移除权限后只断开对应角色在当前库的连接。待执行、执行失败或撤销中的授权需先重试完成。撤销也会先核对实际关系并记审计。PG16 的成员关系按授予者分别保存：如果管理身份不能撤销另一授予者的关系，EAT 给出含 `GRANTED BY` 的 DBA SQL；修复回滚，撤销保持撤销中，不会假报完成。
+
+删除外部库登记和实例前，所有授权都必须是已撤销，待执行、失败或撤销中也会阻止删除。外部登记删除清理该库的两个 NOLOGIN 组；实例删除还清理其余目录组和本实例的 EAT 个人角色。数据库、已有数据及分配出去的 owner 账号始终保留，owner 服务连接不受影响。
+
+清理前先核对全部待删角色的来源，以及整个集群里的所有权和依赖。角色拥有对象时报告角色、库和具体对象，尚不改任何 ACL，不执行 `DROP OWNED`。预检通过后精确撤销只指向这些角色的对象权限和默认权限；共享的 CONNECT 与最终角色删除在同一 PostgreSQL 事务中完成，失败不会丢掉重试所需的连接权限。
+
+实际清理开始前持久保存删除中状态（实例使用迁移 0045 的 `cleanup_error`，目录保留失败原因）。远端完成而平台记录删除失败、或进程中断时，页面显示「删除未完成」并保留记录，新登记、授予、配置和重应用均不能复活角色。管理员处理原因后重试删除即可，缺失的本记录角色按已清理处理；也可在实例行「管理凭证」修正后台连接凭证后重试。删除与修复的成功、失败都记审计。只读的所有权预检失败不会把实例永久锁成删除中。
+
 ## 接口
 
 所有请求和响应契约在 `packages/shared/src/db-access.ts`。
@@ -72,6 +84,10 @@ CLI 使用 `eat db run <库名>[@实例名] -- <命令>`，与 `eat db credentia
 | `POST /api/db/instances/:id/access/catalog` | 管理员登记外部 PostgreSQL 库 |
 | `POST /api/db/access/catalog/:id/access` | 外部库开放、关闭或修改 schema / 建表角色 |
 | `POST /api/db/assignments/:id/access` | 开放或关闭申请，选择或修改 schema |
+| `DELETE /api/db/access/catalog/:id` | 管理员删除外部登记及两组角色，保留库和数据 |
+| `DELETE /api/db/instances/:id` | 管理员清理受管角色并删除实例登记，保留库和 owner |
+| `PATCH /api/db/instances/:id/credentials` | 管理员修正后台管理凭证，删除未完成时仍允许 |
+| `POST /api/db/access/catalog/:id/repair` | 管理员按 EAT 记录修复实际组成员关系 |
 | `POST /api/db/access/catalog/:id/reapply` | 重新应用现有对象及默认权限，保留开放状态 |
 | `GET /api/db/access/grants` | 本人持有及可管理的授权；`?scope=mine` 只返回本人持有 |
 | `POST /api/db/access/catalog/:id/requests` | 成员申请只读/读写；Owner 或管理员自己申请直接授予 |
@@ -85,3 +101,5 @@ CLI 使用 `eat db run <库名>[@实例名] -- <命令>`，与 `eat db credentia
 服务端 e2e 在本地 PostgreSQL 16 上用非超级管理角色验证查询、写入拒绝、schema 范围、未来对象默认权限、双库隔离、改级别、断会话、通知、失败重试、并发幂等及重启恢复；读写、未来表和序列、其他角色的新表、schema 增减与重应用另见 `db-access-levels.spec.ts`。
 
 外部库登记、权限检查与 DBA 提示、GRANT OPTION 管理角色、未来表、只读/读写及撤销断会话见 `db-external.spec.ts`；测试只操作本轮唯一前缀的新建库与角色。
+
+删除、所有权阻塞、失败重试、无目录实例的重启恢复、普通管理身份的漂移修复与其他 grantor 的权限不足、并发操作见 `db-access-cleanup.spec.ts`，全部使用本地 PostgreSQL 和每轮 UUID 资源。

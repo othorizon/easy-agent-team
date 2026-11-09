@@ -1,0 +1,1 @@
+ALTER TABLE "db_instance" ADD COLUMN "cleanup_error" text;

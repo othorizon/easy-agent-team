@@ -1,6 +1,6 @@
-import { Body, Controller, Get, Header, Param, ParseUUIDPipe, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Param, ParseUUIDPipe, Post, Query, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
-import { dbAccessGrantQuerySchema, dbPersonalPasswordResetSchema, type DbAccessGrantQuery, dbAccessCredentialsSchema, dbAccessGrantInfoSchema, dbAccessGrantListSchema, dbCatalogInfoSchema, dbCatalogListSchema, grantDbAccessSchema, openDbAccessSchema, registerExternalDbSchema, revokeDbAccessSchema, type GrantDbAccessRequest, type OpenDbAccessRequest, type RegisterExternalDbRequest, type RevokeDbAccessRequest } from '@eat/shared';
+import { dbAccessDriftSchema, dbAccessDeletedSchema, dbAccessGrantQuerySchema, dbPersonalPasswordResetSchema, type DbAccessGrantQuery, dbAccessCredentialsSchema, dbAccessGrantInfoSchema, dbAccessGrantListSchema, dbCatalogInfoSchema, dbCatalogListSchema, grantDbAccessSchema, openDbAccessSchema, registerExternalDbSchema, revokeDbAccessSchema, type GrantDbAccessRequest, type OpenDbAccessRequest, type RegisterExternalDbRequest, type RevokeDbAccessRequest } from '@eat/shared';
 import { CurrentUser, type AuthUser } from '../auth/auth.decorators';
 import { ZodValidationPipe } from '../common/zod.pipe';
 import { DbAccessRequests } from './db-access-requests';
@@ -13,13 +13,17 @@ export class DbAccessController {
   @Post('access/catalog/:id/requests')
   async request(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body(new ZodValidationPipe(requestDbAccessSchema)) body: RequestDbAccess) { return dbAccessRequestResultSchema.parse(await this.requests.submit(user, id, body)); }
   @Get('access/catalog')
-  async catalog(@CurrentUser() user: AuthUser) { return dbCatalogListSchema.parse(await this.access.listCatalog(user)); }
+  async catalog(@CurrentUser() user: AuthUser) { return dbCatalogListSchema.parse(await this.access.listCatalog(user,true)); }
   @Post('instances/:id/access/catalog')
   async registerExternal(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodValidationPipe(registerExternalDbSchema)) body: RegisterExternalDbRequest) { return dbCatalogInfoSchema.parse(await this.access.registerExternal(user, id, body)); }
+  @Delete('access/catalog/:id')
+  async removeExternal(@CurrentUser() user: AuthUser, @Param('id') id: string) { return dbAccessDeletedSchema.parse(await this.access.removeExternal(user,id)); }
   @Post('access/catalog/:id/access')
   async configureExternal(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodValidationPipe(openDbAccessSchema)) body: OpenDbAccessRequest) { return dbCatalogInfoSchema.parse(await this.access.configureExternal(user, id, body)); }
   @Post('assignments/:id/access')
   async open(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodValidationPipe(openDbAccessSchema)) body: OpenDbAccessRequest) { return dbCatalogInfoSchema.parse(await this.access.open(user, id, body)); }
+  @Post('access/catalog/:id/repair')
+  async repair(@CurrentUser() user: AuthUser, @Param('id') id: string) { return dbAccessDriftSchema.parse(await this.access.repair(user,id)); }
   @Post('access/catalog/:id/reapply')
   async reapply(@CurrentUser() user: AuthUser, @Param('id') id: string) { return dbCatalogInfoSchema.parse(await this.access.reapply(user, id)); }
   @Get('access/grants')

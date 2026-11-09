@@ -28,18 +28,24 @@ export const dbPublicCheckSchema = z.object({
   tighteningSql: z.array(z.string()),
 });
 export type DbPublicCheck = z.infer<typeof dbPublicCheckSchema>;
+export const dbAccessDriftSchema = z.object({
+  checkedAt: z.string(), consistent: z.boolean(), error: z.string().nullable(),
+  members: z.array(z.object({ role: z.string(), expected: z.array(z.string()), actual: z.array(z.string()), missing: z.array(z.string()), extra: z.array(z.string()) })),
+});
+export type DbAccessDrift = z.infer<typeof dbAccessDriftSchema>;
+export const dbAccessDeletedSchema = z.object({ ok: z.literal(true) });
 export const dbCatalogInfoSchema = z.object({
   id: z.string().nullable(), assignmentId: z.string().nullable(), instanceId: z.string(), instanceName: z.string(),
   dbName: z.string(), source: z.enum(['eat', 'external']), ownerId: z.string(), ownerName: z.string(),
   creatorRole: z.string().nullable(), publicCheck: dbPublicCheckSchema.nullable(),
   open: z.boolean(), schemas: z.array(z.string()), state: z.enum(['pending', 'active', 'failed']),
-  error: z.string().nullable(), canManage: z.boolean(),
+  error: z.string().nullable(), canManage: z.boolean(), drift: dbAccessDriftSchema.optional(),
 });
 export type DbCatalogInfo = z.infer<typeof dbCatalogInfoSchema>;
 export const dbAccessGrantInfoSchema = z.object({
   id: z.string(), catalogId: z.string(), instanceId: z.string(), instanceName: z.string(), dbName: z.string(),
   userId: z.string(), userName: z.string(), level: dbAccessLevelSchema, state: dbAccessStateSchema,
-  error: z.string().nullable(), canManage: z.boolean(), updatedAt: z.string(),
+  error: z.string().nullable(), canManage: z.boolean(), drift: dbAccessDriftSchema.optional(), updatedAt: z.string(),
 });
 export type DbAccessGrantInfo = z.infer<typeof dbAccessGrantInfoSchema>;
 export const dbAccessCredentialsSchema = z.object({

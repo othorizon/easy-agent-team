@@ -18,6 +18,9 @@ export const createDbInstanceSchema = z.object({
 });
 export type CreateDbInstanceRequest = z.infer<typeof createDbInstanceSchema>;
 
+export const updateDbInstanceCredentialsSchema = createDbInstanceSchema.pick({ adminUser: true, adminPassword: true });
+export type UpdateDbInstanceCredentialsRequest = z.infer<typeof updateDbInstanceCredentialsSchema>;
+
 export const dbInstanceInfoSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -27,6 +30,7 @@ export const dbInstanceInfoSchema = z.object({
   adminUser: z.string(),
   note: z.string(),
   assignmentCount: z.number(),
+  cleanupError: z.string().nullable().optional(),
   createdAt: z.string(),
 });
 export type DbInstanceInfo = z.infer<typeof dbInstanceInfoSchema>;

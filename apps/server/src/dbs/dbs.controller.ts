@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import { RequestsService } from '../requests/requests.service';
-import { Body, Controller, Delete, Get, Header, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Param, Patch, Post, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import {
   createDbAssignmentSchema,
   createDbInstanceSchema,
+  updateDbInstanceCredentialsSchema,
+  type UpdateDbInstanceCredentialsRequest,
   type CreateDbAssignmentRequest,
   type CreateDbInstanceRequest,
 } from '@eat/shared';
@@ -26,6 +28,12 @@ export class DbsController {
   @Roles('admin')
   createInstance(@Body(new ZodValidationPipe(createDbInstanceSchema)) body: CreateDbInstanceRequest, @CurrentUser() user: AuthUser) {
     return this.dbs.createInstance(user, body);
+  }
+
+  @Patch('instances/:id/credentials')
+  @Roles('admin')
+  updateInstanceCredentials(@Param('id') id:string,@CurrentUser() user:AuthUser,@Body(new ZodValidationPipe(updateDbInstanceCredentialsSchema)) body:UpdateDbInstanceCredentialsRequest) {
+    return this.dbs.updateInstanceCredentials(user,id,body);
   }
 
   @Delete('instances/:id')

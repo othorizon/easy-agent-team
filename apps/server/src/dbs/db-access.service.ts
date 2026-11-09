@@ -1,8 +1,8 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { and, eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, ne, or, sql } from 'drizzle-orm';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { dbConnectionUrl, type DbAccessCredentials, type DbAccessGrantInfo, type DbCatalogInfo, type DbPersonalPasswordReset, type DbPublicCheck, type GrantDbAccessRequest, type OpenDbAccessRequest, type RegisterExternalDbRequest } from '@eat/shared';
+import { dbConnectionUrl, type UpdateDbInstanceCredentialsRequest, type DbAccessDrift, type DbAccessCredentials, type DbAccessGrantInfo, type DbCatalogInfo, type DbPersonalPasswordReset, type DbPublicCheck, type GrantDbAccessRequest, type OpenDbAccessRequest, type RegisterExternalDbRequest } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
 import { decryptSecret, encryptSecret } from '../common/crypto';
@@ -13,6 +13,8 @@ import { NotifierService } from '../notify/notifier.service';
 import { grantPostgresAccess, openPostgresAccess, revokePostgresAccess } from './access-provisioner';
 import { resetPostgresPersonalPassword } from './personal-role-provisioner';
 import type { AdminConn } from './provisioner';
+import { inspectPostgresAccess, repairPostgresAccess, type ExpectedDbMember } from './access-drift-provisioner';
+import { cleanupPostgresAccessRoles, type ManagedDbRole } from './access-cleanup-provisioner';
 import { checkExternalPostgresAccess, openExternalPostgresAccess } from './external-provisioner';
 
 type Catalog = typeof dbCatalog.$inferSelect;
@@ -113,12 +115,115 @@ export class DbAccessService {
     if (!row) throw new NotFoundException('数据库授权不存在');
     return row;
   }
-  private async connection(instanceId: string): Promise<AdminConn> {
+  private async connection(instanceId: string, deleting = false): Promise<AdminConn> {
+    if (!deleting) await this.assertInstanceAvailable(instanceId);
     const [i] = await this.db.select().from(dbInstances).where(eq(dbInstances.id, instanceId));
     if (!i) throw new NotFoundException('实例不存在');
     return { host: i.host, port: i.port, adminUser: i.adminUser, adminPassword: decryptSecret(i.adminPasswordEncrypted) };
   }
-  async listCatalog(user: AuthUser): Promise<DbCatalogInfo[]> {
+  private assertCatalogAvailable(c: Catalog) {
+    if (c.error?.startsWith('删除未完成：')) throw new ConflictException(c.error);
+  }
+  private async assertInstanceAvailable(instanceId: string) {
+    const [instance] = await this.db.select({ cleanupError: dbInstances.cleanupError }).from(dbInstances).where(eq(dbInstances.id,instanceId));
+    if (instance?.cleanupError) throw new ConflictException(instance.cleanupError);
+  }
+  private roles(catalogs: Catalog[], identities: PersonalRole[] = []): ManagedDbRole[] {
+    return [...catalogs.flatMap(c => [{ name: c.readRole, marker: `eat:db-catalog:${c.id}:read` }, { name: c.writeRole, marker: `eat:db-catalog:${c.id}:write` }]), ...identities.map(i => ({ name: i.roleName, marker: `eat:db-personal-role:${i.id}` }))];
+  }
+  private async assertRevoked(catalogs: Catalog[]) {
+    if (!catalogs.length) return;
+    const outstanding = await this.db.select().from(dbAccessGrants).where(and(inArray(dbAccessGrants.catalogId, catalogs.map(c => c.id)), ne(dbAccessGrants.state, 'revoked')));
+    if (outstanding.length) throw new ConflictException(`仍有 ${outstanding.length} 条未撤销授权（含待执行、失败或撤销中），请先完成全部撤销再删除`);
+  }
+  async removeExternal(user: AuthUser, id: string) {
+    if (user.role !== 'admin') throw new ForbiddenException('仅管理员可删除外部库登记');
+    const initial = await this.catalog(id);
+    return this.locked(initial.instanceId, async guard => {
+      const row = await this.catalog(id);
+      if (row.source !== 'external') throw new BadRequestException('只能删除外部库登记');
+      await this.assertRevoked([row]);
+      const conn = await this.connection(row.instanceId, true);
+      let started = !!row.error?.startsWith('删除未完成：');
+      try {
+        await cleanupPostgresAccessRoles(conn,this.roles([row]),guard,async () => {
+          guard(); await this.db.update(dbCatalog).set({ open: false, state: 'failed', error: '删除未完成：外部库登记，等待清理角色；请重试删除', updatedAt: new Date() }).where(eq(dbCatalog.id,id));
+          started = true;
+        });
+        guard();
+        await this.db.transaction(async tx => {
+          await tx.delete(dbAccessGrants).where(eq(dbAccessGrants.catalogId,id));
+          await tx.delete(dbCatalog).where(eq(dbCatalog.id,id));
+        });
+      } catch (e) {
+        const message = `${started ? '删除未完成：外部库登记，平台记录保留，请重试删除。' : '删除已停止，尚未清理角色。'}${this.error(e)}`;
+        guard(); if (started) await this.db.update(dbCatalog).set({ state: 'failed', error: message, updatedAt: new Date() }).where(eq(dbCatalog.id,id));
+        await this.audit.record({ actorId: user.id, action: 'db_access.external_delete_failed', targetType: 'db_catalog', targetId: id, meta: { error: this.error(e), retryable: true } });
+        throw new ConflictException(message);
+      }
+      await this.audit.record({ actorId: user.id, action: 'db_access.external_deleted', targetType: 'db_catalog', targetId: id, meta: { dbName: row.dbName, databasePreserved: true } });
+      return { ok: true };
+    });
+  }
+  async updateInstanceCredentials(user: AuthUser,id:string,dto:UpdateDbInstanceCredentialsRequest) {
+    if (user.role!=='admin') throw new ForbiddenException('仅管理员可修改实例管理凭证');
+    return this.locked(id,async guard=> {
+      const [instance]=isFullId(id)?await this.db.select().from(dbInstances).where(eq(dbInstances.id,id)):[];
+      if (!instance) throw new NotFoundException('实例不存在');
+      guard(); await this.db.update(dbInstances).set({ adminUser:dto.adminUser,adminPasswordEncrypted:encryptSecret(dto.adminPassword) }).where(eq(dbInstances.id,id));
+      await this.audit.record({ actorId:user.id,action:'db_instance.credentials_updated',targetType:'db_instance',targetId:id });
+      return { ok:true };
+    });
+  }
+  async removeInstance(user: AuthUser, id: string) {
+    if (user.role !== 'admin') throw new ForbiddenException('仅管理员可删除实例登记');
+    return this.locked(id, async guard => {
+      const [instance] = isFullId(id) ? await this.db.select().from(dbInstances).where(eq(dbInstances.id,id)) : [];
+      if (!instance) throw new NotFoundException('实例不存在');
+      const assertAssignments = async (db: Pick<Db, 'select'>) => {
+        const outstanding = await db.select().from(dbAssignments).where(and(eq(dbAssignments.instanceId,id),inArray(dbAssignments.status,['active','provisioning'])));
+        if (outstanding.length) throw new ConflictException('实例上仍有使用中或开通中的分配，请等待开通完成并删除分配记录后再删除实例');
+      };
+      await assertAssignments(this.db);
+      const catalogs = await this.db.select().from(dbCatalog).where(eq(dbCatalog.instanceId,id));
+      await this.assertRevoked(catalogs);
+      const identities = await this.db.select().from(dbPersonalRoles).where(eq(dbPersonalRoles.instanceId,id));
+      const conn = await this.connection(id,true);
+      let started = !!instance.cleanupError;
+      const start = async () => {
+        guard();
+        await this.db.transaction(async tx => {
+          await tx.update(dbInstances).set({ cleanupError: '删除未完成：实例，正在清理角色；请等待或重试删除' }).where(eq(dbInstances.id,id));
+          await tx.update(dbCatalog).set({ open: false, state: 'failed', error: '删除未完成：实例，等待清理角色；请重试删除', updatedAt: new Date() }).where(eq(dbCatalog.instanceId,id));
+        });
+        started = true;
+      };
+      try {
+        if (instance.engine === 'postgres') await cleanupPostgresAccessRoles(conn,this.roles(catalogs,identities),guard,start);
+        else await start();
+        guard();
+        await this.db.transaction(async tx => {
+          await tx.select({ id: dbInstances.id }).from(dbInstances).where(eq(dbInstances.id,id)).for('update');
+          await assertAssignments(tx);
+          if (catalogs.length) await tx.delete(dbAccessGrants).where(inArray(dbAccessGrants.catalogId,catalogs.map(c => c.id)));
+          await tx.delete(dbCatalog).where(eq(dbCatalog.instanceId,id));
+          await tx.delete(dbPersonalRoles).where(eq(dbPersonalRoles.instanceId,id));
+          await tx.delete(dbInstances).where(eq(dbInstances.id,id));
+        });
+      } catch (e) {
+        const message = `${started ? '删除未完成：实例，平台记录保留，请重试删除。' : '删除已停止，尚未清理角色。'}${this.error(e)}`;
+        guard(); if (started) await this.db.transaction(async tx => {
+          await tx.update(dbInstances).set({ cleanupError: message }).where(eq(dbInstances.id,id));
+          await tx.update(dbCatalog).set({ state: 'failed', error: message, updatedAt: new Date() }).where(eq(dbCatalog.instanceId,id));
+        });
+        await this.audit.record({ actorId: user.id, action: 'db_instance.delete_failed', targetType: 'db_instance', targetId: id, meta: { error: this.error(e), retryable: true } });
+        throw new ConflictException(message);
+      }
+      await this.audit.record({ actorId: user.id, action: 'db_instance.deleted', targetType: 'db_instance', targetId: id, meta: { databasesAndOwnersPreserved: true } });
+      return { ok: true };
+    });
+  }
+  async listCatalog(user: AuthUser, checkDrift = false): Promise<DbCatalogInfo[]> {
     const rows = await this.db.select({ a: dbAssignments, c: dbCatalog, i: dbInstances, ownerName: users.name })
       .from(dbAssignments).innerJoin(dbInstances, eq(dbInstances.id, dbAssignments.instanceId))
       .innerJoin(users, eq(users.id, dbAssignments.requesterId)).leftJoin(dbCatalog, eq(dbCatalog.assignmentId, dbAssignments.id))
@@ -126,7 +231,12 @@ export class DbAccessService {
     const external = await this.db.select({ c: dbCatalog, i: dbInstances, ownerName: users.name })
       .from(dbCatalog).innerJoin(dbInstances, eq(dbInstances.id, dbCatalog.instanceId)).innerJoin(users, eq(users.id, dbCatalog.ownerId))
       .where(and(eq(dbCatalog.source, 'external'), user.role === 'admin' ? undefined : or(eq(dbCatalog.ownerId, user.id), and(eq(dbCatalog.open, true), eq(dbCatalog.state, 'active')))));
-    return [...rows.map(({ a, c, i, ownerName }) => ({ id: c?.id ?? null, assignmentId: a.id, instanceId: i.id, instanceName: i.name, dbName: a.dbName, source: 'eat' as const, creatorRole: c?.creatorRole ?? a.dbUser, publicCheck: c?.publicCheck ?? null, ownerId: a.requesterId, ownerName, open: c?.open ?? false, schemas: c?.schemas ?? ['public'], state: c?.state ?? 'pending', error: c?.error ?? null, canManage: user.role === 'admin' || a.requesterId === user.id })), ...external.map(({ c, i, ownerName }) => ({ ...c, instanceName: i.name, ownerName, canManage: user.role === 'admin' || c.ownerId === user.id }))];
+    const result: DbCatalogInfo[] = [...rows.map(({ a, c, i, ownerName }) => ({ id: c?.id ?? null, assignmentId: a.id, instanceId: i.id, instanceName: i.name, dbName: a.dbName, source: 'eat' as const, creatorRole: c?.creatorRole ?? a.dbUser, publicCheck: c?.publicCheck ?? null, ownerId: a.requesterId, ownerName, open: c?.open ?? false, schemas: c?.schemas ?? ['public'], state: c?.state ?? 'pending', error: c?.error ?? null, canManage: user.role === 'admin' || a.requesterId === user.id })), ...external.map(({ c, i, ownerName }) => ({ ...c, instanceName: i.name, ownerName, canManage: user.role === 'admin' || c.ownerId === user.id }))];
+    if (checkDrift && user.role === 'admin') for (const item of result) if (item.id) {
+      try { item.drift = await this.inspectDrift(await this.catalog(item.id)); }
+      catch (e) { item.drift = { checkedAt: new Date().toISOString(), consistent: false, error: this.error(e), members: [] }; }
+    }
+    return result;
   }
   async registerExternal(user: AuthUser, instanceId: string, dto: RegisterExternalDbRequest): Promise<DbCatalogInfo> {
     if (user.role !== 'admin') throw new ForbiddenException('仅管理员可登记外部库');
@@ -136,6 +246,7 @@ export class DbAccessService {
     const [owner] = await this.db.select().from(users).where(eq(users.id, dto.ownerId));
     if (!owner || owner.status !== 'active') throw new BadRequestException('请选择启用中的 EAT 用户作为 Owner');
     return this.locked(instanceId, async guard => {
+      await this.connection(instanceId);
       const [existing] = await this.db.select().from(dbCatalog).where(and(eq(dbCatalog.instanceId, instanceId), eq(dbCatalog.dbName, dto.dbName)));
       const [assignment] = await this.db.select().from(dbAssignments).where(and(eq(dbAssignments.instanceId, instanceId), eq(dbAssignments.dbName, dto.dbName), inArray(dbAssignments.status, ['active', 'disabled', 'provisioning'])));
       if (existing || assignment) throw new ConflictException('此库已有目录记录或 EAT 分配，请从原记录管理');
@@ -159,6 +270,7 @@ export class DbAccessService {
     if (initial.source !== 'external') throw new BadRequestException('EAT 建的库请从分配记录配置');
     return this.locked(initial.instanceId, async guard => {
       const row = await this.catalog(id);
+      this.assertCatalogAvailable(row);
       this.manage(user, row.ownerId);
       const schemas = dto.schemas ?? row.schemas;
       const creatorRole = dto.creatorRole === undefined ? row.creatorRole : dto.creatorRole;
@@ -180,8 +292,10 @@ export class DbAccessService {
     if (i.engine !== 'postgres') throw new BadRequestException('MySQL 实例上的库不能开放申请');
     if (!['active', 'disabled'].includes(a.status)) throw new ConflictException('仅已生效的分配可开放申请');
     return this.locked(a.instanceId, async guard => {
+      await this.connection(a.instanceId);
       guard();
       let [row] = await this.db.select().from(dbCatalog).where(eq(dbCatalog.assignmentId, a.id));
+      if (row) this.assertCatalogAvailable(row);
       const schemas = dto.schemas ?? row?.schemas ?? ['public'];
       if (!row) {
         if (!dto.open) throw new ConflictException('该库尚未开放过申请');
@@ -205,12 +319,41 @@ export class DbAccessService {
     this.manage(user, initial.ownerId);
     return this.locked(initial.instanceId, async guard => {
       const row = await this.catalog(id);
+      this.assertCatalogAvailable(row);
       this.manage(user, row.ownerId);
       guard();
       await this.db.update(dbCatalog).set({ state: 'pending', error: null, openedBy: user.id, updatedAt: new Date() }).where(eq(dbCatalog.id, id));
       await this.executeOpen(row, guard);
       await this.audit.record({ actorId: user.id, action: 'db_access.reapplied', targetType: 'db_catalog', targetId: id });
       return (await this.listCatalog(user)).find(c => c.id === id)!;
+    });
+  }
+  private async desiredMembers(c: Catalog): Promise<ExpectedDbMember[]> {
+    const grants = await this.db.select().from(dbAccessGrants).where(eq(dbAccessGrants.catalogId,c.id));
+    const identities = await this.db.select().from(dbPersonalRoles).where(eq(dbPersonalRoles.instanceId,c.instanceId));
+    return identities.map(i => {
+      const g = grants.find(g=>g.userId===i.userId && g.state!=='revoked' && g.state!=='revoking');
+      return { role: i.roleName, marker: `eat:db-personal-role:${i.id}`, groups: g ? [g.level==='write'?c.writeRole:c.readRole] : [] };
+    });
+  }
+  private async inspectDrift(c: Catalog): Promise<DbAccessDrift> {
+    return inspectPostgresAccess(await this.connection(c.instanceId,true),c,await this.desiredMembers(c));
+  }
+  async repair(user: AuthUser,id:string): Promise<DbAccessDrift> {
+    if (user.role!=='admin') throw new ForbiddenException('仅管理员可按 EAT 记录修复');
+    const initial=await this.catalog(id);
+    return this.locked(initial.instanceId,async guard=> {
+      const c=await this.catalog(id); this.assertCatalogAvailable(c); await this.assertInstanceAvailable(c.instanceId);
+      const unfinished=await this.db.select().from(dbAccessGrants).where(and(eq(dbAccessGrants.catalogId,id),inArray(dbAccessGrants.state,['pending','failed','revoking'])));
+      if (unfinished.length) throw new ConflictException('请先重试完成待执行、失败或撤销中的授权，再修复成员关系');
+      try {
+        const result=await repairPostgresAccess(await this.connection(c.instanceId),c,await this.desiredMembers(c),guard);
+        guard(); await this.audit.record({ actorId:user.id, action:'db_access.repaired',targetType:'db_catalog',targetId:id,meta:{ result } });
+        return result;
+      } catch(e) {
+        await this.audit.record({ actorId:user.id,action:'db_access.repair_failed',targetType:'db_catalog',targetId:id,meta:{ error:this.error(e) } });
+        throw new ConflictException(`修复未完成，请核对后重试：${this.error(e)}`);
+      }
     });
   }
   private async executeOpen(row: Catalog, guard: () => void): Promise<void> {
@@ -242,6 +385,8 @@ export class DbAccessService {
     return this.locked(initial.instanceId, async guard => {
       guard();
       const c = await this.catalog(catalogId);
+      this.assertCatalogAvailable(c);
+      await this.assertInstanceAvailable(c.instanceId);
       this.manage(user, c.ownerId);
       if (c.state !== 'active') throw new ConflictException('请先完成库的开放配置');
       if (c.assignmentId) {
@@ -379,7 +524,6 @@ export class DbAccessService {
     return this.locked(c.instanceId, async guard => {
       guard();
       const g = await this.grant(id);
-      if (g.state === 'revoked') return this.info(user, id);
       // 撤销失败保留原撤销人和原因；重试不会把自助放弃变成管理员撤销。
       const actorId = g.state === 'revoking' ? g.revokedBy! : user.id;
       const why = g.state === 'revoking' ? g.revocationReason ?? '' : reason;
@@ -392,6 +536,9 @@ export class DbAccessService {
     const actorId = g.revokedBy!;
     const why = g.revocationReason ?? '';
     try {
+      const actual = await this.inspectDrift(c);
+      guard();
+      await this.audit.record({ actorId, action: 'db_access.revoke_checked', targetType: 'db_access_grant', targetId: g.id, meta: { actual } });
       const [identity] = await this.db.select().from(dbPersonalRoles).where(and(eq(dbPersonalRoles.instanceId, c.instanceId), eq(dbPersonalRoles.userId, g.userId)));
       guard();
       if (identity) await revokePostgresAccess(await this.connection(c.instanceId), c, identity, guard);
@@ -405,7 +552,7 @@ export class DbAccessService {
     }
     await this.syncRequestExecution(g.id);
     await this.audit.record({ actorId, action: actorId === g.userId ? 'db_access.relinquished' : 'db_access.revoked', targetType: 'db_access_grant', targetId: g.id, meta: { reason: why } });
-    if (actorId !== g.userId) {
+    if (actorId !== g.userId && g.state !== 'revoked') {
       const [actor] = await this.db.select({ name: users.name }).from(users).where(eq(users.id, actorId));
       this.notifier.notify(g.userId, 'approvalResult', 'db_access.revoked', {
         header: { template: 'orange', title: { tag: 'plain_text', content: '数据库授权已撤销' } },

@@ -833,6 +833,8 @@ export const dbInstances = pgTable('db_instance', {
   adminUser: text('admin_user').notNull(),
   adminPasswordEncrypted: text('admin_password_encrypted').notNull(),
   note: text('note').notNull().default(''),
+  // 删除开始后持久阻止新授权；远端成功而平台写回失败时仍可幂等重试。
+  cleanupError: text('cleanup_error'),
   createdBy: uuid('created_by')
     .notNull()
     .references(() => users.id),

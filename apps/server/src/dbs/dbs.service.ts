@@ -15,8 +15,10 @@ import type {
   DbAssignmentInfo,
   DbCredentials,
   DbInstanceInfo,
+  UpdateDbInstanceCredentialsRequest,
 } from "@eat/shared";
 import { dbConnectionUrl } from "@eat/shared";
+import { DbAccessService } from './db-access.service';
 import { AuditService } from "../audit/audit.service";
 import type { AuthUser } from "../auth/auth.decorators";
 import { decryptSecret, encryptSecret } from "../common/crypto";
@@ -41,6 +43,7 @@ export class DbsService {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly audit: AuditService,
+    private readonly access: DbAccessService,
   ) {}
 
   // ---------- 实例（管理员维护，成员可见基本信息用于发起申请） ----------
@@ -68,6 +71,7 @@ export class DbsService {
       port: r.instance.port,
       adminUser: r.instance.adminUser,
       note: r.instance.note,
+      cleanupError: r.instance.cleanupError,
       assignmentCount: Number(r.assignmentCount),
       createdAt: r.instance.createdAt.toISOString(),
     }));
@@ -96,38 +100,12 @@ export class DbsService {
     return { id: row.id };
   }
 
+  async updateInstanceCredentials(user: AuthUser,id:string,dto:UpdateDbInstanceCredentialsRequest) {
+    return this.access.updateInstanceCredentials(user,id,dto);
+  }
+
   async removeInstance(user: AuthUser, id: string) {
-    await this.db.transaction(async (tx) => {
-      await tx
-        .select({ id: dbInstances.id })
-        .from(dbInstances)
-        .where(eq(dbInstances.id, id))
-        .for("update");
-      const [{ active }] = await tx
-        .select({ active: count(dbAssignments.id) })
-        .from(dbAssignments)
-        .where(
-          and(
-            eq(dbAssignments.instanceId, id),
-            inArray(dbAssignments.status, ["active", "provisioning"]),
-          ),
-        );
-      if (Number(active) > 0) {
-        throw new ConflictException({
-          error: "CONFLICT",
-          message:
-            "实例上仍有使用中或开通中的分配，请等待开通完成并回收后再删除",
-        });
-      }
-      await tx.delete(dbInstances).where(eq(dbInstances.id, id));
-    });
-    await this.audit.record({
-      actorId: user.id,
-      action: "db_instance.deleted",
-      targetType: "db_instance",
-      targetId: id,
-    });
-    return { ok: true };
+    return this.access.removeInstance(user, id);
   }
 
   private async getInstance(id: string): Promise<InstanceRow> {
@@ -216,7 +194,8 @@ export class DbsService {
     user: AuthUser,
     dto: CreateDbAssignmentRequest,
   ): Promise<DbAssignmentInfo> {
-    await this.getInstance(dto.instanceId);
+    const instance = await this.getInstance(dto.instanceId);
+    if (instance.cleanupError) throw new ConflictException(instance.cleanupError);
     const dbUser = `u_${dto.dbName}`.slice(0, 31);
     // 占用判定**包含已删除的分配**：删除只到记录级（决策 13），实例上的库与账号多半还在，
     // 放行会让批准时的 CREATE DATABASE / CREATE ROLE 当场失败。但两种情况得说清楚区别——
@@ -377,6 +356,7 @@ export class DbsService {
     if (retry && user.role !== "admin")
       throw new ForbiddenException("仅管理员可重试资源开通");
     const instance = await this.getInstance(row.instanceId);
+    if (instance.cleanupError) throw new ConflictException(instance.cleanupError);
     if (instance.engine !== "postgres") {
       throw new BadRequestException({
         error: "NOT_SUPPORTED",

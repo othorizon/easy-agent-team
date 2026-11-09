@@ -32,6 +32,7 @@ export function DbAccessTab({ keyword }: { keyword: string }) {
   const client = useQueryClient();
   const [opening, setOpening] = useState<DbCatalogInfo | null>(null);
   const [configuring, setConfiguring] = useState(false);
+  const [drift, setDrift] = useState<DbCatalogInfo | null>(null);
   const [checking, setChecking] = useState<DbCatalogInfo | null>(null);
   const [requesting, setRequesting] = useState<{ id: string; dbName: string; instanceName: string; upgrade?: boolean } | null>(null);
   const [granting, setGranting] = useState<DbCatalogInfo | null>(null);
@@ -54,6 +55,16 @@ export function DbAccessTab({ keyword }: { keyword: string }) {
     },
     onError: err => toast.error(errorMessage(err)),
   });
+  const removeExternal = useMutation({
+    mutationFn: (id: string) => api('DELETE', `/api/db/access/catalog/${id}`),
+    onSuccess: () => { toast.success('外部库登记与两组角色已删除，库和数据保留'); invalidate(); },
+    onError: err => { toast.error(errorMessage(err)); invalidate(); },
+  });
+  const repair = useMutation({
+    mutationFn: (id: string) => api('POST', `/api/db/access/catalog/${id}/repair`),
+    onSuccess: () => { toast.success('已按 EAT 记录修复'); setDrift(null); invalidate(); },
+    onError: err => { toast.error(errorMessage(err)); invalidate(); },
+  });
   const matches = (r: { dbName: string; instanceName: string }) => `${r.dbName} ${r.instanceName}`.toLowerCase().includes(keyword);
   const mine = (grants.data ?? []).filter(g => g.userId === me?.id && matches(g));
   const managed = (grants.data ?? []).filter(g => g.canManage && matches(g));
@@ -61,12 +72,14 @@ export function DbAccessTab({ keyword }: { keyword: string }) {
     { id: 'db', header: '库', cell: ({ row: { original: r } }) => <div className="space-y-1"><InlineCode>{r.dbName}</InlineCode><div className="text-xs text-muted-foreground">{r.instanceName} · {r.source === 'external' ? '外部库' : 'EAT 建的库'}</div></div> },
     { accessorKey: 'ownerName', header: 'Owner', meta: { className: 'w-24' } },
     { id: 'schemas', header: 'Schema', meta: { hideBelow: 'md', className: 'w-36' }, cell: ({ row: { original: r } }) => <span className="break-all text-muted-foreground">{r.schemas.join(', ')}</span> },
-    { id: 'state', header: '申请', meta: { className: 'w-24' }, cell: ({ row: { original: r } }) => r.error ? <Tip content={r.error}><Badge variant="destructive">执行失败</Badge></Tip> : <Badge variant={r.open ? 'success' : 'secondary'}>{r.open ? '开放申请' : '未开放'}</Badge> },
-    { id: 'actions', header: '操作', meta: { className: 'w-48' }, cell: ({ row: { original: r } }) => r.canManage ? <div className="flex flex-wrap gap-1.5">
+    { id: 'state', header: '申请', meta: { className: 'w-24' }, cell: ({ row: { original: r } }) => <div className="space-y-1">{r.error ? <Tip content={r.error}><Badge variant="destructive">{r.error.startsWith('删除未完成：') ? '删除未完成' : '执行失败'}</Badge></Tip> : <Badge variant={r.open ? 'success' : 'secondary'}>{r.open ? '开放申请' : '未开放'}</Badge>}{r.drift && !r.drift.consistent && <Button size="sm" variant="ghost" className="h-auto p-0 text-destructive" onClick={() => setDrift(r)}>{r.drift.error ? '核对未完成' : '云端不一致'}</Button>}</div> },
+    { id: 'actions', header: '操作', meta: { className: 'w-48' }, cell: ({ row: { original: r } }) => r.canManage ? r.error?.startsWith('删除未完成：') ? <div className="space-y-1"><Tip content={r.error}><span className="text-xs text-muted-foreground">请管理员重试删除</span></Tip>{me?.role === 'admin' && r.source === 'external' && !r.error.startsWith('删除未完成：实例') && <Confirm title="重试删除外部库登记？" description="继续清理本库的两组角色，库和数据保留。" onConfirm={() => removeExternal.mutate(r.id!)}><Button size="sm" variant="outline-destructive" disabled={removeExternal.isPending}>重试删除</Button></Confirm>}</div> : <div className="flex flex-wrap gap-1.5">
       {r.open ? <Confirm title="关闭申请？" description="已有授权不受影响。" onConfirm={() => act.mutate({ path: accessPath(r), payload: { open: false } })}><Button size="sm" variant="outline" disabled={act.isPending}>关闭申请</Button></Confirm> : <Button size="sm" variant="outline" onClick={() => { setConfiguring(false); setOpening(r); }}>{r.error ? '重试开放' : '开放申请'}</Button>}
       {r.id && <Button size="sm" variant="outline" onClick={() => { setConfiguring(true); setOpening(r); }}>配置权限</Button>}
       {r.publicCheck && <Button size="sm" variant="outline" onClick={() => setChecking(r)}>权限检查</Button>}
       {r.id && <Button size="sm" variant="outline" disabled={act.isPending} onClick={() => act.mutate({ path: `/api/db/access/catalog/${r.id}/reapply` })}>重新应用授权</Button>}
+      {me?.role === 'admin' && r.source === 'external' && r.id && <Confirm title="删除外部库登记？" description="请先撤销本库全部授权。EAT 会删除只读组和读写组；库本身与数据保留。若角色拥有对象会停止并报告。" confirmText="删除登记" onConfirm={() => removeExternal.mutate(r.id!)}><Button size="sm" variant="outline-destructive" disabled={removeExternal.isPending}>删除登记</Button></Confirm>}
+      {me?.role === 'admin' && r.drift && !r.drift.consistent && !r.drift.error && <Button size="sm" variant="outline" onClick={() => setDrift(r)}>修复不一致</Button>}
       {r.id && r.state === 'active' && <Button size="sm" variant="outline" onClick={() => setGranting(r)}>授予权限</Button>}
     </div> : r.id && r.open && r.state === 'active' ? <Button size="sm" variant="outline" onClick={() => setRequesting({ ...r, id: r.id! })}>申请权限</Button> : null },
   ];
@@ -95,6 +108,7 @@ export function DbAccessTab({ keyword }: { keyword: string }) {
     {managed.length > 0 && <Card><CardContent className="space-y-4"><h2 className="text-sm font-semibold">授权管理</h2><DataTable columns={grantColumns(true)} data={managed} getRowId={r => r.id} /></CardContent></Card>}
     <Dialog open={!!requesting} onOpenChange={v => !v && setRequesting(null)}><DialogContent><DialogHeader><DialogTitle>{requesting?.upgrade ? '申请升级为读写' : '申请数据库权限'}</DialogTitle><DialogDescription>写明用途供 Owner 审批；升级待审批期间原只读授权照常可用。</DialogDescription></DialogHeader>{requesting && <RequestForm row={requesting} done={() => { setRequesting(null); invalidate(); }} />}</DialogContent></Dialog>
     <Dialog open={!!opening} onOpenChange={v => !v && setOpening(null)}><DialogContent><DialogHeader><DialogTitle>{configuring ? '配置数据库权限' : '开放数据库申请'}</DialogTitle><DialogDescription>{opening?.source === 'external' ? '外部库保留 PUBLIC 与已有角色的权限。建表角色留空时，新对象依赖重新应用授权。' : '收回 PUBLIC 的 CONNECT 和 public schema 的 CREATE。owner 账号照常可用。'}</DialogDescription></DialogHeader>{opening && <OpenForm key={opening.id ?? opening.assignmentId!} row={opening} configuring={configuring} done={() => { setOpening(null); invalidate(); }} />}</DialogContent></Dialog>
+    <Dialog open={!!drift} onOpenChange={v => !v && setDrift(null)}><DialogContent className="max-h-[85vh] overflow-y-auto"><DialogHeader><DialogTitle>云端成员关系不一致</DialogTitle><DialogDescription>{drift?.dbName} · 核对只读取实际成员关系。修复会恢复 EAT 记录的组成员关系，保留管理需要的关系。</DialogDescription></DialogHeader>{drift?.drift?.error ? <p className="break-all text-sm text-destructive">{drift.drift.error}</p> : <div className="space-y-3">{drift?.drift?.members.filter(m => m.missing.length || m.extra.length).map(m => <div key={m.role} className="space-y-1 rounded-md border p-3 text-sm"><InlineCode>{m.role}</InlineCode><p className="break-all text-muted-foreground">EAT 记录：{m.expected.join(', ') || '无'}</p><p className="break-all text-destructive">数据库实际：{m.actual.join(', ') || '无'}</p></div>)}<div className="flex justify-end"><Confirm title="按 EAT 记录修复？" description="会补回缺失成员关系，撤掉额外成员关系。失去权限的角色在当前库的连接会被断开。" confirmText="修复成员关系" onConfirm={() => repair.mutate(drift!.id!)}><Button loading={repair.isPending}>按 EAT 记录修复</Button></Confirm></div></div>}</DialogContent></Dialog>
     <Dialog open={!!checking} onOpenChange={v => !v && setChecking(null)}><DialogContent className="max-h-[85vh] overflow-y-auto"><DialogHeader><DialogTitle>外部库权限检查</DialogTitle><DialogDescription>{checking?.dbName} · 重新应用授权会刷新检查结果。</DialogDescription></DialogHeader>{checking?.publicCheck && <DbPublicCheckReport check={checking.publicCheck} />}</DialogContent></Dialog>
     <Dialog open={!!granting} onOpenChange={v => !v && setGranting(null)}><DialogContent><DialogHeader><DialogTitle>授予数据库权限</DialogTitle><DialogDescription>{granting?.dbName} · 已有授权会改为所选级别；降级会断开这个库上的连接。</DialogDescription></DialogHeader>{granting && <GrantForm row={granting} done={() => { setGranting(null); invalidate(); }} />}</DialogContent></Dialog>
     <Dialog open={!!revoking} onOpenChange={v => !v && setRevoking(null)}><DialogContent><DialogHeader><DialogTitle>撤销数据库授权</DialogTitle><DialogDescription>{revoking?.userName} 在 {revoking?.dbName} 上的连接会被断开，持有人收到撤销通知。</DialogDescription></DialogHeader>{revoking && <RevokeForm row={revoking} done={() => { setRevoking(null); invalidate(); }} />}</DialogContent></Dialog>

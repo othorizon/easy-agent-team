@@ -131,10 +131,23 @@ export async function grantPostgresAccess(conn: AdminConn, d: AccessDatabase, le
     const previous = level === 'write' ? d.readRole : d.writeRole;
     // 先加入新组，再退出旧组；同一目标事务保证重试没有权限空窗。
     await c.query(`grant ${q(desired)} to ${q(identity.roleName)}`);
-    await c.query(`revoke ${q(previous)} from ${q(identity.roleName)}`);
+    await revokeAccessMemberships(c,[previous],identity.roleName);
   }, guard);
   // 只读执行包含崩溃后的重放：即使旧写组已退出，也必须补完断会话。
   if (level === 'read') await terminatePostgresAccessSessions(conn, d.dbName, identity.roleName, guard);
+}
+
+/** PG16成员关系按grantor分别存储，默认REVOKE会静默保留其他grantor的授予。 */
+export async function revokeAccessMemberships(c: Client, groups: string[], member: string): Promise<void> {
+  const version=Number((await c.query('show server_version_num')).rows[0].server_version_num);
+  const { rows: memberships }=await c.query<{ parent:string; grantor:string }>(`select r.rolname parent,g.rolname grantor from pg_auth_members a join pg_roles r on r.oid=a.roleid join pg_roles m on m.oid=a.member join pg_roles g on g.oid=a.grantor where r.rolname=any($1::text[]) and m.rolname=$2`,[groups,member]);
+  for (const m of memberships) {
+    const statement=`revoke ${q(m.parent)} from ${q(member)}${version>=160000?` granted by ${q(m.grantor)}`:''}`;
+    if (version>=160000 && !(await c.query("select pg_has_role(current_user,$1,'SET') ok",[m.grantor])).rows[0].ok) throw new Error(`成员关系由 ${m.grantor} 授予，管理角色不能代为撤销；请 DBA 执行：${statement}; 然后重试`);
+    await c.query(statement);
+  }
+  const { rowCount }=await c.query('select 1 from pg_auth_members a join pg_roles r on r.oid=a.roleid join pg_roles m on m.oid=a.member where r.rolname=any($1::text[]) and m.rolname=$2',[groups,member]);
+  if (rowCount) throw new Error(`角色 ${member} 的组成员关系尚未撤净，请 DBA 核对后重试`);
 }
 
 export async function revokePostgresAccess(conn: AdminConn, d: AccessDatabase, identity: { id: string; roleName: string }, guard: () => void): Promise<void> {
@@ -143,7 +156,7 @@ export async function revokePostgresAccess(conn: AdminConn, d: AccessDatabase, i
     const { rows: [role] } = await c.query("select shobj_description(oid,'pg_authid') marker from pg_roles where rolname=$1", [roleName]);
     if (!role) return false;
     if (role.marker !== `eat:db-personal-role:${identity.id}`) throw new Error(`个人角色 ${roleName} 来源不明，EAT 不会修改；请管理员核对。`);
-    await c.query(`revoke ${q(d.readRole)}, ${q(d.writeRole)} from ${q(roleName)}`);
+    await revokeAccessMemberships(c,[d.readRole,d.writeRole],roleName);
     return true;
   }, guard);
   if (!exists) return;

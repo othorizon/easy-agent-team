@@ -1,8 +1,8 @@
-import type { CreateDbInstanceRequest, DbAssignmentInfo, DbInstanceInfo } from '@eat/shared';
+import type { CreateDbInstanceRequest, UpdateDbInstanceCredentialsRequest, DbAssignmentInfo, DbInstanceInfo } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, KeyRound, Plus, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { createDbAssignmentSchema, createDbInstanceSchema } from '@eat/shared';
+import { updateDbInstanceCredentialsSchema, createDbAssignmentSchema, createDbInstanceSchema } from '@eat/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useForm } from 'react-hook-form';
 import { Link } from 'react-router-dom';
@@ -35,6 +35,7 @@ export function DbsPage() {
   const queryClient = useQueryClient();
   const me = getStoredUser();
   const isAdmin = me?.role === 'admin';
+  const [editingCredentials,setEditingCredentials] = useState<DbInstanceInfo | null>(null);
   const [addingInstance, setAddingInstance] = useState(false);
   const [externalInstance, setExternalInstance] = useState<DbInstanceInfo | null>(null);
   const [requesting, setRequesting] = useState(false);
@@ -119,10 +120,12 @@ export function DbsPage() {
   const removeInstance = useMutation({
     mutationFn: (id: string) => api('DELETE', `/api/db/instances/${id}`),
     onSuccess: () => {
-      toast.success('实例已删除');
+      toast.success('实例登记与个人角色已删除，数据库和 owner 账号保留');
+      void queryClient.invalidateQueries({ queryKey: ['db-access-catalog'] });
+      void queryClient.invalidateQueries({ queryKey: ['db-access-grants'] });
       invalidate();
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : '删除失败'),
+    onError: (err) => { toast.error(err instanceof ApiError ? err.message : '删除失败'); invalidate(); },
   });
 
   const assignmentColumns = (admin: boolean): DataTableColumn<DbAssignmentInfo>[] => [
@@ -233,6 +236,7 @@ export function DbsPage() {
       cell: ({ row: { original: r } }) => (
         <>
           {r.name}
+          {r.cleanupError && <div className="mt-1"><Tip content={r.cleanupError}><Badge variant="destructive">删除未完成</Badge></Tip></div>}
           <div className="mt-0.5 text-xs text-muted-foreground md:hidden">
             {r.host}:{r.port}
           </div>
@@ -273,15 +277,16 @@ export function DbsPage() {
             meta: { className: 'w-40' },
             cell: ({ row: { original: r } }) => (
               <div className="flex flex-wrap gap-1.5">
-              {r.engine === 'postgres' && <Button size="sm" variant="outline" onClick={() => setExternalInstance(r)}>登记外部库</Button>}
+              {r.engine === 'postgres' && !r.cleanupError && <Button size="sm" variant="outline" onClick={() => setExternalInstance(r)}>登记外部库</Button>}
+              <Button size="sm" variant="outline" onClick={() => setEditingCredentials(r)}>管理凭证</Button>
               <Confirm
                 title="删除实例登记？"
-                description="不影响实例本身，仅移除平台上的登记。"
+                description="请先撤销全部数据库授权。EAT 会清理自己建的组角色和个人登录角色；数据库、数据和分配出去的 owner 账号保留。角色拥有对象时停止并报告，可处理后重试。"
                 confirmText="删除"
                 onConfirm={() => removeInstance.mutate(r.id)}
               >
                 <Button size="sm" variant="outline-destructive">
-                  删除
+                  {r.cleanupError ? '重试删除' : '删除'}
                 </Button>
               </Confirm>
               </div>
@@ -387,6 +392,7 @@ export function DbsPage() {
         )}
       </Tabs>
 
+      <Dialog open={!!editingCredentials} onOpenChange={v => !v && setEditingCredentials(null)}><DialogContent><DialogHeader><DialogTitle>修改实例管理凭证</DialogTitle></DialogHeader>{editingCredentials && <InstanceCredentialsForm instance={editingCredentials} done={() => { setEditingCredentials(null); invalidate(); }} />}</DialogContent></Dialog>
       {externalInstance && <ExternalDbDialog instance={externalInstance} close={() => setExternalInstance(null)} done={() => { void queryClient.invalidateQueries({ queryKey: ['db-access-catalog'] }); }} />}
       {addingInstance && (
         <AddInstanceDialog
@@ -558,4 +564,10 @@ function RequestDbDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function InstanceCredentialsForm({ instance,done }: { instance:DbInstanceInfo;done:()=>void }) {
+  const form=useForm<UpdateDbInstanceCredentialsRequest>({ resolver:zodResolver(updateDbInstanceCredentialsSchema.required()),defaultValues:{ adminUser:instance.adminUser,adminPassword:'' } });
+  const save=useMutation({ mutationFn:(value:UpdateDbInstanceCredentialsRequest)=>api('PATCH',`/api/db/instances/${instance.id}/credentials`,value),onSuccess:()=>{ toast.success('管理凭证已更新，可重试未完成的清理');done(); },onError:e=>toast.error(e instanceof ApiError?e.message:'保存失败') });
+  return <form className="space-y-4" onSubmit={form.handleSubmit(v=>save.mutate(v))}><p className="text-sm text-muted-foreground">修改 EAT 后台连接实例的凭证。删除未完成时仍可更新并重试。</p><Field label="管理用户名" error={form.formState.errors.adminUser?.message}><Input {...form.register('adminUser')} autoComplete="off" /></Field><Field label="管理密码" error={form.formState.errors.adminPassword?.message} hint="输入这份管理凭证的密码，留空表示无密码连接。"><Input {...form.register('adminPassword')} type="password" autoComplete="new-password" /></Field><div className="flex justify-end"><Button type="submit" loading={save.isPending}>保存管理凭证</Button></div></form>;
 }
