@@ -51,13 +51,14 @@ node scripts/demo/seed-demo.mjs  # 演示数据（截图 / 录屏用，见 scrip
 - 已知限制：p2.spec.ts 的 5 个「真实建库」用例硬编码登记 `127.0.0.1:5433` 本地 PG 做真实建库建号（避免在远端实例残留测试库/账号），本机没起 5433 时这 5 个用例失败属预期，其余用例应全过。
 - 没有 `.env` 时才回退到 Docker 起 PostgreSQL 或连自有实例。
 
-## 唯一事实源
+## 设计文档与决策
 
-`docs/product-design.md` 是产品与技术设计的唯一事实源：
-
-- §10 决策记录：所有已拍板的决策（管理员可见求助内容、CLI 定名 eat、AI 接入 OpenAI 范式、`eat skill push`、框架选型等）。新决策产生时必须追加到这张表并同步正文。
-- §7 技术选型（已定）：NestJS(Fastify) 单体 + React/Vite/Tailwind CSS v4/shadcn 风格组件 SPA + pnpm monorepo；任务队列 pg-boss（不引入 Redis）；ORM 首选 Drizzle；CLI/MCP 为 TS 单包、tsup 打包、npm 分发；平台 AI 调用采用 OpenAI 接口范式（api_base_url / api_key / model 可配）。
-- §7.4 Monorepo 结构：apps/server、apps/web、apps/cli + packages/shared（zod 契约三端共用）。
+- **决策**：新决策一律写成 ADR，放在 `docs/adr/`，文件名 `NNNN-slug.md`，从 `0001` 起顺序编号，用中文写；格式和什么情况值得写见 `docs/agents/domain.md`。
+- **功能现状**：写在 `docs/` 下各功能的文档里（如 `docs/oss-storage.md`、`docs/folios.md`），功能变化时同步对应文档。
+- **术语**：`GLOSSARY.md`。对外文案、CLI 和文档的用词以它为准。
+- **历史**：`docs/product-design.md` 已停止维护，只作历史决策记录（§10 决策 1–92），不再追加、不再同步。本文件里的「决策 N」都指这张表。
+- **技术选型**：NestJS(Fastify) 单体 + React/Vite/Tailwind CSS v4/shadcn 风格组件 SPA + pnpm monorepo；任务队列 pg-boss（不引入 Redis）；ORM 首选 Drizzle；CLI/MCP 为 TS 单包、tsup 打包、npm 分发；平台 AI 调用采用 OpenAI 接口范式（api_base_url / api_key / model 可配）。
+- **Monorepo 结构**：apps/server、apps/web、apps/cli + packages/shared（zod 契约三端共用）。
 
 ## 远程开发环境须知（Claude Code on the web 容器）
 
@@ -108,3 +109,17 @@ CLI 写入环境变量（决策 89）：`eat env create / update / delete`、`se
 数据库凭证只在数据库页取（决策 91）：批准时密码加密存 `db_assignment.password_encrypted`，**不再生成 `db-<库名>` 凭证环境**；读取走 `POST /api/db/assignments/:id/credentials`（申请人或管理员、`active` 才给、no-store、落 `db_credentials.read` 审计），控制台分配详情「连接凭证」卡片点「查看」、CLI `eat db credentials pull|run <库名>`（别名 `creds`；pull 落盘规则照搬 `eat env pull`、`--print --format url` 只出连接串，run 与 `eat env run` 共用 `run-with-env.ts`；刻意不叫 `db pull`——那在 prisma / supabase / heroku 里是拉结构或数据）、MCP `get_db_credentials`；没有共享授权这条路。按名字找分配用 shared 的 `matchDbAssignments()`（三端共用），变量名沿用 `DB_*` 另加 `DATABASE_URL`（`dbCredentialsToEnv()`）。`environment.source` 列已删（迁移 0036），`GET /api/envs` 去掉 `source` / `counts`，控制台撤掉「常规 / 数据库」页签。存量由 `pnpm db:migrate` 里的 `repair-db-credentials.ts` 幂等搬迁：密码按环境里的当前值搬回、只有生成变量的环境删掉、加过别的变量的环境保留并只删 `DB_*`；`db_assignment.environment_id` 列只留给搬迁读，**别在同一版本删**。CLI 0.14.0 / 指南 41。
 
 飞书自建应用通知渠道（决策 92）：通知渠道是平台级互斥单选 `feishu_setting.channel = webhook | app`（迁移 0037），管理员在「系统设置 → 飞书通知」切换，两边成员数据分开存、切换不清除。**所有个人通知走 `NotifierService.notify/target/sendOnce`**（求助、回复、Folio 提及、GitHub 告警、测试通知），别再直接调 `WebhookService` 或 `webhookOf()`；审批通知在 `RequestNotifications` 里按渠道分叉。「通知已连接」的口径（强制完善资料、`hasWebhook`、个人中心徽标）一律按当前渠道判断。回调 `POST /api/feishu/callback` 强制 Encrypt Key、按**原始请求体**验签（`json-body.ts` 只给 `/api/feishu/` 留原文），事件按 `event_id` 去重；卡片按钮的 `value.eat` 分发给 `FeishuCallbackService.registerCardAction()` 注册的处理器。绑定码 `EAT-XXXXXX` 只存哈希、10 分钟；open_id 按应用区分，绑定记 `app_id`。审批卡片（JSON 2.0、plain_text 防注入）的身份 = 操作人绑定的用户 **且** 卡片是发给他的那张（`feishu_card`）；状态回写只靠 30 秒 tick 里的 `ApprovalCards.sync()` 比对 `status:execution`，不在各个改状态处挂钩子。飞书没有带权限一键建自建应用的公开接口，「安装」= 权限导入 JSON + 开发者后台 `?q=` 预选深链接，检查走 `bot/v3/info` + `application/v6/scopes`、申请走 `application/v6/scopes/apply`（都是公开接口、无需额外权限，文档错误码 2120xx / 212100 已翻成中文提示）。**不接入未公开接口**：lark-cli / OpenClaw 的扫码建应用（`accounts.feishu.cn/oauth/v1/app/registration`）与 `page/scope-apply` 申请页都没有公开文档，用户已明确不要。尚未在真实飞书租户联调（只验证过 tenant token 请求格式）。步骤与排查见 `docs/feishu-app.md`。CLI / 指南版本不动。
+
+## Agent skills
+
+### Issue tracker
+
+Issue 和规格以本地 markdown 文件放在 `.scratch/`，该目录已加入 `.gitignore`，不进 git。See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+用默认的五个分诊状态，写在 issue 文件开头的 `Status:` 行。See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+单一上下文：根目录一份 `GLOSSARY.md`，决策写在 `docs/adr/`，`docs/product-design.md` 只作历史决策记录。See `docs/agents/domain.md`.

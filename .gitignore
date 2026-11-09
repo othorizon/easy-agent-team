@@ -9,3 +9,4 @@ coverage/
 .DS_Store
 .demo-casts/
 data/static-sites/
+.scratch/
