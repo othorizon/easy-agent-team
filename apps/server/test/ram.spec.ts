@@ -11,6 +11,16 @@ const management = {
 };
 
 describe('RAM adapter', () => {
+  it('deletes a manual console login profile idempotently without changing keys or policies', async () => {
+    const ram = new TestRamCloud();
+    await ram.ensureUser(management, 'eat-person', 'EAT person');
+    const key = await ram.createKey(management, 'eat-person');
+    ram.setConsoleLogin(management, 'eat-person', true);
+    await ram.deleteLoginProfile(management, 'eat-person');
+    await ram.deleteLoginProfile(management, 'eat-person');
+    expect(ram.hasConsoleLogin(management, 'eat-person')).toBe(false);
+    expect(await ram.keys(management, 'eat-person')).toEqual([{ id: key.id, status: 'Active' }]);
+  });
   it('allows only two AccessKeys per RAM user, including inactive keys', async () => {
     const ram = new TestRamCloud();
     await ram.ensureUser(management, 'eat-person', 'EAT person');

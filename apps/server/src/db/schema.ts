@@ -1345,6 +1345,8 @@ export const cloudIdentities = pgTable('cloud_identity', {
   userEnabled: boolean('user_enabled').notNull().default(true),
   syncPending: boolean('sync_pending').notNull().default(false),
   lastError: text('last_error'),
+  syncAttempts: integer('sync_attempts').notNull().default(0),
+  nextSyncAt: timestamp('next_sync_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [uniqueIndex('cloud_identity_account_user_unique').on(t.accountId, t.userId), uniqueIndex('cloud_identity_account_ram_unique').on(t.accountId, t.ramName)]);

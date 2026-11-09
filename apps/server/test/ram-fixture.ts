@@ -11,6 +11,7 @@ export interface TestRamUser {
   comments: string;
   displayName: string;
   attached: Set<string>;
+  loginProfile?: boolean;
   keys: { id: string; secret: string; status: string }[];
 }
 
@@ -134,6 +135,15 @@ export class TestRamCloud extends RamCloud {
   }
   get policies() {
     return this.accounts.get('account-test')!.policies;
+  }
+  /** Simulate a human enabling console login outside EAT. */
+  setConsoleLogin(c: RamCredentials, name: string, enabled: boolean) {
+    const user = this.accounts.get(this.accountId(c))!.users.get(name);
+    if (!user) throw new RamCloudError('SetConsoleLogin', 'EntityNotExist.User');
+    user.loginProfile = enabled;
+  }
+  hasConsoleLogin(c: RamCredentials, name: string) {
+    return this.accounts.get(this.accountId(c))!.users.get(name)?.loginProfile ?? false;
   }
   protected override async ram(
     c: RamCredentials,
@@ -278,7 +288,7 @@ export class TestRamCloud extends RamCloud {
         user.attached.delete(args.policyName);
         return {};
       case 'DeleteUser':
-        if (user.keys.length || user.attached.size)
+        if (user.keys.length || user.attached.size || user.loginProfile)
           throw new RamCloudError(action, 'DeleteConflict.User');
         if (this.failCleanup) throw new RamCloudError(action, 'AccessDenied');
         users.delete(args.userName);
@@ -301,6 +311,10 @@ export class TestRamCloud extends RamCloud {
         users.set(user.userName, user);
         return { user };
       }
+      case 'DeleteLoginProfile':
+        if (!user.loginProfile) throw new RamCloudError(action, 'EntityNotExist.LoginProfile');
+        user.loginProfile = false;
+        return {};
       case 'ListAccessKeys':
         return {
           accessKeys: {

@@ -67,7 +67,7 @@ export type UpdateUserRequest = z.infer<typeof updateUserRequestSchema>;
 export const updateUserResultSchema = z.object({
   id: z.string(), name: z.string(), email: z.string(), role: z.enum(['admin', 'member']),
   status: z.enum(['active', 'disabled']), canNotifyAll: z.boolean(),
-  llmGatewaySyncPending: z.boolean(), ossSyncPending: z.boolean(), dbSyncPending: z.boolean(),
+  llmGatewaySyncPending: z.boolean(), ossSyncPending: z.boolean(), dbSyncPending: z.boolean(), aliyunSyncPending: z.boolean(),
 });
 export type UpdateUserResult = z.infer<typeof updateUserResultSchema>;
 

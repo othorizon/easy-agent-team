@@ -359,6 +359,11 @@ export class RamCloud {
       if (!ramMissing(e)) throw e;
     }
   }
+  /** EAT never creates console login profiles; a missing profile is already safe. */
+  async deleteLoginProfile(c: RamCredentials, userName: string) {
+    try { await this.ram(c, 'DeleteLoginProfile', { userName }); }
+    catch (e) { if (!ramMissing(e)) throw e; }
+  }
   /** Only called for a persisted, uniquely named probe user with a matching marker. */
   async deleteProbeUser(
     c: RamCredentials,

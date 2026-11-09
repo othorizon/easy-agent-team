@@ -337,6 +337,13 @@
       "when": 1794216209232,
       "tag": "0047_db_personal_status",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1794216774945,
+      "tag": "0048_cloud_identity_status",
+      "breakpoints": true
     }
   ]
 }

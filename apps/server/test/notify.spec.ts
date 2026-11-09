@@ -85,7 +85,8 @@ describe('CLI 通知与用户目录', () => {
     expect(management.body.find((u: any) => u.id === readyId).github).toEqual({ login: 'ready-github', orgState: 'active', needsAuthorization: false });
     expect(management.body.find((u: any) => u.id === member.id).github).toBeNull();
     expect(management.body).toHaveLength(6);
-    expect(Object.keys(management.body[0]).sort()).toEqual([...fields, 'status', 'github', 'notification'].sort());
+    expect(Object.keys(management.body[0]).sort()).toEqual([...fields, 'status', 'github', 'notification', 'dbSyncPending', 'dbSyncError', 'aliyunSyncPending', 'aliyunSyncError'].sort());
+    for (const user of management.body) expect(user).toMatchObject({ dbSyncPending: false, dbSyncError: null, aliyunSyncPending: false, aliyunSyncError: null });
     expect(management.body.find((u: any) => u.id === disabledId).status).toBe('disabled');
     expect(management.body.find((u: any) => u.id === disabledId).notification.connected).toBe(false);
   });

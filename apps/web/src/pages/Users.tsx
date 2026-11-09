@@ -64,7 +64,7 @@ export function UsersPage() {
   const [name, setName] = useState('');
   const [bio, setBio] = useState('');
 
-  const users = useQuery({ queryKey: ['users'], queryFn: () => api<UserRow[]>('GET', '/api/users'), refetchInterval: query => query.state.data?.some(u => u.dbSyncPending) ? 5000 : false });
+  const users = useQuery({ queryKey: ['users'], queryFn: () => api<UserRow[]>('GET', '/api/users'), refetchInterval: query => query.state.data?.some(u => u.dbSyncPending || u.aliyunSyncPending) ? 5000 : false });
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['users'] });
   const onError = (err: unknown) => toast.error(err instanceof ApiError ? err.message : '操作失败');
 
@@ -85,6 +85,7 @@ export function UsersPage() {
     onSuccess: (_d, v) => {
       setPermissions(null); setStatusUser(null);
       toast.success(v.status === 'disabled' ? '已停用（其 EAT 登录凭证已吊销）' : '已更新');
+      if (_d.aliyunSyncPending) toast.info('阿里云个人凭证状态同步待完成，后台将自动重试');
       if (_d.ossSyncPending) toast.info('OSS 凭证状态正在同步，可在对应 OSS 空间详情查看进度');
       if (_d.llmGatewaySyncPending) toast.info('模型 API Key 的状态仍在同步，请在“LLM API 网关 → 成员与额度”查看进度');
       if (_d.dbSyncPending) toast.info('个人数据库身份同步待完成，平台将自动重试；用户列表显示同步状态');
@@ -130,6 +131,7 @@ export function UsersPage() {
       <Badge variant={row.role === 'admin' ? 'warning' : 'secondary'}>{row.role === 'admin' ? '管理员' : '成员'}</Badge> },
     { accessorKey: 'status', header: '状态', meta: { className: 'whitespace-nowrap' }, cell: ({ row: { original: row } }) =>
       <div className="space-y-1"><Badge variant={row.status === 'active' ? 'success' : 'destructive'}>{row.status === 'active' ? '正常' : '已停用'}</Badge>
+        {row.aliyunSyncPending && <div><Tip content={row.aliyunSyncError ?? '阿里云个人凭证状态正在同步，后台将自动重试'}><Badge variant="warning">阿里云同步待完成</Badge></Tip></div>}
         {row.dbSyncPending && <div><Tip content={row.dbSyncError ?? '个人数据库身份状态正在同步，平台将自动重试'}><Badge variant="warning">数据库同步待完成</Badge></Tip></div>}</div> },
     { id: 'broadcast', header: '全员通知', meta: { hideBelow: 'lg' }, cell: ({ row: { original: row } }) =>
       row.canNotifyAll ? <Badge variant="outline">允许发送</Badge> : <span className="text-sm text-muted-foreground">未授权</span> },
@@ -200,7 +202,7 @@ export function UsersPage() {
       </DialogContent></Dialog>}
       {statusUser && <Dialog open onOpenChange={open => !open && !update.isPending && setStatusUser(null)}><DialogContent>
         <DialogHeader><DialogTitle>{statusUser.status === 'active' ? '停用' : '启用'} {statusUser.name}？</DialogTitle><DialogDescription>
-          {statusUser.status === 'active' ? '其 EAT 登录凭证将立即吊销，模型 API Key、OSS 个人凭证和数据库个人登录角色将同步停用，并断开数据库个人会话。分配的 owner 账号照常可用。同步失败时平台会自动重试。' : '恢复 EAT 用户和个人凭证，原数据库授权与级别保留；用户需要重新登录。'}
+          {statusUser.status === 'active' ? '其 EAT 登录凭证将立即吊销，模型 API Key、阿里云及 OSS 个人凭证和数据库个人登录角色将同步停用，并断开数据库个人会话。分配的 owner 账号照常可用。同步失败时平台会自动重试。' : '恢复 EAT 用户和个人凭证，原数据库授权与级别保留；用户需要重新登录。'}
         </DialogDescription></DialogHeader><div className="flex justify-end gap-2"><Button variant="outline" disabled={update.isPending} onClick={() => setStatusUser(null)}>取消</Button>
           <Button variant={statusUser.status === 'active' ? 'destructive' : 'default'} loading={update.isPending} onClick={() => update.mutate({ id: statusUser.id, status: statusUser.status === 'active' ? 'disabled' : 'active' })}>确认{statusUser.status === 'active' ? '停用' : '启用'}</Button></div>
       </DialogContent></Dialog>}

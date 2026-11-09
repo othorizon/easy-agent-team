@@ -57,6 +57,7 @@ export class AliyunCredentialsService {
       try {
         await this.identities.run(c.accountId, identity.userId, this.aliyun.credentials(c), async session => {
           const [user] = await this.db.select().from(users).where(eq(users.id, identity.userId));
+          if (user?.status !== 'active') return; // Status recovery owns disabled identities; preserve interrupted key generations until restored.
           const [grant] = await this.db.select({ id: aliyunGrants.id }).from(aliyunGrants)
             .innerJoin(aliyunPermissions, eq(aliyunPermissions.id, aliyunGrants.permissionId))
             .where(and(eq(aliyunGrants.userId, identity.userId), eq(aliyunGrants.state, 'active'), eq(aliyunPermissions.connectionId, c.id), eq(aliyunPermissions.cloudExists, true))).limit(1);

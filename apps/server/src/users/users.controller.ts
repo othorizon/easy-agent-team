@@ -1,3 +1,4 @@
+import { CloudIdentityStatusService } from '../cloud-identities/cloud-identity-status.service';
 import { FeishuAppService } from '../notify/feishu/feishu-app.service';
 import { GithubStore } from '../github/github.store';
 import { GithubService } from '../github/github.service';
@@ -46,6 +47,7 @@ export class UsersController {
     private readonly llmGateway: LlmGatewayService,
     private readonly oss: OssService,
     private readonly dbAccess: DbAccessService,
+    private readonly cloudIdentityStatus: CloudIdentityStatusService,
     private readonly github: GithubStore,
     private readonly githubService: GithubService,
     private readonly feishu: FeishuAppService,
@@ -71,6 +73,7 @@ export class UsersController {
       .where(actor.role === 'admin' ? undefined : eq(users.status, 'active'))
       .orderBy(asc(users.createdAt));
     const feishu = await this.feishu.row();
+    const cloudStatus = actor.role === 'admin' ? await this.cloudIdentityStatus.summaries() : new Map();
     return rows.map(({ webhookUrl, verifiedAt, feishuAppId, feishuBoundAt, ...user }) => {
       const webhookVerified = !!webhookUrl && !!verifiedAt;
       const app = !feishuAppId ? 'none' : feishuAppId === feishu.appId ? 'bound' : 'stale';
@@ -82,7 +85,7 @@ export class UsersController {
       };
       const { status, ...profile } = user;
       return { ...profile, notificationReady: notification.connected,
-        ...(actor.role === 'admin' ? { status, notification } : {}) };
+        ...(actor.role === 'admin' ? { status, notification, ...(cloudStatus.get(user.id) ?? { aliyunSyncPending: false, aliyunSyncError: null }) } : {}) };
     });
   }
 
@@ -127,6 +130,7 @@ export class UsersController {
       .set({ ...(body.role ? { role: body.role } : {}), ...(body.status ? { status: body.status } : {}), ...(body.canNotifyAll !== undefined ? { canNotifyAll: body.canNotifyAll } : {}) })
       .where(eq(users.id, id))
       .returning({ id: users.id, name: users.name, email: users.email, role: users.role, status: users.status, canNotifyAll: users.canNotifyAll });
+      if (updated && body.status) await this.cloudIdentityStatus.markPending(tx, id);
       if (updated && body.status === 'disabled') await this.github.userChanged(tx, id);
       // 与用户状态一同持久化，钩子调用前进程退出也不会漏掉安全同步。
       if (updated && body.status) await tx.update(dbPersonalRoles).set({ syncPending: true, syncError: null, syncAttempts: 0, syncRetryAt: null }).where(eq(dbPersonalRoles.userId, id));
@@ -140,6 +144,7 @@ export class UsersController {
       await this.revokeTokens(id);
     }
     const dbSyncPending = body.status ? await this.dbAccess.onUserStatusChanged(id) : false;
+    const aliyunSyncPending = body.status ? await this.cloudIdentityStatus.onUserStatusChanged(id) : false;
     const ossSyncPending = body.status ? await this.oss.onUserStatusChanged(id) : false;
     const llmGatewaySyncPending = body.status ? await this.llmGateway.onUserStatusChanged(id, actor.id) : false;
     await this.audit.record({
@@ -149,7 +154,7 @@ export class UsersController {
       targetId: id,
       meta: { role: body.role, status: body.status, canNotifyAll: body.canNotifyAll },
     });
-    return { ...row, llmGatewaySyncPending, ossSyncPending, dbSyncPending };
+    return { ...row, llmGatewaySyncPending, ossSyncPending, dbSyncPending, aliyunSyncPending };
   }
 
   /** 管理员可修改任意用户的姓名和简介，包含本人；角色/状态保护保持独立。 */

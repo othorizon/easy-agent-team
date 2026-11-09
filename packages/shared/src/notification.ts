@@ -12,6 +12,9 @@ export interface UserListItem {
   /** 个人数据库身份的状态同步摘要，仅管理员可见。 */
   dbSyncPending?: boolean;
   dbSyncError?: string | null;
+  /** 个人凭证停用/恢复同步状态，仅管理员返回。 */
+  aliyunSyncPending?: boolean;
+  aliyunSyncError?: string | null;
   bio: string;
   canNotifyAll: boolean;
   notificationReady: boolean;
