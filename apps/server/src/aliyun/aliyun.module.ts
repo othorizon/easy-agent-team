@@ -1,3 +1,5 @@
+import { AliyunCredentialsController } from './aliyun-credentials.controller';
+import { AliyunCredentialsService } from './aliyun-credentials.service';
 import { Module } from '@nestjs/common';
 import { RamModule } from '../ram/ram.module';
 import { AliyunController } from './aliyun.controller';
@@ -8,8 +10,8 @@ import { AliyunGrantsService } from './aliyun-grants.service';
 
 @Module({
   imports: [RamModule, CloudIdentitiesModule],
-  controllers: [AliyunController, AliyunGrantsController],
-  providers: [AliyunService, AliyunGrantsService],
+  controllers: [AliyunController, AliyunGrantsController, AliyunCredentialsController],
+  providers: [AliyunService, AliyunGrantsService, AliyunCredentialsService],
   exports: [AliyunService, AliyunGrantsService],
 })
 export class AliyunModule {}

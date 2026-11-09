@@ -45,6 +45,7 @@ export class TestRamCloud extends RamCloud {
   failListPoliciesMarker: string | undefined;
   failActions = new Map<string, string>();
   lostUserResponse = false;
+  afterCreateKey?: () => Promise<void>;
   afterAttach?: () => Promise<void>;
   constructor() {
     super();
@@ -75,6 +76,7 @@ export class TestRamCloud extends RamCloud {
     this.failActions.clear();
     this.lostUserResponse = false;
     this.afterAttach = undefined;
+    this.afterCreateKey = undefined;
   }
   isManagement(c: RamCredentials): boolean {
     return this.credentials.get(c.accessKeyId)?.secret === c.accessKeySecret;
@@ -321,6 +323,7 @@ export class TestRamCloud extends RamCloud {
           this.lostKeyResponse = false;
           throw new RamCloudError(action, 'NETWORK_ERROR');
         }
+        await this.afterCreateKey?.();
         return {
           accessKey: { accessKeyId: key.id, accessKeySecret: key.secret },
         };

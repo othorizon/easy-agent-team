@@ -1,8 +1,10 @@
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { and, eq } from 'drizzle-orm';
 import { Pool } from 'pg';
 import { DB, PG_POOL, type Db } from '../db/db.module';
 import { cloudIdentities, users } from '../db/schema';
+import { loadConfig } from '../config';
+import { encryptSecret, decryptSecret } from '../common/crypto';
 import { RamCloud, ramMissing, type RamCredentials, type RamPolicy, type RamUser } from '../ram/ram-cloud';
 
 export type CloudIdentity = typeof cloudIdentities.$inferSelect;
@@ -16,9 +18,24 @@ export function cloudIdentityComments(identityId: string, email: string): string
   const characters = Array.from(email);
   return marker + (characters.length > available ? characters.slice(0, available - 1).join('') + '…' : email);
 }
+export interface ManagedCloudKey {
+  identityId: string;
+  accessKeyId: string;
+  accessKeySecret: string;
+  generation: number;
+  readyAt: string;
+}
+export interface IdentityKeyOptions {
+  reset?: boolean;
+  /** Recovery retries a previously requested rotation; ordinary reads preserve an existing Key. */
+  resume?: boolean;
+  /** False permits reading/retiring keys, but never creates one (paused connections/recovery). */
+  allowCreate?: boolean;
+}
 export interface IdentitySession {
   /** Guard every local commit after external I/O. Invalid once the lock session closes. */
   guard(): void;
+  key(options?: IdentityKeyOptions): Promise<ManagedCloudKey | undefined>;
   ensure(): Promise<CloudIdentity>;
   setPolicy(policyName: string, attached: boolean): Promise<CloudIdentity | undefined>;
   inspect(): Promise<{ identity?: CloudIdentity; policies: RamPolicy[] }>;
@@ -27,7 +44,10 @@ export interface IdentitySession {
 /** One cloud identity per account/user. OSS supplies its own credentials to this same module. */
 @Injectable()
 export class CloudIdentitiesService {
+  private readonly logger = new Logger(CloudIdentitiesService.name);
   private readonly lockPool: Pool;
+  /** Propagation delay is persisted per key; changing this does not shorten an existing wait. */
+  keyPropagationMs = loadConfig().cloudKeyPropagationMs;
   constructor(@Inject(DB) private readonly db: Db, @Inject(PG_POOL) pool: Pool, private readonly ram: RamCloud) {
     // Waiters never consume the business pool needed by the lock holder.
     this.lockPool = new Pool({ ...pool.options, max: 4 });
@@ -94,6 +114,12 @@ export class CloudIdentitiesService {
       };
       return await work({
         guard, ensure, inspect,
+        key: async (options = {}) => {
+          const identity = options.allowCreate === false ? await row() : await ensure();
+          if (!identity) return;
+          await inspect(); // Never mutate keys on a foreign/replaced cloud user.
+          return this.key(identity, credentials, guard, options);
+        },
         setPolicy: async (policyName, attached) => {
           const identity = attached ? await ensure() : await row();
           if (!identity) return;
@@ -110,5 +136,63 @@ export class CloudIdentitiesService {
       c.off('error', onError);
       c.release(lost);
     }
+  }
+
+  private async key(initial: CloudIdentity, credentials: RamCredentials, guard: () => void, options: IdentityKeyOptions): Promise<ManagedCloudKey | undefined> {
+    let identity = initial;
+    const call = async <T>(fn: () => Promise<T>) => { guard(); const value = await fn(); guard(); return value; };
+    const save = async (patch: Partial<CloudIdentity>) => {
+      guard();
+      [identity] = await this.db.update(cloudIdentities).set({ ...patch, updatedAt: new Date() }).where(eq(cloudIdentities.id, identity.id)).returning();
+    };
+    const remove = async (id: string) => {
+      try { await call(() => this.ram.keyStatus(credentials, identity.ramName, id, false)); }
+      catch (e) { if (!ramMissing(e)) throw e; }
+      await call(() => this.ram.deleteKey(credentials, identity.ramName, id));
+    };
+    const retireReady = async () => {
+      if (identity.keyReadyAt && identity.keyReadyAt.getTime() <= Date.now()) {
+        for (const id of identity.retiringKeyIds) {
+          try { await remove(id); }
+          catch {
+            guard();
+            this.logger.warn(`旧个人 Key 待回收（${identity.id}）`);
+            break; // A retired key cleanup outage must not hide the durably saved personal credential.
+          }
+          await save({ retiringKeyIds: identity.retiringKeyIds.filter(k => k !== id) });
+        }
+        if (!identity.retiringKeyIds.length && identity.keyTargetGeneration !== null && identity.keyGeneration >= identity.keyTargetGeneration)
+          await save({ keyTargetGeneration: null });
+      }
+    };
+    // A failed create may have succeeded in RAM. Its secret cannot be recovered: retire only keys
+    // absent from the durable pre-create baseline. Existing managed/manual keys remain untouched.
+    if (identity.keyBaseline !== null) {
+      const baseline = identity.keyBaseline;
+      for (const k of await call(() => this.ram.keys(credentials, identity.ramName)))
+        if (!baseline.includes(k.id)) await remove(k.id);
+      await save({ keyBaseline: null });
+    }
+    await retireReady();
+    if (options.reset && identity.keyTargetGeneration === null)
+      await save({ keyTargetGeneration: identity.keyGeneration + 1 });
+    const needsKey = !identity.keyIdEncrypted || (identity.keyTargetGeneration !== null && identity.keyGeneration < identity.keyTargetGeneration);
+    if (needsKey && options.allowCreate !== false && (!identity.keyIdEncrypted || options.reset || options.resume)) {
+      const baseline = (await call(() => this.ram.keys(credentials, identity.ramName))).map(k => k.id);
+      if (baseline.length >= 2) throw new ConflictException('RAM 用户 Key 配额已满，请管理员处理非 EAT 管理的 Key；原有 EAT Key 保持可用');
+      await save({ keyBaseline: baseline, keyTargetGeneration: identity.keyTargetGeneration ?? identity.keyGeneration + 1 });
+      const key = await call(() => this.ram.createKey(credentials, identity.ramName));
+      const oldId = identity.keyIdEncrypted ? decryptSecret(identity.keyIdEncrypted) : undefined;
+      // Both secret and propagation deadline commit before any previous key is disabled/deleted.
+      await save({ keyIdEncrypted: encryptSecret(key.id), keySecretEncrypted: encryptSecret(key.secret),
+        keyBaseline: null, keyGeneration: identity.keyGeneration + 1,
+        keyReadyAt: new Date(Date.now() + this.keyPropagationMs),
+        retiringKeyIds: [...new Set([...identity.retiringKeyIds, ...(oldId ? [oldId] : [])])],
+      });
+    }
+    await retireReady();
+    if (!identity.keyIdEncrypted || !identity.keySecretEncrypted) return;
+    return { identityId: identity.id, accessKeyId: decryptSecret(identity.keyIdEncrypted), accessKeySecret: decryptSecret(identity.keySecretEncrypted),
+      generation: identity.keyGeneration, readyAt: (identity.keyReadyAt ?? new Date(0)).toISOString() };
   }
 }

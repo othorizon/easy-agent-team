@@ -22,6 +22,39 @@ OSS 所在的云账号在身份迁移完成前不能接入，关闭 OSS 功能�
 
 统一身份模块独立于阿里云功能设置，按次接收管理凭证，后续 OSS 使用自己的凭证调用。每个云账号和用户共用 PostgreSQL 会话 advisory lock，锁使用独立连接池；丢锁后不发布执行结果。授权与持久操作表一起提交，云 API 调用在平台事务之外。后台每 30 秒检查未完成操作，失败按 30 秒递增退避至最多 5 分钟，重启后恢复。身份创建响应丢失时，凭随机标记确认本轮来源后复用。
 
-本地迁移 `0041_aliyun_discovery` 新增接入和权限点，`0044_aliyun_grants` 新增个人身份、授权和操作表。个人凭证、停用用户、云端不一致修复、接入清理和 OSS 身份迁移由后续工单接入。
+本地迁移 `0041_aliyun_discovery` 新增接入和权限点，`0044_aliyun_grants` 新增个人身份、授权和操作表。个人凭证见下节；停用用户、云端不一致修复、接入清理和 OSS 身份迁移由后续工单接入。
 
 验证入口：`apps/server/test/aliyun.spec.ts` 与 `aliyun-grants.spec.ts` 通过完整 HTTP 应用，仅以 `TestRamCloud` 替换云边界，通知送到测试回环接收器。覆盖多账号、幂等、策略配额、归属冲突、资料更新、暂停、撤销与放弃、通知审计、重启和丢锁恢复。`scripts/test-aliyun-ui.mjs` 使用构建后的控制台与本地 zod 夹具，覆盖桌面和手机交互。
+
+
+## 本人个人凭证与 CLI
+
+「我的权限」的云账号卡片可以查看、再次读取或重置本人的 AccessKey，个人凭证只供本人临时使用，不要配进线上服务。同一云账号的 OSS 空间共用这把 Key，重置确认框和 CLI 会说明影响范围。管理员没有读取他人 SK 的入口；每次成功读取或重置都有审计，响应为 `Cache-Control: no-store`，审计不含 AK/SK。
+
+至少持有一项有效授权才能领取或重置。接入暂停后不能新领或重置，已有个人 Key 照常可读；停用用户不能读取。无授权和歧义均在获取 Key 与启动子进程前拒绝。
+
+```sh
+eat aliyun grants
+eat aliyun revoke eat-perm-read --account team-cloud
+eat aliyun credentials --account team-cloud
+eat aliyun credentials --account team-cloud reset
+eat aliyun run team-cloud -- aliyun sts GetCallerIdentity
+eat aliyun run team-cloud -- ossutil ls
+```
+
+接入名称和云账号 ID 都能指定云账号。本人只有一个有权云账号时，`credentials` 的 `--account` 和 `run` 的云账号参数均可省略。`run` 需要 `--` 分隔命令，管道或 shell 展开显式写为 `-- sh -c '…'`。`credentials` 输出 JSON 到 stdout；用途与重置影响写到 stderr。
+
+`run` 只为子进程注入凭证和默认地域，保留父环境与工作目录，不创建配置文件，透传退出码和信号。支持 `aliyun` 和 **ossutil 2**；显式传入的子命令凭证/profile 参数属于调用者主动覆盖。
+
+| 子命令 | 子进程变量 |
+| --- | --- |
+| aliyun | `ALIBABA_CLOUD_ACCESS_KEY_ID`、`ALIBABA_CLOUD_ACCESS_KEY_SECRET`、`ALIBABA_CLOUD_REGION_ID`、`ALIBABA_CLOUD_IGNORE_PROFILE=TRUE` |
+| ossutil 2 | `OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET`、`OSS_REGION` |
+
+Aliyun CLI 默认优先读取 profile，所以必须设置 `ALIBABA_CLOUD_IGNORE_PROFILE=TRUE`。同时清除子进程继承的阿里云身份变量与 ossutil 的 STS、角色、profile 选择变量，避免旧身份覆盖新 AK；父环境保持原样。官方依据：[Aliyun 环境变量](https://help.aliyun.com/zh/cli/environment-variables)、[AK 凭证](https://help.aliyun.com/zh/cli/ak-credential)、[ossutil 2 文档](https://help.aliyun.com/zh/oss/developer-reference/ossutil-overview/)、[ossutil 2 环境变量新功能](https://help.aliyun.com/zh/oss/developer-reference/ossutil-2-0-new-features)。
+
+新 Key 的传播等待由 `EAT_CLOUD_KEY_PROPAGATION_MS` 配置，默认 45000 毫秒。服务端创建并加密保存新 Key 及 `readyAt` 后返回，CLI 在 `readyAt` 前向 stderr 输出「正在等待新 Key 生效」，实际等到期限再启动命令。期限持久化，服务重启不会缩短既有等待。
+
+Key 生命周期与授权共用每云账号/用户的会话锁。迁移 `0046_cloud_identity_keys` 增加加密 Key、创建基线、待回收 Key、当前/目标世代及生效时间。创建响应丢失时回收基线外的孤立 Key，基线内的手工 Key 和旧 EAT Key 均保留。重置先保存新 Key，待其生效再停用并删除旧 Key；旧 Key 清理失败自动重试，仍可读取已保存的新 Key。RAM 两把 Key 的槽位被手工 Key 占满时明确失败，绝不先删旧 EAT Key 腾位。后台每 30 秒及重启时恢复未完成操作；暂停时只恢复孤立/旧 Key 清理，不创建新 Key。
+
+测试：`aliyun-credentials.spec.ts` 通过完整 HTTP 应用和唯一内存 RAM 边界覆盖本人读取、重置、失响应、重启、丢锁、配额、暂停与撤销；CLI `aliyun.spec.ts` 使用 API 桩和真实子进程验证名称/云账号解析、等待、变量、父环境、无文件、退出码与命令树。

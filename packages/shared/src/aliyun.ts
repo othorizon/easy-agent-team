@@ -95,3 +95,18 @@ export type RevokeAliyunGrantRequest = z.infer<typeof revokeAliyunGrantSchema>;
 export type AliyunGrantInfo = z.infer<typeof aliyunGrantInfoSchema>;
 export type AliyunGrantSource = z.infer<typeof aliyunGrantSourceSchema>;
 export type AliyunGrantsResult = z.infer<typeof aliyunGrantsResultSchema>;
+
+export const ALIYUN_CREDENTIAL_NOTE = '个人凭证只供本人临时使用，不要配进线上服务。';
+export const aliyunCredentialsSchema = z.object({
+  connectionId: z.string().uuid(), connectionName: z.string(), accountId: z.string(), defaultRegion: z.string(),
+  identityId: z.string().uuid(), accessKeyId: z.string(), accessKeySecret: z.string(),
+  generation: z.number().int().nonnegative(), readyAt: z.string().datetime(),
+});
+export type AliyunCredentials = z.infer<typeof aliyunCredentialsSchema>;
+/** Resolve only accounts with an effective personal authorization; callers must reject 0/multiple hits. */
+export function matchAliyunAccounts(grants: AliyunGrantInfo[], ref?: string) {
+  const accounts = [...new Map(grants.filter(g => g.state === 'active').map(g => [g.accountId, {
+    accountId: g.accountId, connectionId: g.connectionId, connectionName: g.connectionName,
+  }])).values()];
+  return ref === undefined ? accounts : accounts.filter(a => a.accountId === ref.trim() || a.connectionName === ref.trim());
+}

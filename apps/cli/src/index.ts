@@ -1,3 +1,4 @@
+import { registerAliyunCommands } from './commands/aliyun.js';
 import { registerNotifyCommands } from './commands/notify.js';
 import { registerRequestCommands } from './commands/requests.js';
 import { registerOssCommands } from './commands/oss.js';
@@ -222,6 +223,7 @@ configCmd
   .action(configUnset);
 
 registerOssCommands(program);
+registerAliyunCommands(program);
 
 const db = program.command('db').description('数据库账号：查看实例、申请库、查看我的分配、取连接凭证');
 db.command('instances').description('查看可用的数据库实例').action(dbInstances);

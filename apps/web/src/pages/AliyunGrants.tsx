@@ -1,10 +1,11 @@
-import { grantAliyunPermissionSchema, revokeAliyunGrantSchema, type AliyunGrantInfo, type AliyunGrantsResult, type AliyunPermissionInfo, type GrantAliyunPermissionRequest, type RevokeAliyunGrantRequest, type UserPublic } from '@eat/shared';
+import { ALIYUN_CREDENTIAL_NOTE, type AliyunCredentials, grantAliyunPermissionSchema, revokeAliyunGrantSchema, type AliyunGrantInfo, type AliyunGrantsResult, type AliyunPermissionInfo, type GrantAliyunPermissionRequest, type RevokeAliyunGrantRequest, type UserPublic } from '@eat/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { api } from '../api';
+import { CopyButton, Cmd } from '../components/code';
 import { Confirm } from '../components/confirm';
 import { DataTable, type DataTableColumn } from '../components/data-table';
 import { Empty } from '../components/empty';
@@ -48,6 +49,7 @@ export function AliyunGrants({ manage = false }: { manage?: boolean }) {
       <div className="flex flex-wrap items-center gap-2"><h2 className="font-medium break-all">{a.connectionName}</h2>{a.connectionStatus === 'paused' && <Badge variant="secondary">接入已暂停</Badge>}</div>
       <p className="break-all text-xs text-muted-foreground">云账号 ID：{a.accountId} · 个人身份：{a.ramName}</p>
       <p className="text-sm">已绑定的自定义策略：{a.customPolicyCount === null ? '暂时无法读取' : `${a.customPolicyCount} 条`}</p>
+      <AliyunKeyCard connectionId={a.connectionId} connectionName={a.connectionName} paused={a.connectionStatus === 'paused'} authorized={result.data!.grants.some(g => g.accountId === a.accountId && g.state === 'active')} />
       {a.error && <p role="alert" className="break-words text-sm text-destructive">{a.error}</p>}
     </section>)}
     {manage && <h2 className="text-sm font-semibold">授权清单</h2>}
@@ -76,4 +78,33 @@ function RevokeForm({ row, done }: { row: AliyunGrantInfo; done(): void }) {
   const save = useMutation({ mutationFn: (v: RevokeAliyunGrantRequest) => api<AliyunGrantInfo>('POST', `/api/aliyun/grants/${row.id}/revoke`, v),
     onSuccess: r => { if (r.error) toast.error(r.error); else toast.success('授权已撤销'); done(); }, onError: (e: Error) => toast.error(e.message) });
   return <form className="space-y-4" onSubmit={form.handleSubmit(v => save.mutate(v))}><Field label="撤销原因（选填）" htmlFor="aliyun-revoke-reason" error={form.formState.errors.reason?.message}><Textarea id="aliyun-revoke-reason" {...form.register('reason')} /></Field><div className="flex justify-end"><Button type="submit" variant="destructive" loading={save.isPending}>撤销授权</Button></div></form>;
+}
+
+/** Secrets stay in this component's memory and never enter the shared query cache. */
+function AliyunKeyCard({ connectionId, connectionName, paused, authorized }: { connectionId: string; connectionName: string; paused: boolean; authorized: boolean }) {
+  const [credentials, setCredentials] = useState<AliyunCredentials | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = async (reset: boolean) => {
+    setBusy(true);
+    try { setCredentials(await api<AliyunCredentials>('POST', `/api/aliyun/connections/${connectionId}/credentials${reset ? '/reset' : ''}`)); }
+    catch (e) { toast.error((e as Error).message); }
+    finally { setBusy(false); }
+  };
+  return <div className="space-y-3 border-t pt-3">
+    <h3 className="text-sm font-medium">个人凭证</h3>
+    <p className="text-xs text-muted-foreground">{ALIYUN_CREDENTIAL_NOTE}同一云账号下的 OSS 空间也使用这把 Key。</p>
+    <div className="flex flex-wrap gap-2">
+      <Button size="sm" variant="outline" disabled={!authorized || busy} loading={busy} onClick={() => credentials ? setCredentials(null) : void load(false)}>{credentials ? '隐藏 Key' : '查看 / 领取 Key'}</Button>
+      <Confirm title="重置这个云账号的个人 Key？" description="同一云账号下的 OSS 空间也在使用这把 Key。新 Key 生效后旧 Key 将失效，请更新本人的临时使用配置；不要用于线上服务。" confirmText="重置 Key" onConfirm={() => void load(true)}>
+        <Button size="sm" variant="outline-destructive" disabled={!authorized || paused || busy}>重置 Key</Button>
+      </Confirm>
+    </div>
+    {paused && <p className="text-xs text-muted-foreground">接入已暂停，不能新领或重置；已有 Key 照常可读。</p>}
+    {!authorized && <p className="text-xs text-muted-foreground">需要先取得此云账号的有效授权。</p>}
+    {authorized && credentials && <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-2 rounded-lg bg-muted/50 p-3 text-xs">
+      <dt className="text-muted-foreground">AccessKey ID</dt><dd className="flex min-w-0 items-center gap-1"><code className="break-all">{credentials.accessKeyId}</code><CopyButton text={credentials.accessKeyId} /></dd>
+      <dt className="text-muted-foreground">AccessKey Secret</dt><dd className="flex min-w-0 items-center gap-1"><code className="break-all">{credentials.accessKeySecret}</code><CopyButton text={credentials.accessKeySecret} /></dd>
+    </dl>}
+    <Cmd text={`eat aliyun run ${connectionName} -- aliyun sts GetCallerIdentity`} />
+  </div>;
 }

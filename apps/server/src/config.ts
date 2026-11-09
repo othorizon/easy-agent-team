@@ -3,6 +3,8 @@ import * as path from 'node:path';
 /** 平台配置：全部来自环境变量，开发期有安全的默认值 */
 export interface AppConfig {
   port: number;
+  /** New personal RAM keys wait for propagation; the per-key deadline is durable. */
+  cloudKeyPropagationMs: number;
   databaseUrl: string;
   /** 值加密主密钥（base64，32 字节）。生产必须显式配置 */
   kek: string;
@@ -74,6 +76,7 @@ export function loadConfig(): AppConfig {
   }
   return {
     port: Number(process.env.PORT ?? 3000),
+    cloudKeyPropagationMs: nonNegativeInt(process.env.EAT_CLOUD_KEY_PROPAGATION_MS ?? '45000', 45_000),
     databaseUrl: process.env.DATABASE_URL ?? 'postgres://dev@127.0.0.1:5433/eat_dev',
     // 开发缺省密钥：仅为本地跑通，不用于任何真实数据
     kek: kek || Buffer.from('eat-dev-insecure-kek-32-bytes!!!').toString('base64'),

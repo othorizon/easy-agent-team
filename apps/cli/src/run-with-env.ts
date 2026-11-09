@@ -13,13 +13,15 @@ function windowsCommandLine(argv: string[]): string {
  * 把变量注入子进程后运行命令：`eat env run` 与 `eat db credentials run` 共用。
  * 值只进子进程、不落盘；退出码透传，终止信号转发给子进程。
  */
-export async function runWithEnv(command: string[], injected: Map<string, string>): Promise<void> {
+export async function runWithEnv(command: string[], injected: Map<string, string>, cleared: string[] = []): Promise<void> {
   // 平台值覆盖当前 shell 里的同名变量：是点名要的，静默用了 shell 里残留的那个更难查。
   // 覆盖了哪些只报 key 名，走 stderr，不干扰被运行命令的输出
   const shadowed = [...injected.keys()].filter((k) => process.env[k] !== undefined && process.env[k] !== injected.get(k));
   if (shadowed.length > 0) console.error(`eat: 覆盖了当前 shell 里已有的 ${shadowed.join(', ')}`);
 
-  const env = { ...process.env, ...Object.fromEntries(injected) };
+  const env = { ...process.env };
+  for (const key of cleared) delete env[key];
+  Object.assign(env, Object.fromEntries(injected));
   const child =
     process.platform === 'win32'
       ? spawn(windowsCommandLine(command), { stdio: 'inherit', env, shell: true })
