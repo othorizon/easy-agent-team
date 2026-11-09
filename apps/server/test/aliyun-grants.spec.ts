@@ -143,8 +143,8 @@ it('同一人在同一云账号的多项授权共用个人身份；我的权限�
   expect(mine.body.accounts).toMatchObject([{ accountId: 'account-test', customPolicyCount: 2 }]);
   const cloud = ram.users.get(`eat-${userId.replaceAll('-', '')}`)!;
   expect(cloud.displayName).toBe('Member');
-  expect(cloud.comments).toContain(userId);
-  expect(cloud.comments).toContain('member@aliyun.test');
+  expect(cloud.comments).toMatch(/^EAT:[A-Za-z0-9_-]{22}:member@aliyun\.test$/);
+  expect(cloud.comments).not.toContain(userId);
   expect(cloud.keys).toEqual([]);
 });
 
@@ -204,7 +204,7 @@ it('自定义策略配额失败使用明确中文，释放配额后重试生效'
   expect((await api('POST', `/api/aliyun/grants/${full.body.id}/retry`)).body.state).toBe('active');
   expect(cloud.attached.has('outside-0')).toBe(true);
 });
-it('同名非EAT身份以及UserId被替换均拒绝接管', async () => {
+it('同名非EAT身份拒绝接管，备注正确但云端UserId被替换也拒绝', async () => {
   const { permissions } = await directory();
   const name = `eat-${userId.replaceAll('-', '')}`;
   await ram.createUser(credentials, { name, displayName: 'Human', comments: 'outside EAT' });
@@ -215,20 +215,26 @@ it('同名非EAT身份以及UserId被替换均拒绝接管', async () => {
   const granted = (await api('POST', `/api/aliyun/grants/${conflict.id}/retry`)).body;
   expect(granted.state).toBe('active');
   const cloud = ram.users.get(name)!;
+  const comments = cloud.comments;
+  expect(comments).toMatch(/^EAT:[A-Za-z0-9_-]{22}:member@aliyun\.test$/);
   cloud.userId = 'replacement-user';
   const replaced = (await api('POST', `/api/aliyun/permissions/${permissions[1].id}/grants`, admin, { userId })).body;
   expect(replaced.state).toBe('failed'); expect(replaced.error).toContain('拒绝接管');
+  expect(cloud.comments).toBe(comments);
   expect([...cloud.attached]).toEqual(['eat-perm-read']);
 });
-it('改名与邮箱更新在下次授予同步，跨云账号各有一个身份', async () => {
+it('改名与邮箱更新在下次授予同步并升级旧备注，跨云账号各有一个身份', async () => {
   const { permissions } = await directory();
   const first = (await api('POST', `/api/aliyun/permissions/${permissions[0].id}/grants`, admin, { userId })).body;
-  const originalId = ram.users.get(`eat-${userId.replaceAll('-', '')}`)!.userId;
+  const cloud = ram.users.get(`eat-${userId.replaceAll('-', '')}`)!;
+  const originalId = cloud.userId;
+  const marker = cloud.comments.match(/^EAT:[A-Za-z0-9_-]{22}:/)![0];
+  // The previous format shares the exact provenance token, followed by the redundant user UUID.
+  cloud.comments = `${marker}${userId}:member@aliyun.test`;
   await db.update(schema.users).set({ name: 'New name', email: 'renamed@aliyun.test' }).where(eq(schema.users.id, userId));
   const second = (await api('POST', `/api/aliyun/permissions/${permissions[1].id}/grants`, admin, { userId })).body;
   expect(second.identityId).toBe(first.identityId);
-  const cloud = ram.users.get(`eat-${userId.replaceAll('-', '')}`)!;
-  expect(cloud).toMatchObject({ userId: originalId, displayName: 'New name' }); expect(cloud.comments).toContain('renamed@aliyun.test');
+  expect(cloud).toMatchObject({ userId: originalId, displayName: 'New name', comments: `${marker}renamed@aliyun.test` });
   const keys = { accessKeyId: 'two-id', accessKeySecret: 'two-secret' };
   ram.registerAccount(keys, 'second-account');
   const secondDirectory = await directory(['other'], keys, 'cloud-two');
@@ -309,23 +315,24 @@ it('会话锁丢失后不发布已生效，重启核对云端后恢复同一授�
     expect((await api('GET', '/api/aliyun/grants', member)).body.grants[0].id).toBe(before.id);
   } finally { proceed(); ram.afterAttach = undefined; await fault.end(); }
 });
-it('长邮箱只在RAM备注中截断加省略号，完整用户ID、归属和平台邮箱保留，更新仍可授权', async () => {
+it('长邮箱只在RAM备注中截断加省略号，身份标记和平台邮箱完整保留，更新仍可授权', async () => {
   const { permissions } = await directory();
   const email = `${'a'.repeat(40)}@${'b'.repeat(60)}.test`;
   await db.update(schema.users).set({ email }).where(eq(schema.users.id, userId));
   const first = (await api('POST', `/api/aliyun/permissions/${permissions[0].id}/grants`, admin, { userId })).body;
   expect(first.state).toBe('active');
   const cloud = ram.users.get(`eat-${userId.replaceAll('-', '')}`)!;
+  const marker = cloud.comments.match(/^EAT:[A-Za-z0-9_-]{22}:/)![0];
   expect(Array.from(cloud.comments)).toHaveLength(128);
-  expect(cloud.comments).toContain(userId); expect(cloud.comments).toMatch(/^EAT:/); expect(cloud.comments.endsWith('…')).toBe(true);
-  expect(cloud.comments).toContain(email.slice(0, 63));
+  expect(cloud.comments).toBe(`${marker}${'a'.repeat(40)}@${'b'.repeat(59)}…`);
+  expect(cloud.comments).not.toContain(userId);
   const complete = (await api('GET', '/api/users')).body.find((u: { id: string }) => u.id === userId);
   expect(complete.email).toBe(email);
   await db.update(schema.users).set({ email: 'changed@example.test', name: '新名字' }).where(eq(schema.users.id, userId));
   const second = (await api('POST', `/api/aliyun/permissions/${permissions[1].id}/grants`, admin, { userId })).body;
   expect(second).toMatchObject({ state: 'active', identityId: first.identityId });
-  expect(cloud.comments).toContain('changed@example.test'); expect(cloud.comments.endsWith('…')).toBe(false);
-  cloud.comments = cloud.comments.replace(userId, 'foreign-user');
+  expect(cloud.comments).toBe(`${marker}changed@example.test`);
+  cloud.comments = 'EAT:foreign-token:changed@example.test';
   const wrong = (await api('POST', `/api/aliyun/permissions/${permissions[0].id}/grants`, admin, { userId })).body;
   expect(wrong.state).toBe('failed'); expect(wrong.error).toContain('拒绝接管');
 });

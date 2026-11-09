@@ -6,12 +6,12 @@ import { cloudIdentities, users } from '../db/schema';
 import { RamCloud, ramMissing, type RamCredentials, type RamPolicy, type RamUser } from '../ram/ram-cloud';
 
 export type CloudIdentity = typeof cloudIdentities.$inferSelect;
-export const cloudIdentityMarker = (identityId: string, userId: string) =>
-  `EAT:${Buffer.from(identityId.replaceAll('-', ''), 'hex').toString('base64url')}:${userId}:`;
+export const cloudIdentityMarker = (identityId: string) =>
+  `EAT:${Buffer.from(identityId.replaceAll('-', ''), 'hex').toString('base64url')}:`;
 
-/** RAM comments allow 128 characters. Provenance and the complete user UUID are never truncated. */
-export function cloudIdentityComments(identityId: string, userId: string, email: string): string {
-  const marker = cloudIdentityMarker(identityId, userId);
+/** RAM comments allow 128 characters. The provenance marker is never truncated. */
+export function cloudIdentityComments(identityId: string, email: string): string {
+  const marker = cloudIdentityMarker(identityId);
   const available = 128 - Array.from(marker).length;
   const characters = Array.from(email);
   return marker + (characters.length > available ? characters.slice(0, available - 1).join('') + '…' : email);
@@ -53,7 +53,7 @@ export class CloudIdentitiesService {
       guard();
       const call = async <R>(fn: () => Promise<R>) => { guard(); const value = await fn(); guard(); return value; };
       const row = async () => (await this.db.select().from(cloudIdentities).where(and(eq(cloudIdentities.accountId, accountId), eq(cloudIdentities.userId, userId))))[0];
-      const marker = (identity: CloudIdentity) => cloudIdentityMarker(identity.id, userId);
+      const marker = (identity: CloudIdentity) => cloudIdentityMarker(identity.id);
       const verify = (identity: CloudIdentity, user: RamUser) => {
         if ((identity.cloudUserId && identity.cloudUserId !== user.id) || !user.comments.startsWith(marker(identity)))
           throw new ConflictException('同名 RAM 用户不是 EAT 创建的个人身份，请交管理员处理，拒绝接管');
@@ -78,7 +78,7 @@ export class CloudIdentitiesService {
           guard();
           [identity] = await this.db.insert(cloudIdentities).values({ accountId, userId, ramName: `eat-${userId.replaceAll('-', '')}` }).returning();
         }
-        const comments = cloudIdentityComments(identity.id, userId, user.email);
+        const comments = cloudIdentityComments(identity.id, user.email);
         let cloud: RamUser;
         try { cloud = await call(() => this.ram.getUser(credentials, identity.ramName)); }
         catch (e) {
