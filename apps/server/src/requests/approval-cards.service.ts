@@ -17,8 +17,6 @@ import { approvalCardState, buildApprovalCard, type ApprovalCardRow, type Approv
 
 /** 飞书卡片回调必须 3 秒内应答；开通资源超过这个时间就先回「正在处理」，完成后再回写卡片 */
 const CALLBACK_BUDGET_MS = 2500;
-const SELECT = `SELECT r.*,u.name requester_name,u.email requester_email,a.name approver_name
-  FROM approval_request r LEFT JOIN "user" u ON u.id=r.requester_id LEFT JOIN "user" a ON a.id=r.decided_by`;
 const actionSchema = z.object({
   requestId: z.uuid(),
   action: z.enum(['approve', 'reject_start', 'reject_cancel', 'reject']),
@@ -59,8 +57,12 @@ export class ApprovalCards implements OnModuleInit {
     return new URL(`/requests?request=${id}`, loadConfig().publicUrl).toString();
   }
 
-  private async load(id: string): Promise<ApprovalCardRow | null> {
-    const row = (await this.pool.query(`${SELECT} WHERE r.id=$1`, [id])).rows[0];
+  private select(viewerId: string) {
+    return `SELECT r.*,u.name requester_name,u.email requester_email,a.name approver_name,${this.types.dynamicSelect()},${this.types.forViewer('viewer.id', 'viewer.role')} can_approve
+      FROM approval_request r LEFT JOIN "user" u ON u.id=r.requester_id LEFT JOIN "user" a ON a.id=r.decided_by JOIN "user" viewer ON viewer.id=${viewerId}`;
+  }
+  private async load(id: string, viewerId: string): Promise<ApprovalCardRow | null> {
+    const row = (await this.pool.query(`${this.select('$2')} WHERE r.id=$1`, [id, viewerId])).rows[0];
     return row ? this.types.present(row) : null;
   }
 
@@ -87,7 +89,7 @@ export class ApprovalCards implements OnModuleInit {
     if (!card || card.request_id !== requestId || card.user_id !== user.id) {
       return { toast: { type: 'warning', content: '这张卡片不是发给你的，请在 EAT 页面处理' } };
     }
-    const current = await this.load(requestId);
+    const current = await this.load(requestId, user.id);
     if (!current) return { toast: { type: 'warning', content: '申请不存在或已删除' } };
     if (current.status !== 'pending') {
       await this.markRendered(card.id, current);
@@ -117,7 +119,7 @@ export class ApprovalCards implements OnModuleInit {
       void run.then(
         () => setTimeout(() => void this.sync(requestId).catch(() => undefined), 1000),
         async (error: unknown) => {
-          const latest = await this.load(requestId);
+          const latest = await this.load(requestId, user.id);
           const api = this.feishu.client(await this.feishu.row());
           if (latest && api) {
             const data = buildApprovalCard(latest, {
@@ -132,7 +134,7 @@ export class ApprovalCards implements OnModuleInit {
       await this.recordAction(user.id, requestId, action);
       return this.respond(current, 'processing', { type: 'info', content: '已提交，正在处理…' }, '处理完成后卡片会自动更新');
     }
-    const latest = (await this.load(requestId)) ?? current;
+    const latest = (await this.load(requestId, user.id)) ?? current;
     if (outcome.kind === 'error') {
       if (latest.status !== 'pending') await this.markRendered(card.id, latest);
       return this.respond(latest, latest.status === 'pending' ? 'pending' : 'result', {
@@ -173,9 +175,10 @@ export class ApprovalCards implements OnModuleInit {
     const api = this.feishu.client(settings);
     if (!api) return;
     const { rows } = await this.pool.query(
-      `SELECT c.id card_id,c.message_id,c.state card_state,x.* FROM feishu_card c
-      JOIN (${SELECT}) x ON x.id=c.request_id
-      WHERE c.app_id=$1 AND c.state <> x.status||':'||coalesce(x.execution,'')
+      `SELECT x.* FROM feishu_card c CROSS JOIN LATERAL (
+        SELECT c.id card_id,c.message_id,c.state card_state,resource.* FROM (${this.select('c.user_id')}) resource
+        WHERE resource.id=c.request_id
+      ) x WHERE c.app_id=$1 AND c.state <> x.presentation_state||':'||x.can_approve::text
       AND c.created_at > now()-interval '30 days'
       AND (c.update_error IS NULL OR c.updated_at < now()-interval '10 minutes')
       ${requestId ? 'AND c.request_id=$2' : ''}

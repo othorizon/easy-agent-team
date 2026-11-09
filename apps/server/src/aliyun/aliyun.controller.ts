@@ -27,11 +27,6 @@ export class AliyunController {
   status() {
     return this.aliyun.availability();
   }
-  @Get('permissions/manage')
-  @Roles('admin')
-  permissions() {
-    return this.aliyun.listPermissions();
-  }
   @Post('connections/:id/refresh')
   @Roles('admin')
   refresh(@Param('id', ParseUUIDPipe) id: string) {

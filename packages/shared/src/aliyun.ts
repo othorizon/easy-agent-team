@@ -80,7 +80,7 @@ export const aliyunGrantInfoSchema = z.object({
   userId: z.string().uuid(), userName: z.string(), identityId: z.string().uuid().nullable(),
   state: aliyunGrantStateSchema, error: z.string().nullable(), source: aliyunGrantSourceSchema,
   grantedBy: z.string().uuid(), revokedBy: z.string().uuid().nullable(), revocationReason: z.string().nullable(),
-  relinquished: z.boolean(), canManage: z.boolean(), createdAt: z.string(), updatedAt: z.string(),
+  relinquished: z.boolean(), canManage: z.boolean(), cloudExists: z.boolean(), createdAt: z.string(), updatedAt: z.string(),
 });
 export const aliyunIdentityAccountInfoSchema = z.object({
   accountId: z.string(), connectionId: z.string().uuid(), connectionName: z.string(),
@@ -109,4 +109,35 @@ export function matchAliyunAccounts(grants: AliyunGrantInfo[], ref?: string) {
     accountId: g.accountId, connectionId: g.connectionId, connectionName: g.connectionName,
   }])).values()];
   return ref === undefined ? accounts : accounts.filter(a => a.accountId === ref.trim() || a.connectionName === ref.trim());
+}
+
+export const configureAliyunPermissionSchema = z.object({
+  open: z.boolean(),
+  purpose: z.string().trim().max(2000),
+  dataScope: z.string().trim().max(2000),
+  ownerId: z.string().uuid().nullable(),
+});
+export const configuredAliyunPermissionSchema = configureAliyunPermissionSchema.extend({ id: z.string().uuid() });
+export type ConfiguredAliyunPermission = z.infer<typeof configuredAliyunPermissionSchema>;
+export const requestAliyunPermissionSchema = z.object({ reason: z.string().trim().min(1).max(2000) });
+export const aliyunCatalogPermissionSchema = aliyunPermissionInfoSchema.extend({
+  connectionName: z.string(), accountId: z.string(), connectionStatus: z.enum(['enabled', 'paused']),
+  ownerName: z.string().nullable(), ownerStatus: z.enum(['active', 'disabled']).nullable(),
+  canManage: z.boolean(), held: z.boolean(), pendingRequestId: z.string().uuid().nullable(),
+});
+export const aliyunCatalogSchema = z.array(aliyunCatalogPermissionSchema);
+export const aliyunPermissionDocumentSchema = z.object({ policyName: z.string(), document: z.string(), fetchedAt: z.string() });
+export const aliyunPermissionRequestResultSchema = z.object({ requestId: z.string().uuid().nullable(), grant: aliyunGrantInfoSchema.nullable() });
+export type ConfigureAliyunPermission = z.infer<typeof configureAliyunPermissionSchema>;
+export type RequestAliyunPermission = z.infer<typeof requestAliyunPermissionSchema>;
+export type AliyunCatalogPermission = z.infer<typeof aliyunCatalogPermissionSchema>;
+export type AliyunPermissionDocument = z.infer<typeof aliyunPermissionDocumentSchema>;
+export type AliyunPermissionRequestResult = z.infer<typeof aliyunPermissionRequestResultSchema>;
+
+/** Resolve a policy with an optional connection name or cloud account ID, before any mutation. */
+export function matchAliyunPermissions<T extends Pick<AliyunCatalogPermission, 'id' | 'policyName' | 'connectionName' | 'accountId'>>(permissions: T[], name: string, account?: string): T[] {
+  const at = name.lastIndexOf('@');
+  const policy = at < 0 ? name : name.slice(0, at);
+  const selector = account ?? (at < 0 ? undefined : name.slice(at + 1));
+  return permissions.filter(p => (p.id === policy || p.policyName === policy) && (!selector || p.connectionName === selector || p.accountId === selector));
 }

@@ -23,7 +23,7 @@ EAT 是人和 Agent 与企业上下文之间的协调层，把这些障碍收进
 | | 能力 |
 |---|---|
 | **可理解**<br>让 Agent 读懂团队 | 数据持续集成<sup>※</sup> · [Skill 规范](docs/features.md#skill-管理与分发) · [角色模板](docs/features.md#角色模板) · [MCP 配置分发](docs/features.md#mcp-配置分发) |
-| **可调用**<br>按权限取用资源 | [环境变量与凭证](docs/features.md#环境变量) · [数据库](docs/features.md#数据库账号分配) · [对象存储](docs/features.md#oss-对象存储) · [LLM 网关](docs/features.md#llm-api-网关) · [应用部署](docs/features.md#部署托管dokploy) · [Folio 页面发布](docs/features.md#folio-发布与评论) |
+| **可调用**<br>按权限取用资源 | [环境变量与凭证](docs/features.md#环境变量) · [数据库](docs/features.md#数据库账号分配) · [阿里云权限](docs/features.md#阿里云权限) · [对象存储](docs/features.md#oss-对象存储) · [LLM 网关](docs/features.md#llm-api-网关) · [应用部署](docs/features.md#部署托管dokploy) · [Folio 页面发布](docs/features.md#folio-发布与评论) |
 | **可流动**<br>人与 Agent 间流转 | [求助](docs/features.md#求助系统人机协作) · [权限审批](docs/features.md#环境变量) · [飞书通知与卡片审批](docs/feishu-app.md) · [Folio 评论 @](docs/folios.md) · [GitHub 组织协作](docs/features.md#github-组织协作) |
 | **可积累**<br>解决一次，复用多次 | [经验沉淀与检索](docs/features.md#经验沉淀) · [Skill 版本与订阅](docs/features.md#skill-管理与分发) · [审计留痕](docs/features.md#安全与审计) |
 

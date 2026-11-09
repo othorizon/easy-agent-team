@@ -2,7 +2,7 @@ import type {
   AliyunAvailability,
   AliyunConnectionInfo,
   AliyunPermissionInfo,
-  AliyunGrantsResult,
+  AliyunCatalogPermission,
 } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
@@ -21,12 +21,13 @@ import {
 } from '../components/ui/tabs';
 import { Tip } from '../components/ui/tooltip';
 import { AliyunGrantDialog, AliyunGrants } from './AliyunGrants';
+import { AliyunCatalog, AliyunConfigureDialog } from './AliyunCatalog';
 
 export function AliyunPage() {
   const admin = getStoredUser()?.role === 'admin';
   const [params, setParams] = useSearchParams();
-  const managed = useQuery({ queryKey: ['aliyun', 'grants', 'manage'], queryFn: () => api<AliyunGrantsResult>('GET', '/api/aliyun/grants/manage') });
-  const canManage = admin || !!managed.data?.grants.length;
+  const managed = useQuery({ queryKey: ['aliyun', 'permissions', 'manage'], queryFn: () => api<AliyunCatalogPermission[]>('GET', '/api/aliyun/permissions/manage') });
+  const canManage = admin || !!managed.data?.length;
   const tab = canManage && params.get('tab') === 'manage' ? 'manage' : params.get('tab') === 'mine' ? 'mine' : 'catalog';
   const available = useQuery({
     queryKey: ['aliyun', 'status'],
@@ -66,12 +67,10 @@ export function AliyunPage() {
             {canManage && <TabsTrigger value="manage">管理</TabsTrigger>}
           </TabsList>
           <TabsContent value="catalog" className="pt-5">
-            <p className="py-8 text-sm text-muted-foreground">
-              暂无开放申请的权限点。
-            </p>
+            {tab === 'catalog' && <AliyunCatalog />}
           </TabsContent>
           <TabsContent value="manage" className="pt-5">
-            {admin && tab === 'manage' && <AliyunDirectoryManagement />}
+            {canManage && tab === 'manage' && <AliyunDirectoryManagement />}
             {canManage && tab === 'manage' && <div className="mt-6"><AliyunGrants manage /></div>}
           </TabsContent>
           <TabsContent value="mine" className="pt-5">{tab === 'mine' && <AliyunGrants />}</TabsContent>
@@ -82,18 +81,21 @@ export function AliyunPage() {
 }
 
 function AliyunDirectoryManagement() {
+  const admin = getStoredUser()?.role === 'admin';
+  const [editing, setEditing] = useState<AliyunCatalogPermission | null>(null);
   const [granting, setGranting] = useState<AliyunPermissionInfo | null>(null);
   const client = useQueryClient();
   const started = useRef(false);
   const connections = useQuery({
     queryKey: ['aliyun', 'connections'],
+    enabled: admin,
     queryFn: () =>
       api<AliyunConnectionInfo[]>('GET', '/api/aliyun/connections'),
   });
   const permissions = useQuery({
     queryKey: ['aliyun', 'permissions', 'manage'],
     queryFn: () =>
-      api<AliyunPermissionInfo[]>('GET', '/api/aliyun/permissions/manage'),
+      api<AliyunCatalogPermission[]>('GET', '/api/aliyun/permissions/manage'),
   });
   const refresh = useMutation({
     mutationFn: async (rows: AliyunConnectionInfo[]) => {
@@ -114,12 +116,12 @@ function AliyunDirectoryManagement() {
     onError: (e: Error) => toast.error(e.message),
   });
   useEffect(() => {
-    if (connections.data && !started.current) {
+    if (admin && connections.data && !started.current) {
       started.current = true;
       refresh.mutate(connections.data);
     }
   }, [connections.data, refresh.mutate]);
-  const columns: DataTableColumn<AliyunPermissionInfo>[] = [
+  const columns: DataTableColumn<AliyunCatalogPermission>[] = [
     {
       header: '策略名称',
       cell: ({ row }) => (
@@ -146,13 +148,14 @@ function AliyunDirectoryManagement() {
         </Badge>
       ),
     },
+    { id: 'open', header: '开放申请', meta: { className: 'w-28' }, cell: ({ row: { original: p } }) => <div className="text-sm"><Badge variant={p.open ? 'success' : 'secondary'}>{p.open ? '已开放' : '未开放'}</Badge><p className="mt-1 text-xs text-muted-foreground">{p.ownerName || '管理员审批'}{p.ownerStatus === 'disabled' ? ' · Owner 已停用' : ''}</p></div> },
     { id: 'actions', header: '操作', meta: { className: 'w-32' }, cell: ({ row: { original: p } }) => {
-      const paused = connections.data?.find(c => c.id === p.connectionId)?.status === 'paused';
-      const reason = !p.cloudExists ? '权限点在云端已删除' : paused ? '接入已暂停，恢复后可授予' : null;
-      return reason ? <Tip content={reason}><span tabIndex={0}><Button size="sm" variant="outline" disabled>直接授予</Button></span></Tip> : <Button size="sm" variant="outline" onClick={() => setGranting(p)}>直接授予</Button>;
+      const paused = p.connectionStatus === 'paused';
+      const reason = !p.cloudExists ? '权限点在云端已删除' : paused ? '接入已暂停，恢复后可授予' : !admin && !p.open ? '未开放申请时仅管理员可直接授予' : null;
+      return <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => setEditing(p)}>开放设置</Button>{reason ? <Tip content={reason}><span tabIndex={0}><Button size="sm" variant="outline" disabled>直接授予</Button></span></Tip> : <Button size="sm" variant="outline" onClick={() => setGranting(p)}>直接授予</Button>}</div>;
     } },
   ];
-  if (connections.isError || permissions.isError)
+  if ((admin && connections.isError) || permissions.isError)
     return (
       <p role="alert">
         目录加载失败：{connections.error?.message ?? permissions.error?.message}
@@ -169,8 +172,9 @@ function AliyunDirectoryManagement() {
     );
   return (
     <div className="space-y-5">
+      <AliyunConfigureDialog point={editing} done={() => setEditing(null)} />
       <AliyunGrantDialog permission={granting} onClose={() => setGranting(null)} />
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      {admin && <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           打开管理时自动刷新一次；可随时手动同步策略与说明。
         </p>
@@ -182,16 +186,16 @@ function AliyunDirectoryManagement() {
         >
           刷新目录
         </Button>
-      </div>
+      </div>}
       {refresh.error && (
         <p role="alert" className="break-words text-sm text-destructive">
           {refresh.error.message}
         </p>
       )}
-      {!connections.data ? (
+      {(admin ? !connections.data : permissions.isPending) ? (
         <p className="text-muted-foreground">正在加载…</p>
       ) : (
-        connections.data.map((c) => (
+        (admin ? connections.data ?? [] : [...new Map((permissions.data ?? []).map(p => [p.connectionId, { id: p.connectionId, name: p.connectionName, accountId: p.accountId, status: p.connectionStatus }])).values()]).map((c) => (
           <section
             key={c.id}
             className="space-y-3 rounded-xl border bg-card p-4"

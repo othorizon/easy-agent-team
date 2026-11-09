@@ -7,6 +7,7 @@ export const REQUEST_TYPES = {
   'db-access': '数据库权限',
   oss: 'OSS 空间申请',
   app: '应用部署授权',
+  aliyun: '阿里云权限',
 } as const;
 export const REQUEST_STATUSES = {
   pending: '待审批',
@@ -15,7 +16,7 @@ export const REQUEST_STATUSES = {
   withdrawn: '已撤回',
   invalid: '已失效',
 } as const;
-export const requestTypeSchema = z.enum(['env', 'mcp', 'db', 'oss', 'app', 'db-access']);
+export const requestTypeSchema = z.enum(['env', 'mcp', 'db', 'oss', 'app', 'db-access', 'aliyun']);
 export const requestStatusSchema = z.enum(['pending', 'approved', 'rejected', 'withdrawn', 'invalid']);
 export const requestListSchema = z.object({
   scope: z.enum(['inbox', 'mine', 'history', 'resource']).default('mine'),
@@ -48,6 +49,7 @@ export interface RequestPresentation {
   lines: string[];
   allowExpiry?: boolean;
   approvalNotice?: string;
+  approvalBlocker?: string | null;
   appSlug?: string;
 }
 export interface ApprovalRequest {

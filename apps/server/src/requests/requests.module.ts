@@ -1,3 +1,4 @@
+import { AliyunModule } from '../aliyun/aliyun.module';
 import { Global, Module } from '@nestjs/common';
 import { EnvsModule } from '../envs/envs.module';
 import { McpConfigsModule } from '../mcp-configs/mcp-configs.module';
@@ -12,7 +13,7 @@ import { RequestTypes } from './request-types';
 import { ApprovalCards } from './approval-cards.service';
 @Global()
 @Module({
-  imports: [EnvsModule, McpConfigsModule, DbsModule, OssModule, DeployModule],
+  imports: [AliyunModule, EnvsModule, McpConfigsModule, DbsModule, OssModule, DeployModule],
   controllers: [RequestsController],
   providers: [builtinRequestTypes, RequestsService, RequestNotifications, ApprovalCards],
   exports: [RequestsService, RequestTypes],

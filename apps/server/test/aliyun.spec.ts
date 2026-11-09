@@ -321,11 +321,11 @@ describe('阿里云接入与策略发现', () => {
       ).body.some((a: { targetId: string }) => a.targetId === c.id),
     ).toBe(true);
   });
-  it('成员不能访问管理目录、编辑、暂停、恢复、校验、删除或刷新接入', async () => {
+  it('普通成员的管理目录为空，不能编辑、暂停、恢复、校验、删除或刷新接入', async () => {
     const c = await create();
+    expect((await api('GET', '/api/aliyun/permissions/manage', member)).body).toEqual([]);
     for (const [method, path, body] of [
       ['GET', '/connections'],
-      ['GET', '/permissions/manage'],
       ['PATCH', `/connections/${c.id}`, { name: 'nope' }],
       ['POST', `/connections/${c.id}/status`, { status: 'paused' }],
       ['POST', `/connections/${c.id}/status`, { status: 'enabled' }],

@@ -13,6 +13,7 @@ import {
   updateAliyunConnectionSchema,
   aliyunConnectionInfoSchema,
   aliyunPermissionsSchema,
+  aliyunCatalogSchema,
   aliyunConnectionStatusSchema,
   grantAliyunPermissionSchema,
   revokeAliyunGrantSchema,
@@ -101,6 +102,13 @@ async function context(user, viewport) {
         customPolicyCount: grants.filter(g => g.state === 'active').length, error: null,
       }] : [] }));
     }
+    if (path === '/api/aliyun/permissions' || path === '/api/aliyun/permissions/manage') {
+      const manage = path.endsWith('/manage');
+      return reply(aliyunCatalogSchema.parse(permissions.filter(p => manage ? user.role === 'admin' || p.ownerId === user.id : p.open && p.cloudExists).map(p => {
+        const c = connections.find(c => c.id === p.connectionId);
+        return { ...p, connectionName: c.name, accountId: c.accountId, connectionStatus: c.status, ownerName: null, ownerStatus: null, canManage: user.role === 'admin' || p.ownerId === user.id, held: false, pendingRequestId: null };
+      })));
+    }
     if (path === '/api/users') return reply([me]);
     const giving = path.match(/^\/api\/aliyun\/permissions\/([^/]+)\/grants$/);
     if (giving) {
@@ -109,7 +117,7 @@ async function context(user, viewport) {
       const grant = aliyunGrantInfoSchema.parse({ id: randomUUID(), permissionId: p.id, connectionId: c.id, connectionName: c.name, accountId: c.accountId,
         policyName: p.policyName, userId: dto.userId, userName: me.name, identityId: grants[0]?.identityId ?? randomUUID(),
         state: failGrant ? 'failed' : 'active', error: failGrant ? '已达到该 RAM 用户可绑定的自定义策略上限，请在阿里云配额中心调高' : null,
-        source: 'direct', grantedBy: me.id, revokedBy: null, revocationReason: null, relinquished: false, canManage: true,
+        source: 'direct', grantedBy: me.id, revokedBy: null, revocationReason: null, relinquished: false, canManage: true, cloudExists: p.cloudExists,
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
       failGrant = false; grants = [grant]; return reply(grant, 201);
     }
@@ -145,7 +153,6 @@ async function context(user, viewport) {
       connections.push(c);
       return reply(c, 201);
     }
-    if (path === '/api/aliyun/permissions/manage') return reply(permissions);
     const match = path.match(
       /^\/api\/aliyun\/connections\/([^/]+)(?:\/(status|validate|refresh))?$/,
     );

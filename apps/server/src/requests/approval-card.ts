@@ -8,6 +8,9 @@ import { REQUEST_STATUSES, REQUEST_TYPES } from '@eat/shared';
  */
 export interface ApprovalCardRow {
   type_label?: string;
+  approval_blocker?: string | null;
+  can_approve?: boolean;
+  presentation_state?: string;
   detail_lines?: string[];
   approval_hint?: string;
   id: string;
@@ -33,8 +36,8 @@ export interface ApprovalCardRow {
 export type ApprovalCardView = 'pending' | 'rejecting' | 'processing' | 'result';
 
 /** 卡片呈现的状态键：与申请当前状态不一致时需要回写 */
-export function approvalCardState(r: Pick<ApprovalCardRow, 'status' | 'execution'>): string {
-  return `${r.status}:${r.execution ?? ''}`;
+export function approvalCardState(r: Pick<ApprovalCardRow, 'status' | 'execution' | 'presentation_state' | 'can_approve'>): string {
+  return r.presentation_state ? `${r.presentation_state}:${r.can_approve ?? true}` : `${r.status}:${r.execution ?? ''}`;
 }
 
 const beijing = (v: Date | string) =>
@@ -77,6 +80,7 @@ export function approvalCardLines(r: ApprovalCardRow, audience: 'approver' | 're
     ...(r.rejection_reason ? [`驳回原因：${r.rejection_reason}`] : []),
     ...(r.closed_reason && r.status !== 'rejected' ? [`说明：${r.closed_reason}`] : []),
     ...(r.status === 'approved' && r.execution === 'provisioning' ? ['审批已通过，资源正在开通。'] : []),
+    ...(r.status === 'approved' && r.execution === 'active' ? ['审批已通过，资源已生效。'] : []),
     ...(r.status === 'approved' && r.execution === 'failed' ? ['资源开通失败，请在详情查看处理进度。'] : []),
   ].join('\n');
 }
@@ -110,8 +114,8 @@ export function buildApprovalCard(
     }
     elements.push(
       row(
-        button('同意', 'primary_filled', callback(r.id, 'approve')),
-        button('驳回', 'danger', callback(r.id, 'reject_start')),
+        button('同意', 'primary_filled', callback(r.id, 'approve'), { disabled: !!r.approval_blocker || r.can_approve === false }),
+        button('驳回', 'danger', callback(r.id, 'reject_start'), { disabled: r.can_approve === false }),
         detail,
       ),
     );
@@ -139,6 +143,7 @@ export function buildApprovalCard(
   } else {
     elements.push(row(detail));
   }
+  if (view === 'pending' && (r.approval_blocker || r.can_approve === false)) elements.push(text(r.can_approve === false ? '当前已无审批资格，请由当前 Owner 或管理员处理' : r.approval_blocker!, { text_size: 'notation', text_color: 'grey' }));
   if (opts.notice) elements.push(text(opts.notice, { text_size: 'notation', text_color: 'grey' }));
   elements.push(text('EAT 平台通知', { text_size: 'notation', text_color: 'grey' }));
   const heading = audience === 'requester' && view === 'result' ? `你的申请${title}` : `EAT ${title}`;

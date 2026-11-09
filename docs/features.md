@@ -60,6 +60,10 @@ EAT 的全部能力，按 README 里的四个支柱组织：**可理解**（让 
 | 真实建库建号 | 成员申请 → 审批 → 平台在实例上实际创建数据库与专属账号并授权（PostgreSQL） |
 | 凭证下发 | 密码加密存在分配记录上，只有申请人与管理员可在数据库页查看或用 `eat db credentials pull <库名>` 写进本地 `.env`、`eat db credentials run <库名> -- <命令>` 注入命令（MCP: `get_db_credentials`），每次读取记审计；不进环境变量 |
 
+### 阿里云权限
+
+管理员接入多个云账号，发现 `eat-perm-` 自定义策略对应的权限点；管理员或 Owner 开放申请，成员在控制台或 `eat aliyun list/request` 选择目标并填写用途。审批进入统一申请中心与飞书卡片，暂停时同意置灰、驳回继续；批准与云端执行状态分别显示，失败可重试。授权、本人临时凭证与 CLI 说明见[阿里云权限](aliyun-permissions.md)。
+
 ### OSS 对象存储
 
 成员在同一个阿里云 OSS Bucket 下申请自己的存储空间，管理员批准后开通；控制台、`eat oss`、MCP（stdio 与 HTTP）都能申请和查询。

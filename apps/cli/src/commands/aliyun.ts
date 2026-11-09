@@ -1,7 +1,27 @@
 import type { Command } from 'commander';
-import { ALIYUN_CREDENTIAL_NOTE, matchAliyunAccounts, type AliyunCredentials, type AliyunGrantInfo, type AliyunGrantsResult } from '@eat/shared';
+import { ALIYUN_CREDENTIAL_NOTE, matchAliyunAccounts, matchAliyunPermissions, requestAliyunPermissionSchema, type AliyunCatalogPermission, type AliyunPermissionRequestResult, type AliyunCredentials, type AliyunGrantInfo, type AliyunGrantsResult } from '@eat/shared';
 import { Api } from '../client.js';
 import { runWithEnv } from '../run-with-env.js';
+
+export async function aliyunList(opts: { account?: string; json?: boolean } = {}) {
+  const points = (await Api.fromSaved().request<AliyunCatalogPermission[]>('GET', '/api/aliyun/permissions'))
+    .filter(p => !opts.account || p.connectionName === opts.account || p.accountId === opts.account);
+  if (opts.json) { console.log(JSON.stringify(points, null, 2)); return; }
+  if (!points.length) console.log('暂无开放申请的权限点');
+  for (const p of points) console.log(`${p.policyName} @ ${p.connectionName} (${p.accountId})\n  说明：${p.description || '未填写'}\n  用途：${p.purpose || '未填写'}\n  数据范围：${p.dataScope || '未填写'}\n  Owner：${p.ownerName || '管理员审批'}${p.ownerStatus === 'disabled' ? '（Owner 已停用，由管理员审批）' : ''}${p.connectionStatus === 'paused' ? '\n  接入已暂停，恢复后可申请' : ''}`);
+}
+export async function aliyunRequest(ref: string, opts: { reason: string; account?: string }) {
+  const dto = requestAliyunPermissionSchema.parse({ reason: opts.reason });
+  const api = Api.fromSaved();
+  const hits = matchAliyunPermissions(await api.request<AliyunCatalogPermission[]>('GET', '/api/aliyun/permissions'), ref, opts.account);
+  if (!hits.length) throw new Error(`未找到权限点 ${ref}，请用 eat aliyun list 查看开放申请的目录。`);
+  if (hits.length > 1) throw new Error(`多个云账号有同名权限点，请用 <权限点>@<接入名称> 或 --account 指定接入名称/云账号 ID：${hits.map(p => `${p.policyName}@${p.connectionName} (${p.accountId})`).join('、')}`);
+  const r = await api.request<AliyunPermissionRequestResult>('POST', `/api/aliyun/permissions/${hits[0].id}/requests`, dto);
+  if (r.grant) {
+    if (r.grant.error) throw new Error(`已记录本人授权，执行失败：${r.grant.error}。请在控制台重试，无需重新申请。`);
+    console.log('已直接授予本人，无需审批');
+  } else console.log(`申请已提交：${r.requestId}。查看进度：eat requests show ${r.requestId}`);
+}
 
 async function ownGrants(api: Api) { return (await api.request<AliyunGrantsResult>('GET', '/api/aliyun/grants')).grants; }
 async function account(api: Api, ref?: string) {
@@ -61,6 +81,8 @@ export async function aliyunRun(ref: string | undefined, command: string[]) {
 }
 export function registerAliyunCommands(program: Command) {
   const aliyun = program.command('aliyun').description('阿里云权限与本人临时凭证');
+  aliyun.command('list').description('查看开放申请的权限点').option('--account <account>', '接入名称或云账号 ID').option('--json', '输出 JSON').action(aliyunList);
+  aliyun.command('request <permission>').description('申请权限点；同名用 权限点@接入名称 或 --account').requiredOption('--reason <reason>', '申请用途').option('--account <account>', '接入名称或云账号 ID').action(aliyunRequest);
   aliyun.command('grants').description('查看我的授权').action(aliyunGrants);
   aliyun.command('revoke <permission>').option('--account <account>', '接入名称或云账号 ID').description('放弃自己的权限点授权').action(aliyunRevoke);
   const credentials = aliyun.command('credentials').option('--account <account>', '接入名称或云账号 ID').description(`读取本人的 Key。${ALIYUN_CREDENTIAL_NOTE}`)

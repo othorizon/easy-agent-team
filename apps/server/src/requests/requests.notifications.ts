@@ -63,7 +63,7 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
       const {
         rows: [raw],
       } = await c.query(
-        `SELECT r.*,u.name requester_name,u.email requester_email,a.name approver_name
+        `SELECT r.*,u.name requester_name,u.email requester_email,a.name approver_name,${this.types.dynamicSelect()}
         FROM approval_request r LEFT JOIN "user" u ON u.id=r.requester_id
         LEFT JOIN "user" a ON a.id=r.decided_by WHERE r.id=$1`,
         [event.request_id],
@@ -89,7 +89,7 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
         LEFT JOIN user_notification n ON n.user_id=u.id
         LEFT JOIN feishu_binding b ON b.user_id=u.id AND b.app_id=$4
         WHERE u.status='active' AND coalesce(n.${submitted ? 'notify_approval_request' : 'notify_approval_result'},true)
-        AND $1::uuid IS NOT NULL AND $2::text IS NOT NULL AND $3::uuid IS NOT NULL AND $5::uuid IS NOT NULL AND ${submitted ? `(u.role='admin' OR u.id=(SELECT (${this.types.expression('owner')}) FROM approval_request r WHERE r.id=$5))` : `u.id=$1`}`,
+        AND $1::uuid IS NOT NULL AND $2::text IS NOT NULL AND $3::uuid IS NOT NULL AND $5::uuid IS NOT NULL AND ${submitted ? `(SELECT ${this.types.forViewer('u.id', 'u.role')} FROM approval_request r WHERE r.id=$5)` : `u.id=$1`}`,
         [r.requester_id, r.type, r.resource_id, feishu.appId, r.id],
       );
       // Opting out is intentional, not a delivery failure. Recheck on every retry.
@@ -113,7 +113,7 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
         if (app) {
           try {
             // 自建应用渠道：审批人收到可直接同意 / 驳回的卡片，并记下来供状态变化后回写
-            const card = buildApprovalCard(r, {
+            const card = buildApprovalCard({ ...r, can_approve: true }, {
               view: submitted ? 'pending' : 'result',
               audience: submitted ? 'approver' : 'requester',
               detailUrl: this.cards.detailUrl(r.id),
@@ -122,7 +122,7 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
             if (submitted) {
               await c.query(
                 'INSERT INTO feishu_card(app_id,message_id,user_id,request_id,state) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',
-                [app.appId, messageId, recipient.id, r.id, approvalCardState(r)],
+                [app.appId, messageId, recipient.id, r.id, approvalCardState({ ...r, can_approve: true })],
               );
             }
             sent.push(recipient.id);
@@ -143,7 +143,7 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
           });
           const actions = submitted
             ? [
-                button('同意', approveUrl.toString(), 'primary'),
+                ...(r.approval_blocker ? [] : [button('同意', approveUrl.toString(), 'primary')]),
                 button('驳回', url + '&action=reject'),
                 button('查看详情', url),
               ]
@@ -152,6 +152,7 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
             `申请类型：${r.type_label}`,
             `申请资源：${r.target_name}`,
             ...r.detail_lines,
+            ...(r.approval_blocker ? [r.approval_blocker] : []),
             `申请人：${r.requester_name ?? '已删除用户'}${r.requester_email ? `（${r.requester_email}）` : ''}`,
             `申请时间：${new Date(r.created_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}（北京时间）`,
             `申请原因：${r.reason || '未填写'}`,
@@ -159,6 +160,7 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
             ...(r.rejection_reason ? [`驳回原因：${r.rejection_reason}`] : []),
             ...(!submitted && r.execution === 'failed' ? ['资源开通失败，请在详情查看处理进度。'] : []),
             ...(!submitted && r.execution === 'provisioning' ? ['审批已通过，资源正在开通。'] : []),
+            ...(!submitted && r.execution === 'active' ? ['审批已通过，资源已生效。'] : []),
           ].join('\n');
           await this.webhook.sendCardOnce(
             recipient.webhook_url,

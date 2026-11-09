@@ -19,6 +19,10 @@ export interface RequestType {
   owner: string;
   visible?: string;
   approvable?: string;
+  /** Approval execution can be blocked independently of permission to reject. */
+  approvalBlocker?: string;
+  /** Current resource presentation, evaluated on every list/card read. Never secrets. */
+  presentationDetails?: string;
   notificationsAllowed?: string;
   resourceExists: string;
   invalidReason: string;
@@ -49,22 +53,28 @@ export class RequestTypes {
     return handler;
   }
   all() { return [...this.types.values()]; }
-  expression(field: 'owner' | 'visible' | 'approvable' | 'resourceExists' | 'invalidReason' | 'notificationsAllowed') {
-    const fallback = { owner: 'NULL::uuid', visible: 'true', approvable: 'true', resourceExists: 'false', invalidReason: 'NULL::text', notificationsAllowed: 'true' }[field];
+  expression(field: 'owner' | 'visible' | 'approvable' | 'resourceExists' | 'invalidReason' | 'notificationsAllowed' | 'approvalBlocker' | 'presentationDetails') {
+    const fallback = { owner: 'NULL::uuid', visible: 'true', approvable: 'true', resourceExists: 'false', invalidReason: 'NULL::text', notificationsAllowed: 'true', approvalBlocker: 'NULL::text', presentationDetails: "'{}'::jsonb" }[field];
     return `CASE r.type ${this.all().map(t => `WHEN '${t.type}' THEN (${t[field] ?? fallback})`).join(' ')} ELSE ${fallback} END`;
   }
   visible() { return `(${this.expression('visible')})`; }
   approver() { return `(${this.visible()} AND ($2='admin' OR (${this.expression('owner')})=$1) AND (${this.expression('approvable')}))`; }
   scope() { return `(${this.visible()} AND (r.requester_id=$1 OR $2='admin' OR (${this.expression('owner')})=$1))`; }
+  dynamicSelect() {
+    return `(${this.expression('approvalBlocker')}) approval_blocker,(${this.expression('presentationDetails')}) presentation_details,
+      r.status||':'||coalesce(r.execution,'')||':'||coalesce((${this.expression('owner')})::text,'')||':'||coalesce((${this.expression('approvalBlocker')}),'')||':'||coalesce((${this.expression('presentationDetails')})::text,'') presentation_state`;
+  }
+  forViewer(userId: string, role: string) { return `coalesce(${this.approver().replace(/\$1\b/g, userId).replace(/\$2\b/g, role)},false)`; }
   select() {
     return `SELECT r.*,coalesce(u.name,'已删除用户') requester_name,d.name decided_by_name,
-      ${this.approver()} can_approve,(${this.expression('resourceExists')}) resource_exists
+      ${this.dynamicSelect()},${this.approver()} can_approve,(${this.expression('resourceExists')}) resource_exists
       FROM approval_request r LEFT JOIN "user" u ON u.id=r.requester_id LEFT JOIN "user" d ON d.id=r.decided_by`;
   }
   present(row: any) {
+    row = { ...row, details: { ...row.details, ...row.presentation_details } };
     const type = this.get(row.type);
     const presentation = type.presentation?.(row);
-    return { ...row, presentation: { label: type.label, ...presentation, lines: presentation?.lines ?? [] }, type_label: type.label, detail_lines: presentation?.cardLines ?? presentation?.lines ?? [], approval_hint: presentation?.approvalHint };
+    return { ...row, presentation: { label: type.label, approvalBlocker: row.approval_blocker ?? null, ...presentation, lines: presentation?.lines ?? [] }, type_label: type.label, detail_lines: presentation?.cardLines ?? presentation?.lines ?? [], approval_hint: presentation?.approvalHint };
   }
 }
 

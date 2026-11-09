@@ -1,5 +1,5 @@
 import { ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { and, asc, eq, lte, ne } from 'drizzle-orm';
+import { and, asc, eq, lte, ne, sql } from 'drizzle-orm';
 import type { AliyunGrantInfo, AliyunGrantsResult, AliyunGrantSource, GrantAliyunPermissionRequest } from '@eat/shared';
 import type { AuthUser } from '../auth/auth.decorators';
 import { AuditService } from '../audit/audit.service';
@@ -52,7 +52,7 @@ export class AliyunGrantsService {
     return g;
   }
   /** Unified executor for direct grants, approved requests, and an Owner/admin's own request. */
-  async give(actor: AuthUser, permissionId: string, dto: GrantAliyunPermissionRequest, source: AliyunGrantSource = 'direct'): Promise<AliyunGrantInfo> {
+  async give(actor: AuthUser, permissionId: string, dto: GrantAliyunPermissionRequest, source: AliyunGrantSource = 'direct', requestId?: string): Promise<AliyunGrantInfo> {
     const initial = await this.permission(permissionId), c = await this.aliyun.connection(initial.connectionId);
     this.manage(actor, initial);
     return this.identities.run(c.accountId, dto.userId, this.aliyun.credentials(c), async session => {
@@ -69,6 +69,11 @@ export class AliyunGrantsService {
           .onConflictDoUpdate({ target: [aliyunGrants.permissionId, aliyunGrants.userId], set: {
             state: 'pending', error: null, source, grantedBy: actor.id, revokedBy: null, revocationReason: null, relinquished: false, updatedAt: new Date(),
           } }).returning();
+        if (requestId) {
+          const approved = await tx.execute(sql`UPDATE approval_request SET status='approved',execution='provisioning',execution_error=NULL,decided_by=${actor.id},decided_at=now(),details=details || jsonb_build_object('grantId',${g.id}::text) WHERE id=${requestId} AND status='pending' RETURNING id`);
+          if (!approved.rowCount) throw new ConflictException('申请状态已变化');
+          await tx.execute(sql`INSERT INTO approval_notification(request_id,event) VALUES(${requestId},'approved') ON CONFLICT DO NOTHING`);
+        }
         await this.queue(tx, g, 'grant', actor.id);
         await this.audit.record({ actorId: actor.id, actorTokenId: actor.tokenId, action: 'aliyun.grant', targetType: 'aliyun_grant', targetId: g.id, meta: { permissionId, userId: dto.userId, source } }, tx);
         return g;
@@ -125,6 +130,7 @@ export class AliyunGrantsService {
     session.guard();
     await this.db.update(aliyunOperations).set({ state: 'running', attempts: op.attempts + 1, updatedAt: new Date() }).where(eq(aliyunOperations.id, op.id));
     try {
+      if (op.kind === 'grant' && !p.cloudExists) throw new ConflictException('权限点在云端已删除，不能授予');
       const identity = await session.setPolicy(p.policyName, op.kind === 'grant');
       session.guard();
       await this.db.transaction(async tx => {
@@ -146,9 +152,14 @@ export class AliyunGrantsService {
         await tx.update(aliyunOperations).set({ state: 'failed', lastError: error, retryAt: new Date(Date.now() + Math.min(300_000, 30_000 * (op.attempts + 1))), updatedAt: new Date() }).where(eq(aliyunOperations.id, op.id));
       });
     }
+    await this.syncRequestExecution(g.id);
+  }
+  private async syncRequestExecution(grantId?: string) {
+    await this.db.execute(sql`UPDATE approval_request r SET execution=CASE g.state WHEN 'pending' THEN 'provisioning' ELSE g.state END,execution_error=g.error FROM aliyun_grant g WHERE (${grantId ?? null}::uuid IS NULL OR g.id=${grantId ?? null}::uuid) AND r.type='aliyun' AND r.status='approved' AND r.latest AND r.details->>'grantId'=g.id::text`);
   }
   /** Durable work, including interrupted running operations, resumes after restart. */
   async tick() {
+    await this.syncRequestExecution();
     const pending = await this.db.select().from(aliyunOperations).where(and(ne(aliyunOperations.state, 'complete'), lte(aliyunOperations.retryAt, new Date()))).orderBy(asc(aliyunOperations.createdAt)).limit(30);
     for (const op of pending) {
       if (this.stopped) return;
@@ -169,7 +180,7 @@ export class AliyunGrantsService {
       .innerJoin(users, eq(users.id, aliyunGrants.userId))
       .where(manage ? (actor.role === 'admin' ? undefined : and(eq(aliyunPermissions.ownerId, actor.id), eq(aliyunPermissions.open, true))) : eq(aliyunGrants.userId, actor.id));
     const grants: AliyunGrantInfo[] = rows.map(({ g, p, c, userName }) => ({ ...g, userName, connectionId: c.id, connectionName: c.name, accountId: c.accountId, policyName: p.policyName,
-      canManage: actor.role === 'admin' || (p.open && p.ownerId === actor.id), createdAt: g.createdAt.toISOString(), updatedAt: g.updatedAt.toISOString() }));
+      cloudExists: p.cloudExists, canManage: actor.role === 'admin' || (p.open && p.ownerId === actor.id), createdAt: g.createdAt.toISOString(), updatedAt: g.updatedAt.toISOString() }));
     return grants;
   }
   async list(actor: AuthUser, manage = false): Promise<AliyunGrantsResult> {

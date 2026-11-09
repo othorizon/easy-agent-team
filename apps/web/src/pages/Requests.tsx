@@ -4,6 +4,7 @@ import {
   type ApprovalRequest,
   type ApprovalRequestPage,
   type ApprovalRequestDetail,
+  type AliyunPermissionDocument,
 } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -17,6 +18,7 @@ import { Pagination } from '../components/pagination';
 import { GithubAppSummary } from '../components/github';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { Tip } from '../components/ui/tooltip';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
@@ -369,6 +371,7 @@ function RequestDialog({
                 {r.presentation?.lines.map((line, index) => <p key={index} className="mt-3 whitespace-pre-wrap break-words">{line}</p>)}
               </div>
               {typeof r.details.ownerNotice === 'string' && <p className="text-sm text-amber-700">{r.details.ownerNotice}</p>}
+              {typeof r.details.policyDocumentUrl === 'string' && <PolicyDocument url={r.details.policyDocumentUrl} />}
               {r.presentation?.appSlug && <GithubAppSummary slug={r.presentation.appSlug} />}
               {r.status === 'rejected' && (
                 <div className="rounded-lg border border-destructive/30 p-4 text-sm">
@@ -383,6 +386,7 @@ function RequestDialog({
                 </p>
               )}
               {r.notificationError && <p className="text-xs text-muted-foreground">{r.notificationError}</p>}
+              {r.canApprove && r.presentation?.approvalBlocker && <p className="text-sm text-amber-700">{r.presentation.approvalBlocker}</p>}
               {!r.latest && detail.data!.rounds[0] && (
                 <Button variant="outline" onClick={() => openRequest(detail.data!.rounds[0].id)}>
                   查看最新一轮申请
@@ -392,7 +396,7 @@ function RequestDialog({
                 <div className="flex flex-wrap gap-2">
                   {r.canApprove && (
                     <>
-                      <Button onClick={() => setAction('approved')}>批准申请</Button>
+                      {r.presentation?.approvalBlocker ? <Tip content={r.presentation.approvalBlocker}><span tabIndex={0}><Button disabled>批准申请</Button></span></Tip> : <Button onClick={() => setAction('approved')}>批准申请</Button>}
                       <Button variant="outline-destructive" onClick={() => setAction('rejected')}>
                         驳回
                       </Button>
@@ -424,6 +428,7 @@ function RequestDialog({
                   className="space-y-4 rounded-lg border p-4"
                   onSubmit={(e) => {
                     e.preventDefault();
+                    if (action === 'approved' && r.presentation?.approvalBlocker) return;
                     mutation.mutate();
                   }}
                 >
@@ -472,7 +477,7 @@ function RequestDialog({
                     <Button
                       type="submit"
                       loading={mutation.isPending}
-                      disabled={['rejected', 'resubmit'].includes(action) && !reason.trim()}
+                      disabled={(['rejected', 'resubmit'].includes(action) && !reason.trim()) || (action === 'approved' && !!r.presentation?.approvalBlocker)}
                     >
                       确认{action === 'rejected' ? '驳回' : action === 'approved' ? '批准' : '提交'}
                     </Button>
@@ -512,4 +517,10 @@ function RequestDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function PolicyDocument({ url }: { url: string }) {
+  const [open, setOpen] = useState(false);
+  const load = useMutation({ mutationFn: () => api<AliyunPermissionDocument>('GET', url) });
+  return <section className="space-y-3 rounded-lg border p-4"><Button variant="outline" aria-expanded={open} onClick={() => { if (!open) load.mutate(); setOpen(!open); }}>{open ? '收起策略原文' : '展开策略原文（从 RAM 现取）'}</Button>{open && (load.isPending ? <p className="text-sm text-muted-foreground">正在读取当前策略…</p> : load.error ? <p role="alert" className="text-sm text-destructive">{load.error.message}<Button variant="ghost" onClick={() => load.mutate()}>重试</Button></p> : load.data && <><p className="text-xs text-muted-foreground">读取时间：{formatDateTime(load.data.fetchedAt)}</p><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-3 text-xs">{load.data.document}</pre></>)}</section>;
 }

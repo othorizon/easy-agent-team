@@ -1,3 +1,4 @@
+import { AliyunRequests } from '../aliyun/aliyun-requests';
 import { ConflictException, type Provider } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service';
 import { AccessRequestsService } from '../envs/access-requests.service';
@@ -10,10 +11,11 @@ import { RequestTypes, sourceRequest, type RequestAction } from './request-types
 
 export const builtinRequestTypes: Provider = {
   provide: RequestTypes,
-  inject: [AccessRequestsService, McpConfigsService, DbsService, OssService, AppsService, AuditService, DbAccessRequests],
-  useFactory(env: AccessRequestsService, mcp: McpConfigsService, dbs: DbsService, oss: OssService, apps: AppsService, audit: AuditService, dbAccess: DbAccessRequests) {
+  inject: [AccessRequestsService, McpConfigsService, DbsService, OssService, AppsService, AuditService, DbAccessRequests, AliyunRequests],
+  useFactory(env: AccessRequestsService, mcp: McpConfigsService, dbs: DbsService, oss: OssService, apps: AppsService, audit: AuditService, dbAccess: DbAccessRequests, aliyun: AliyunRequests) {
     const types = new RequestTypes();
     types.register(dbAccess.type());
+    types.register(aliyun.type());
     const legacy = (name: string, target: string, resource = false) => async ({ row, user }: RequestAction) => audit.record({
       actorId: user.id, action: name, targetType: target,
       targetId: resource ? row.resource_id : row.source_id, meta: { decision: 'rejected' },

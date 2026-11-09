@@ -57,7 +57,7 @@ export class RequestsService {
       decidedAt: r.decided_at?.toISOString() ?? null,
       round: r.round,
       latest: r.latest,
-      details: r.details,
+      details: this.types.present(r).details,
       canApprove: !!r.can_approve && r.status === 'pending',
       canWithdraw: r.requester_id === user.id && r.status === 'pending',
       canResubmit:
@@ -218,7 +218,10 @@ export class RequestsService {
           await c.query('COMMIT');
         } catch (error) { await c.query('ROLLBACK'); throw error; }
         await type.afterReject?.(action);
-      } else await type.approve(action);
+      } else {
+        if (r.approval_blocker) throw new ConflictException(r.approval_blocker);
+        await type.approve(action);
+      }
     });
     await this.audit.record({
       actorId: user.id,

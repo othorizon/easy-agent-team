@@ -12,8 +12,11 @@ import { afterAll, beforeAll, describe, expect, it, vi, type MockInstance } from
 import { extractFeishuBindCode, feishuScopeApplyUrl } from '@eat/shared';
 import { AppModule } from '../src/app.module';
 import { RequestNotifications } from '../src/requests/requests.notifications';
+import { RamCloud } from '../src/ram/ram-cloud';
+import { TestRamCloud } from './ram-fixture';
 import { ApprovalCards } from '../src/requests/approval-cards.service';
 
+const ram = new TestRamCloud();
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 let app: NestFastifyApplication;
 const ids = { admin: randomUUID(), owner: randomUUID(), member: randomUUID(), other: randomUUID() };
@@ -105,7 +108,7 @@ beforeAll(async () => {
       id, name, `${name}@feishu.test`, name === 'admin' ? 'admin' : 'member', hash, `${name} 的简介`,
     ]);
   }
-  const module = await Test.createTestingModule({ imports: [AppModule] }).compile();
+  const module = await Test.createTestingModule({ imports: [AppModule] }).overrideProvider(RamCloud).useValue(ram).compile();
   app = module.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
   await app.init();
   await app.getHttpAdapter().getInstance().ready();
@@ -451,5 +454,81 @@ describe('飞书自建应用：审批卡片', () => {
     const account = await api('GET', '/api/account', 'member');
     expect(account.body.notification).toMatchObject({ channel: 'webhook', connected: false, feishuApp: { bound: true } });
     expect(account.body.onboarding.required).toBe(true);
+  });
+});
+
+describe('阿里云审批卡片：使用同一HTTP申请与执行路径', () => {
+  let point: { id: string }, connection: { id: string };
+  const keys = { accessKeyId: 'management-test', accessKeySecret: 'management-test-secret' };
+  const latestPatch = (messageId: string) => JSON.parse(feishu.calls.filter(c => c.method === 'PATCH' && c.path.includes(messageId)).at(-1)!.body.content);
+  const buttons = (card: any): any[] => card.body.elements.flatMap((e: any) => e.columns?.flatMap((c: any) => c.elements ?? []) ?? []);
+  it('当前Owner和管理员收到云账号、权限点与用途，暂停在原卡片置灰同意并保留驳回，恢复后可继续', async () => {
+    await api('PUT', '/api/settings/feishu/channel', 'admin', { channel: 'app' });
+    for (const who of ['owner', 'admin', 'member', 'other'] as const) await bind(who);
+    await pool.query("UPDATE approval_notification SET state='skipped' WHERE state='pending'");
+    await ram.createPolicy(keys, 'eat-perm-card', '报表权限说明', '{}');
+    connection = (await api('POST', '/api/aliyun/connections', 'admin', { name: 'card-cloud', ...keys })).body;
+    point = (await api('POST', `/api/aliyun/connections/${connection.id}/refresh`)).body[0];
+    await api('PATCH', `/api/aliyun/permissions/${point.id}`, 'admin', { open: true, ownerId: ids.owner, purpose: '业务分析', dataScope: '报表数据' });
+    const requestId = (await api('POST', `/api/aliyun/permissions/${point.id}/requests`, 'member', { reason: '月末统计' })).body.requestId;
+    const before = feishu.calls.length;
+    await app.get(RequestNotifications).tick();
+    const delivered = feishu.calls.slice(before).filter(c => c.method === 'POST' && c.path.startsWith('/im/v1/messages?') && c.body.content.includes('月末统计'));
+    expect(delivered.map(c => c.body.receive_id).sort()).toEqual([openIds.admin, openIds.owner].sort());
+    for (const content of ['card-cloud', 'account-test', 'eat-perm-card', '月末统计', '报表权限说明']) expect(delivered[0].body.content).toContain(content);
+    const ownerCard = (await pool.query('SELECT message_id FROM feishu_card WHERE request_id=$1 AND user_id=$2', [requestId, ids.owner])).rows[0].message_id;
+    await api('POST', `/api/aliyun/connections/${connection.id}/status`, 'admin', { status: 'paused' });
+    await app.get(ApprovalCards).sync(requestId);
+    const paused = latestPatch(ownerCard);
+    expect(buttons(paused).find(b => b.text.content === '同意').disabled).toBe(true);
+    expect(buttons(paused).find(b => b.text.content === '驳回').disabled).toBe(false);
+    expect(cardText(paused)).toContain('接入已暂停');
+    const action = { eat: 'approval', requestId, action: 'approve' };
+    const blocked = await cardAction(openIds.owner, ownerCard, action);
+    expect(blocked.body.toast.content).toContain('暂停');
+    expect((await api('GET', `/api/requests/${requestId}`, 'member')).body.request.status).toBe('pending');
+    await api('POST', `/api/aliyun/connections/${connection.id}/status`, 'admin', { status: 'enabled' });
+    await app.get(ApprovalCards).sync(requestId);
+    expect(buttons(latestPatch(ownerCard)).find(b => b.text.content === '同意').disabled).toBe(false);
+    ram.failActions.set('AttachPolicyToUser', 'NETWORK_ERROR');
+    const approved = await cardAction(openIds.owner, ownerCard, action);
+    expect(approved.body.toast.type).toBe('success');
+    expect(cardText(approved.body.card.data)).toContain('已批准');
+    expect(cardText(approved.body.card.data)).toContain('资源开通失败');
+    const request = (await api('GET', `/api/requests/${requestId}`, 'member')).body.request;
+    expect(request).toMatchObject({ status: 'approved', execution: 'failed', round: 1 });
+    ram.failActions.clear();
+    await api('POST', `/api/aliyun/grants/${request.details.grantId}/retry`, 'owner');
+    await app.get(ApprovalCards).sync(requestId);
+    expect(cardText(latestPatch(ownerCard))).toContain('资源已生效');
+    expect((await api('GET', `/api/requests/${requestId}`, 'member')).body.request).toMatchObject({ status: 'approved', execution: 'active', round: 1 });
+  });
+  it('Owner变化后旧卡片失去审批资格，提醒只发当前Owner和管理员，Owner停用卡片显示由管理员接手', async () => {
+    const requestId = (await api('POST', `/api/aliyun/permissions/${point.id}/requests`, 'other', { reason: '变更Owner' })).body.requestId;
+    await app.get(RequestNotifications).tick();
+    const ownerCard = (await pool.query('SELECT message_id FROM feishu_card WHERE request_id=$1 AND user_id=$2', [requestId, ids.owner])).rows[0].message_id;
+    await api('PATCH', `/api/aliyun/permissions/${point.id}`, 'admin', { open: true, ownerId: ids.member, purpose: '业务分析', dataScope: '报表数据' });
+    await app.get(ApprovalCards).sync(requestId);
+    expect(buttons(latestPatch(ownerCard)).filter(b => ['同意','驳回'].includes(b.text.content)).every(b => b.disabled)).toBe(true);
+    const old = await cardAction(openIds.owner, ownerCard, { eat: 'approval', requestId, action: 'approve' });
+    expect(old.body.toast.type).toBe('error');
+    const before = feishu.calls.length;
+    await api('POST', `/api/requests/${requestId}/remind`, 'other'); await app.get(RequestNotifications).tick();
+    const reminded = feishu.calls.slice(before).filter(c => c.method === 'POST' && c.path.startsWith('/im/v1/messages?') && c.body.content.includes('变更Owner'));
+    expect(reminded.map(c => c.body.receive_id).sort()).toEqual([openIds.admin, openIds.member].sort());
+    await api('PATCH', `/api/users/${ids.member}`, 'admin', { status: 'disabled' });
+    await app.get(ApprovalCards).sync(requestId);
+    expect(cardText(latestPatch(ownerCard))).toContain('Owner 已停用，由管理员审批');
+    expect((await api('POST', `/api/requests/${requestId}/decision`, 'admin', { decision: 'rejected', reason: '暂缓' })).body.request.status).toBe('rejected');
+    await api('PATCH', `/api/users/${ids.member}`, 'admin', { status: 'active' });
+  });
+  it('关闭申请之后只给管理员发送未投递的待审批通知，Owner不再收到', async () => {
+    await api('PATCH', `/api/aliyun/permissions/${point.id}`, 'admin', { open: true, ownerId: ids.owner, purpose: '业务分析', dataScope: '报表数据' });
+    const requestId = (await api('POST', `/api/aliyun/permissions/${point.id}/requests`, 'other', { reason: '关闭后提醒' })).body.requestId;
+    await api('PATCH', `/api/aliyun/permissions/${point.id}`, 'admin', { open: false, ownerId: ids.owner, purpose: '业务分析', dataScope: '报表数据' });
+    const before = feishu.calls.length; await app.get(RequestNotifications).tick();
+    const delivered = feishu.calls.slice(before).filter(c => c.method === 'POST' && c.path.startsWith('/im/v1/messages?') && c.body.content.includes('关闭后提醒'));
+    expect(delivered.map(c => c.body.receive_id)).toEqual([openIds.admin]);
+    expect((await api('GET', `/api/requests/${requestId}`, 'other')).body.request.status).toBe('pending');
   });
 });
