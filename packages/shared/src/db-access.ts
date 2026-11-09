@@ -4,11 +4,12 @@ import { z } from 'zod';
 export const dbAccessSchemasSchema = z.array(z.string().min(1).max(63).refine(s => !s.includes('\0'), 'schema 名不能含空字符')).min(1).max(50).transform(xs => [...new Set(xs)]);
 export const openDbAccessSchema = z.object({
   open: z.boolean(),
-  schemas: dbAccessSchemasSchema.default(['public']),
+  schemas: dbAccessSchemasSchema.optional(),
 });
 export type OpenDbAccessRequest = z.infer<typeof openDbAccessSchema>;
-// 读写与申请在后续工单开放；这张工单的接口只接受只读。
-export const grantDbAccessSchema = z.object({ userId: z.uuid(), level: z.literal('read') });
+export const dbAccessLevelSchema = z.enum(['read', 'write']);
+export type DbAccessLevel = z.infer<typeof dbAccessLevelSchema>;
+export const grantDbAccessSchema = z.object({ userId: z.uuid(), level: dbAccessLevelSchema });
 export type GrantDbAccessRequest = z.infer<typeof grantDbAccessSchema>;
 export const revokeDbAccessSchema = z.object({ reason: z.string().trim().max(2000).default('') });
 export type RevokeDbAccessRequest = z.infer<typeof revokeDbAccessSchema>;
@@ -22,7 +23,7 @@ export const dbCatalogInfoSchema = z.object({
 export type DbCatalogInfo = z.infer<typeof dbCatalogInfoSchema>;
 export const dbAccessGrantInfoSchema = z.object({
   id: z.string(), catalogId: z.string(), instanceId: z.string(), instanceName: z.string(), dbName: z.string(),
-  userId: z.string(), userName: z.string(), level: z.literal('read'), state: dbAccessStateSchema,
+  userId: z.string(), userName: z.string(), level: dbAccessLevelSchema, state: dbAccessStateSchema,
   error: z.string().nullable(), canManage: z.boolean(), updatedAt: z.string(),
 });
 export type DbAccessGrantInfo = z.infer<typeof dbAccessGrantInfoSchema>;

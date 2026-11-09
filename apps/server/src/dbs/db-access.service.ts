@@ -10,7 +10,7 @@ import { isFullId } from '../common/short-id';
 import { DB, PG_POOL, type Db } from '../db/db.module';
 import { dbAccessGrants, dbAssignments, dbCatalog, dbInstances, dbPersonalRoles, users } from '../db/schema';
 import { NotifierService } from '../notify/notifier.service';
-import { grantPostgresRead, openPostgresAccess, revokePostgresAccess } from './access-provisioner';
+import { grantPostgresAccess, openPostgresAccess, revokePostgresAccess } from './access-provisioner';
 import type { AdminConn } from './provisioner';
 
 type Catalog = typeof dbCatalog.$inferSelect;
@@ -62,6 +62,7 @@ export class DbAccessService {
       const c = await this.catalog(initial.catalogId);
       await this.locked(c.instanceId, async guard => {
         const g = await this.grant(initial.id);
+        const c = await this.catalog(g.catalogId);
         if (g.state === 'pending') await this.executeGrant(c, g, guard);
         else if (g.state === 'revoking') await this.executeRevoke(c, g, guard);
       });
@@ -108,7 +109,7 @@ export class DbAccessService {
     const rows = await this.db.select({ a: dbAssignments, c: dbCatalog, i: dbInstances, ownerName: users.name })
       .from(dbAssignments).innerJoin(dbInstances, eq(dbInstances.id, dbAssignments.instanceId))
       .innerJoin(users, eq(users.id, dbAssignments.requesterId)).leftJoin(dbCatalog, eq(dbCatalog.assignmentId, dbAssignments.id))
-      .where(and(eq(dbInstances.engine, 'postgres'), inArray(dbAssignments.status, ['active', 'disabled']), user.role === 'admin' ? undefined : or(eq(dbAssignments.requesterId, user.id), eq(dbCatalog.open, true))));
+      .where(and(eq(dbInstances.engine, 'postgres'), inArray(dbAssignments.status, ['active', 'disabled']), user.role === 'admin' ? undefined : or(eq(dbAssignments.requesterId, user.id), and(eq(dbCatalog.open, true), eq(dbCatalog.state, 'active')))));
     return rows.map(({ a, c, i, ownerName }) => ({ id: c?.id ?? null, assignmentId: a.id, instanceId: i.id, instanceName: i.name, dbName: a.dbName, source: 'eat', ownerId: a.requesterId, ownerName, open: c?.open ?? false, schemas: c?.schemas ?? ['public'], state: c?.state ?? 'pending', error: c?.error ?? null, canManage: user.role === 'admin' || a.requesterId === user.id }));
   }
   async open(user: AuthUser, assignmentId: string, dto: OpenDbAccessRequest): Promise<DbCatalogInfo> {
@@ -121,15 +122,16 @@ export class DbAccessService {
     return this.locked(a.instanceId, async guard => {
       guard();
       let [row] = await this.db.select().from(dbCatalog).where(eq(dbCatalog.assignmentId, a.id));
+      const schemas = dto.schemas ?? row?.schemas ?? ['public'];
       if (!row) {
         if (!dto.open) throw new ConflictException('该库尚未开放过申请');
         const id = randomUUID();
-        [row] = await this.db.insert(dbCatalog).values({ id, assignmentId: a.id, instanceId: a.instanceId, dbName: a.dbName, ownerId: a.requesterId, openedBy: user.id, schemas: dto.schemas, creatorRole: a.dbUser, readRole: `eat-db-${id}-read`, writeRole: `eat-db-${id}-write` }).returning();
+        [row] = await this.db.insert(dbCatalog).values({ id, assignmentId: a.id, instanceId: a.instanceId, dbName: a.dbName, ownerId: a.requesterId, openedBy: user.id, open: dto.open, schemas, creatorRole: a.dbUser, readRole: `eat-db-${id}-read`, writeRole: `eat-db-${id}-write` }).returning();
       }
-      if (row.state === 'active' && dto.open && JSON.stringify(row.schemas) !== JSON.stringify(dto.schemas)) throw new ConflictException('当前仅支持首次开放时选择 schema');
-      if (dto.open && row.state !== 'active') {
-        await this.db.update(dbCatalog).set({ state: 'pending', error: null, schemas: dto.schemas, openedBy: user.id }).where(eq(dbCatalog.id, row.id));
-        await this.executeOpen({ ...row, schemas: dto.schemas }, guard);
+      const schemasChanged = JSON.stringify(row.schemas) !== JSON.stringify(schemas);
+      if ((dto.open && row.state !== 'active') || schemasChanged) {
+        await this.db.update(dbCatalog).set({ state: 'pending', open: dto.open, error: null, schemas, openedBy: user.id, updatedAt: new Date() }).where(eq(dbCatalog.id, row.id));
+        await this.executeOpen({ ...row, open: dto.open, schemas }, guard);
       } else {
         guard();
         await this.db.update(dbCatalog).set({ open: dto.open, ...(row.state !== 'active' ? { state: 'failed' as const, error: '开放申请已取消' } : {}), updatedAt: new Date() }).where(eq(dbCatalog.id, row.id));
@@ -138,14 +140,27 @@ export class DbAccessService {
       return (await this.listCatalog(user)).find(c => c.id === row.id)!;
     });
   }
+  async reapply(user: AuthUser, id: string): Promise<DbCatalogInfo> {
+    const initial = await this.catalog(id);
+    this.manage(user, initial.ownerId);
+    return this.locked(initial.instanceId, async guard => {
+      const row = await this.catalog(id);
+      this.manage(user, row.ownerId);
+      guard();
+      await this.db.update(dbCatalog).set({ state: 'pending', error: null, openedBy: user.id, updatedAt: new Date() }).where(eq(dbCatalog.id, id));
+      await this.executeOpen(row, guard);
+      await this.audit.record({ actorId: user.id, action: 'db_access.reapplied', targetType: 'db_catalog', targetId: id });
+      return (await this.listCatalog(user)).find(c => c.id === id)!;
+    });
+  }
   private async executeOpen(row: Catalog, guard: () => void): Promise<void> {
     try {
       await openPostgresAccess(await this.connection(row.instanceId), row, guard);
       guard();
-      await this.db.update(dbCatalog).set({ state: 'active', open: true, error: null, updatedAt: new Date() }).where(eq(dbCatalog.id, row.id));
+      await this.db.update(dbCatalog).set({ state: 'active', open: row.open, error: null, updatedAt: new Date() }).where(eq(dbCatalog.id, row.id));
     } catch (e) {
       guard();
-      await this.db.update(dbCatalog).set({ state: 'failed', open: false, error: this.error(e), updatedAt: new Date() }).where(eq(dbCatalog.id, row.id));
+      await this.db.update(dbCatalog).set({ state: 'failed', error: this.error(e), updatedAt: new Date() }).where(eq(dbCatalog.id, row.id));
     }
   }
   async listGrants(user: AuthUser): Promise<DbAccessGrantInfo[]> {
@@ -153,25 +168,27 @@ export class DbAccessService {
       .from(dbAccessGrants).innerJoin(dbCatalog, eq(dbCatalog.id, dbAccessGrants.catalogId))
       .innerJoin(dbInstances, eq(dbInstances.id, dbCatalog.instanceId)).innerJoin(users, eq(users.id, dbAccessGrants.userId))
       .where(user.role === 'admin' ? undefined : or(eq(dbAccessGrants.userId, user.id), eq(dbCatalog.ownerId, user.id)));
-    return rows.map(({ g, c, i, userName }) => ({ id: g.id, catalogId: c.id, instanceId: i.id, instanceName: i.name, dbName: c.dbName, userId: g.userId, userName, level: 'read', state: g.state, error: g.error, canManage: user.role === 'admin' || c.ownerId === user.id, updatedAt: g.updatedAt.toISOString() }));
+    return rows.map(({ g, c, i, userName }) => ({ id: g.id, catalogId: c.id, instanceId: i.id, instanceName: i.name, dbName: c.dbName, userId: g.userId, userName, level: g.level, state: g.state, error: g.error, canManage: user.role === 'admin' || c.ownerId === user.id, updatedAt: g.updatedAt.toISOString() }));
   }
   private async info(user: AuthUser, id: string): Promise<DbAccessGrantInfo> {
     return (await this.listGrants(user)).find(g => g.id === id)!;
   }
   async give(user: AuthUser, catalogId: string, dto: GrantDbAccessRequest): Promise<DbAccessGrantInfo> {
-    const c = await this.catalog(catalogId);
-    this.manage(user, c.ownerId);
-    return this.locked(c.instanceId, async guard => {
+    const initial = await this.catalog(catalogId);
+    this.manage(user, initial.ownerId);
+    return this.locked(initial.instanceId, async guard => {
       guard();
+      const c = await this.catalog(catalogId);
+      this.manage(user, c.ownerId);
       if (c.state !== 'active') throw new ConflictException('请先完成库的开放配置');
       const [target] = await this.db.select().from(users).where(eq(users.id, dto.userId));
       if (!target || target.status !== 'active') throw new BadRequestException('请选择启用中的 EAT 用户');
       let [g] = await this.db.select().from(dbAccessGrants).where(and(eq(dbAccessGrants.catalogId, c.id), eq(dbAccessGrants.userId, target.id)));
-      if (!g) [g] = await this.db.insert(dbAccessGrants).values({ catalogId: c.id, userId: target.id, grantedBy: user.id }).returning();
-      if (g.state === 'active') return this.info(user, g.id);
+      if (!g) [g] = await this.db.insert(dbAccessGrants).values({ catalogId: c.id, userId: target.id, level: dto.level, grantedBy: user.id }).returning();
+      if (g.state === 'active' && g.level === dto.level) return this.info(user, g.id);
       if (g.state === 'revoking') throw new ConflictException('授权正在撤销，请先重试完成撤销');
-      await this.db.update(dbAccessGrants).set({ state: 'pending', error: null, grantedBy: user.id, updatedAt: new Date() }).where(eq(dbAccessGrants.id, g.id));
-      await this.executeGrant(c, { ...g, grantedBy: user.id }, guard);
+      await this.db.update(dbAccessGrants).set({ state: 'pending', level: dto.level, error: null, grantedBy: user.id, updatedAt: new Date() }).where(eq(dbAccessGrants.id, g.id));
+      await this.executeGrant(c, { ...g, level: dto.level, grantedBy: user.id }, guard);
       return this.info(user, g.id);
     });
   }
@@ -182,14 +199,14 @@ export class DbAccessService {
       let [identity] = await this.db.select().from(dbPersonalRoles).where(and(eq(dbPersonalRoles.instanceId, c.instanceId), eq(dbPersonalRoles.userId, g.userId)));
       guard();
       if (!identity) [identity] = await this.db.insert(dbPersonalRoles).values({ instanceId: c.instanceId, userId: g.userId, roleName: `eat-${g.userId}`, passwordEncrypted: encryptSecret(randomBytes(24).toString('hex')) }).returning();
-      await grantPostgresRead(await this.connection(c.instanceId), c, { ...identity, password: decryptSecret(identity.passwordEncrypted) }, guard);
+      await grantPostgresAccess(await this.connection(c.instanceId), c, g.level, { ...identity, password: decryptSecret(identity.passwordEncrypted) }, guard);
       guard();
       await this.db.update(dbAccessGrants).set({ state: 'active', error: null, updatedAt: new Date() }).where(eq(dbAccessGrants.id, g.id));
     } catch (e) {
       guard();
       await this.db.update(dbAccessGrants).set({ state: 'failed', error: this.error(e), updatedAt: new Date() }).where(eq(dbAccessGrants.id, g.id));
     }
-    await this.audit.record({ actorId: g.grantedBy, action: 'db_access.granted', targetType: 'db_access_grant', targetId: g.id, meta: { userId: g.userId, level: 'read' } });
+    await this.audit.record({ actorId: g.grantedBy, action: 'db_access.granted', targetType: 'db_access_grant', targetId: g.id, meta: { userId: g.userId, level: g.level } });
   }
   async credentials(user: AuthUser, catalogId: string, ip?: string): Promise<DbAccessCredentials> {
     const c = await this.catalog(catalogId);
@@ -249,6 +266,6 @@ export class DbAccessService {
     const g = await this.grant(id);
     if (g.state === 'revoking') return this.revoke(user, id, g.revocationReason ?? '', g.userId === user.id);
     if (g.state !== 'failed' && g.state !== 'pending') throw new ConflictException('仅未完成或执行失败的授权可重试');
-    return this.give(user, g.catalogId, { userId: g.userId, level: 'read' });
+    return this.give(user, g.catalogId, { userId: g.userId, level: g.level });
   }
 }

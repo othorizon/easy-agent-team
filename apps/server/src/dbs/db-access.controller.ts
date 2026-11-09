@@ -12,6 +12,8 @@ export class DbAccessController {
   async catalog(@CurrentUser() user: AuthUser) { return dbCatalogListSchema.parse(await this.access.listCatalog(user)); }
   @Post('assignments/:id/access')
   async open(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodValidationPipe(openDbAccessSchema)) body: OpenDbAccessRequest) { return dbCatalogInfoSchema.parse(await this.access.open(user, id, body)); }
+  @Post('access/catalog/:id/reapply')
+  async reapply(@CurrentUser() user: AuthUser, @Param('id') id: string) { return dbCatalogInfoSchema.parse(await this.access.reapply(user, id)); }
   @Get('access/grants')
   async grants(@CurrentUser() user: AuthUser) { return dbAccessGrantListSchema.parse(await this.access.listGrants(user)); }
   @Post('access/catalog/:id/grants')

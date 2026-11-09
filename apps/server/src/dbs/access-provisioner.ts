@@ -1,4 +1,5 @@
 import type { Client } from 'pg';
+import type { DbAccessLevel } from '@eat/shared';
 import { allowSetRole, q, withAdmin, type AdminConn } from './provisioner';
 
 export interface AccessDatabase {
@@ -45,20 +46,88 @@ export async function openPostgresAccess(conn: AdminConn, d: AccessDatabase, gua
     await c.query(`revoke connect on database ${q(d.dbName)} from public`);
     await c.query('revoke create on schema public from public');
     await c.query(`grant connect on database ${q(d.dbName)} to ${q(d.readRole)}, ${q(d.writeRole)}`);
-    for (const name of d.schemas) {
-      await c.query(`grant usage on schema ${q(name)} to ${q(d.readRole)}, ${q(d.writeRole)}`);
-      await c.query(`grant select on all tables in schema ${q(name)} to ${q(d.readRole)}, ${q(d.writeRole)}`);
-      await c.query(`alter default privileges for role ${q(d.creatorRole)} in schema ${q(name)} grant select on tables to ${q(d.readRole)}, ${q(d.writeRole)}`);
-    }
+    await applySchemaAccess(c, conn, d);
   }, guard);
 }
 
-export async function grantPostgresRead(conn: AdminConn, d: AccessDatabase, identity: { id: string; roleName: string; password: string }, guard: () => void): Promise<void> {
+/** 按目标端 ACL 找出旧范围，崩溃后只需持久化新的 schema 列表即可恢复清理。 */
+async function applySchemaAccess(c: Client, conn: AdminConn, d: AccessDatabase): Promise<void> {
+  const groups = [d.readRole, d.writeRole];
+  const { rows: namespaces } = await c.query<{ name: string; owner: string }>(`
+    select n.nspname name, pg_get_userbyid(n.nspowner) owner from pg_namespace n
+    where n.nspname=any($1::text[])
+       or exists(select 1 from aclexplode(n.nspacl) a join pg_roles r on r.oid=a.grantee where r.rolname=any($2::text[]))
+       or exists(select 1 from pg_class t cross join lateral aclexplode(t.relacl) a join pg_roles r on r.oid=a.grantee where t.relnamespace=n.oid and r.rolname=any($2::text[]))
+       or exists(select 1 from pg_default_acl p cross join lateral aclexplode(p.defaclacl) a join pg_roles r on r.oid=a.grantee where p.defaclnamespace=n.oid and r.rolname=any($2::text[]))
+  `, [d.schemas, groups]);
+  for (const name of d.schemas) {
+    if (!namespaces.some(n => n.name === name)) throw new Error(`schema ${name} 不存在，请先创建后重新应用授权`);
+  }
+  const roles = groups.map(q).join(', ');
+  for (const ns of namespaces) {
+    const included = d.schemas.includes(ns.name);
+    await assumeObjectOwner(c, conn, ns.owner === 'pg_database_owner' ? d.creatorRole : ns.owner);
+    await c.query(`revoke all privileges on schema ${q(ns.name)} from ${roles}`);
+    if (included) await c.query(`grant usage on schema ${q(ns.name)} to ${roles}`);
+
+    // 使用各对象的实际 owner，避免 ALL TABLES 对其他建表角色仅给 warning 而漏授权。
+    const { rows: objects } = await c.query<{ name: string; owner: string; kind: string }>(`
+      select t.relname name, pg_get_userbyid(t.relowner) owner, t.relkind kind
+      from pg_class t join pg_namespace n on n.oid=t.relnamespace
+      where n.nspname=$1 and t.relkind in ('r','p','v','m','f','S') order by t.oid
+    `, [ns.name]);
+    for (const object of objects) {
+      await assumeObjectOwner(c, conn, object.owner);
+      const kind = object.kind === 'S' ? 'sequence' : 'table';
+      const identifier = `${q(ns.name)}.${q(object.name)}`;
+      await c.query(`revoke all privileges on ${kind} ${identifier} from ${roles}`);
+      if (!included) continue;
+      if (kind === 'sequence') await c.query(`grant usage, select on sequence ${identifier} to ${q(d.writeRole)}`);
+      else {
+        await c.query(`grant select on table ${identifier} to ${roles}`);
+        await c.query(`grant insert, update, delete on table ${identifier} to ${q(d.writeRole)}`);
+      }
+    }
+    const { rows: defaults } = await c.query<{ owner: string }>(`
+      select distinct pg_get_userbyid(p.defaclrole) owner from pg_default_acl p
+      join pg_namespace n on n.oid=p.defaclnamespace
+      cross join lateral aclexplode(p.defaclacl) a join pg_roles r on r.oid=a.grantee
+      where n.nspname=$1 and r.rolname=any($2::text[])
+    `, [ns.name, groups]);
+    for (const owner of new Set([d.creatorRole, ...defaults.map(p => p.owner)])) {
+      await assumeObjectOwner(c, conn, owner);
+      const base = `alter default privileges for role ${q(owner)} in schema ${q(ns.name)}`;
+      await c.query(`${base} revoke all privileges on tables from ${roles}`);
+      await c.query(`${base} revoke all privileges on sequences from ${roles}`);
+      if (!included || owner !== d.creatorRole) continue;
+      await c.query(`${base} grant select on tables to ${roles}`);
+      await c.query(`${base} grant insert, update, delete on tables to ${q(d.writeRole)}`);
+      await c.query(`${base} grant usage, select on sequences to ${q(d.writeRole)}`);
+    }
+  }
+}
+
+async function assumeObjectOwner(c: Client, conn: AdminConn, owner: string): Promise<void> {
+  await c.query('reset role');
+  if (owner === conn.adminUser) return;
+  const version = Number((await c.query('show server_version_num')).rows[0].server_version_num);
+  const { rows: [membership] } = await c.query('select pg_has_role(current_user,$1,$2) allowed', [owner, version >= 160000 ? 'SET' : 'MEMBER']);
+  if (!membership.allowed) await allowSetRole(c, owner, conn.adminUser);
+  await c.query(`set local role ${q(owner)}`);
+}
+
+export async function grantPostgresAccess(conn: AdminConn, d: AccessDatabase, level: DbAccessLevel, identity: { id: string; roleName: string; password: string }, guard: () => void): Promise<void> {
   await transaction(conn, 'postgres', async c => {
     await ensureRole(c, identity.roleName, `eat:db-personal-role:${identity.id}`, identity.password);
     await allowSetRole(c, identity.roleName, conn.adminUser);
-    await c.query(`grant ${q(d.readRole)} to ${q(identity.roleName)}`);
+    const desired = level === 'write' ? d.writeRole : d.readRole;
+    const previous = level === 'write' ? d.readRole : d.writeRole;
+    // 先加入新组，再退出旧组；同一目标事务保证重试没有权限空窗。
+    await c.query(`grant ${q(desired)} to ${q(identity.roleName)}`);
+    await c.query(`revoke ${q(previous)} from ${q(identity.roleName)}`);
   }, guard);
+  // 只读执行包含崩溃后的重放：即使旧写组已退出，也必须补完断会话。
+  if (level === 'read') await terminatePostgresAccessSessions(conn, d.dbName, identity.roleName, guard);
 }
 
 export async function revokePostgresAccess(conn: AdminConn, d: AccessDatabase, identity: { id: string; roleName: string }, guard: () => void): Promise<void> {
@@ -72,10 +141,16 @@ export async function revokePostgresAccess(conn: AdminConn, d: AccessDatabase, i
   }, guard);
   if (!exists) return;
   // 成员关系必须先提交再断会话，重连不能继续沿用旧权限。
+  await terminatePostgresAccessSessions(conn, d.dbName, roleName, guard);
+}
+
+async function terminatePostgresAccessSessions(conn: AdminConn, dbName: string, roleName: string, guard: () => void): Promise<void> {
   await withAdmin(conn, 'postgres', async c => {
     guard();
     await allowSetRole(c, roleName, conn.adminUser);
     await c.query(`set role ${q(roleName)}`);
-    await c.query('select pg_terminate_backend(pid) from pg_stat_activity where datname=$1 and usename=$2 and pid<>pg_backend_pid()', [d.dbName, roleName]);
+    guard();
+    await c.query('select pg_terminate_backend(pid) from pg_stat_activity where datname=$1 and usename=$2 and pid<>pg_backend_pid()', [dbName, roleName]);
+    guard();
   });
 }

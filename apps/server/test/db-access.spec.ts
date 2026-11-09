@@ -201,7 +201,7 @@ it('Owner 和管理员管理目录，成员只看开放库；关闭不影响授�
   const c = catalogs[0];
   expect((await api('POST', `/api/db/assignments/${allocations[0].id}/access`, 'reader', { open: false })).status).toBe(403);
   expect((await api('POST', `/api/db/access/catalog/${c.id}/grants`, 'reader', { userId: ids.reader, level: 'read' })).status).toBe(403);
-  expect((await api('POST', `/api/db/access/catalog/${c.id}/grants`, 'owner', { userId: ids.reader, level: 'write' })).status).toBe(400);
+  expect((await api('POST', `/api/db/access/catalog/${c.id}/grants`, 'owner', { userId: ids.reader, level: 'owner' })).status).toBe(400);
   const closed = await api('POST', `/api/db/assignments/${allocations[0].id}/access`, 'owner', { open: false });
   expect(closed.body).toMatchObject({ id: c.id, open: false, state: 'active' });
   const memberCatalog = await api('GET', '/api/db/access/catalog', 'reader');
