@@ -1269,6 +1269,10 @@ export const dbPersonalRoles = pgTable('db_personal_role', {
   userId: uuid('user_id').notNull().references(() => users.id),
   roleName: text('role_name').notNull(),
   passwordEncrypted: text('password_encrypted').notNull(),
+  // 当前密码保留到目标 ALTER 与平台写回完成；pending 在重启后幂等恢复。
+  pendingPasswordEncrypted: text('pending_password_encrypted'),
+  provisioned: boolean('provisioned').notNull().default(false),
+  passwordError: text('password_error'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [uniqueIndex('db_personal_role_instance_user_idx').on(t.instanceId, t.userId)]);
 

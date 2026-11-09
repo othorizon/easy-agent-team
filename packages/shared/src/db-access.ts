@@ -34,3 +34,9 @@ export const dbAccessCredentialsSchema = z.object({
 export type DbAccessCredentials = z.infer<typeof dbAccessCredentialsSchema>;
 export const dbCatalogListSchema = z.array(dbCatalogInfoSchema);
 export const dbAccessGrantListSchema = z.array(dbAccessGrantInfoSchema);
+
+export const dbAccessGrantQuerySchema = z.object({ scope: z.enum(['visible', 'mine']).default('visible') });
+export type DbAccessGrantQuery = z.infer<typeof dbAccessGrantQuerySchema>;
+/** 重置不返回密码；本人从凭证端点按需读取，pending表示已持久化并将恢复重试。 */
+export const dbPersonalPasswordResetSchema = z.object({ instanceId: z.string(), state: z.enum(['complete', 'pending']), error: z.string().nullable() });
+export type DbPersonalPasswordReset = z.infer<typeof dbPersonalPasswordResetSchema>;

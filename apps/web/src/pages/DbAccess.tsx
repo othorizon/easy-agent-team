@@ -1,4 +1,4 @@
-import { grantDbAccessSchema, openDbAccessSchema, revokeDbAccessSchema, type DbAccessCredentials, type DbAccessGrantInfo, type DbCatalogInfo, type GrantDbAccessRequest, type OpenDbAccessRequest, type RevokeDbAccessRequest, type UserPublic } from '@eat/shared';
+import { grantDbAccessSchema, openDbAccessSchema, revokeDbAccessSchema, type DbAccessCredentials, type DbAccessGrantInfo, type DbCatalogInfo, type DbPersonalPasswordReset, type GrantDbAccessRequest, type OpenDbAccessRequest, type RevokeDbAccessRequest, type UserPublic } from '@eat/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Eye, EyeOff, KeyRound } from 'lucide-react';
@@ -125,6 +125,17 @@ function RevokeForm({ row, done }: { row: DbAccessGrantInfo; done: () => void })
 function PersonalCredentials({ grant }: { grant: DbAccessGrantInfo }) {
   const [value, setValue] = useState<DbAccessCredentials | null>(null);
   const [loading, setLoading] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const reset = async () => {
+    setResetting(true);
+    setValue(null);
+    try {
+      const result = await api<DbPersonalPasswordReset>('POST', `/api/db/access/catalog/${grant.catalogId}/reset-password`);
+      if (result.state === 'complete') toast.success('个人密码已重置，同一实例的全部库授权改用新密码');
+      else toast.error(`个人密码重置待完成，平台将自动重试：${result.error ?? '请稍后再查看凭证'}`);
+    } catch (e) { toast.error(errorMessage(e)); }
+    finally { setResetting(false); }
+  };
   const reveal = async () => {
     setLoading(true);
     try { setValue(await api<DbAccessCredentials>('POST', `/api/db/access/catalog/${grant.catalogId}/credentials`)); }
@@ -137,6 +148,7 @@ function PersonalCredentials({ grant }: { grant: DbAccessGrantInfo }) {
       <div className="flex items-center gap-1"><span className="text-muted-foreground">个人角色</span><InlineCode>{value.user}</InlineCode><CopyButton text={value.user} /></div>
       <div className="flex flex-wrap items-center gap-1"><span className="text-muted-foreground">密码</span><InlineCode>{value.password}</InlineCode><CopyButton text={value.password} /><Button size="icon-sm" variant="ghost" aria-label="隐藏个人凭证" onClick={() => setValue(null)}><EyeOff /></Button></div>
       <div className="flex items-start gap-1"><InlineCode>{value.url}</InlineCode><CopyButton text={value.url} /></div>
-    </div> : <div className="flex items-center gap-3"><InlineCode>••••••••••••</InlineCode><Button variant="outline" loading={loading} onClick={() => void reveal()}><Eye />查看个人凭证</Button></div>}
+    </div> : <div className="flex items-center gap-3"><InlineCode>••••••••••••</InlineCode><Button variant="outline" loading={loading} disabled={resetting} onClick={() => void reveal()}><Eye />查看个人凭证</Button></div>}
+    <div className="border-t pt-4"><Confirm title="重置个人密码？" description={`同一实例「${grant.instanceName}」上其他库的授权也会使用新密码。已保存的旧密码将失效。个人凭证只供本人临时使用，不要配进线上服务。`} confirmText="重置个人密码" onConfirm={() => void reset()}><Button variant="outline" loading={resetting} disabled={loading}>重置个人密码</Button></Confirm></div>
   </div>;
 }

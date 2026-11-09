@@ -122,7 +122,7 @@ export function dbConnectionUrl(c: Omit<DbCredentials, 'url' | 'assignmentId'>):
  * 凭证 → dotenv 变量，按写出顺序。变量名沿用旧凭证环境的 `DB_*`（已有项目的 `.env` 与代码不用改），
  * 另加一条 `DATABASE_URL`（多数 ORM 直接认它）。CLI 写文件 / 打印、控制台复制共用这一份。
  */
-export function dbCredentialsToEnv(c: DbCredentials): Array<[string, string]> {
+export function dbCredentialsToEnv(c: Pick<DbCredentials, 'host' | 'port' | 'database' | 'user' | 'password' | 'url'>): Array<[string, string]> {
   return [
     ['DB_HOST', c.host],
     ['DB_PORT', String(c.port)],
@@ -142,14 +142,42 @@ export function matchDbAssignments<T extends { id: string; dbName: string; insta
   rows: T[],
   ref: string,
 ): T[] {
-  const needle = ref.trim();
-  const byId = rows.filter((r) => r.id === needle);
-  if (byId.length > 0) return byId;
-  const live = rows.filter((r) => r.status !== 'deleted');
-  const at = needle.lastIndexOf('@');
-  if (at > 0) {
-    const [db, instance] = [needle.slice(0, at), needle.slice(at + 1)];
-    return live.filter((r) => r.dbName === db && r.instanceName === instance);
+  const byId = rows.filter(r => r.id === ref.trim());
+  return byId.length ? byId : matchDbReferences(rows.filter(r => r.status !== 'deleted'), ref);
+}
+
+export interface DbCredentialTarget {
+  kind: 'owner' | 'personal';
+  /** owner 分配 ID 或个人授权的目录 ID。 */
+  id: string;
+  instanceId: string;
+  instanceName: string;
+  dbName: string;
+}
+
+/** 只传本人分配和本人授权。先按实例+库去重并优先 owner，再判断名字歧义。 */
+export function matchDbCredentialTargets(
+  assignments: Array<{ id: string; instanceId: string; instanceName: string; dbName: string; status: string }>,
+  grants: Array<{ catalogId: string; instanceId: string; instanceName: string; dbName: string; state: string }>,
+  ref: string,
+): DbCredentialTarget[] {
+  const targets = new Map<string, DbCredentialTarget>();
+  for (const g of grants) {
+    if (g.state === 'active') targets.set(JSON.stringify([g.instanceId, g.dbName]), { kind: 'personal', id: g.catalogId, instanceId: g.instanceId, instanceName: g.instanceName, dbName: g.dbName });
   }
-  return live.filter((r) => r.dbName === needle);
+  for (const a of assignments) {
+    if (a.status === 'active') targets.set(JSON.stringify([a.instanceId, a.dbName]), { kind: 'owner', id: a.id, instanceId: a.instanceId, instanceName: a.instanceName, dbName: a.dbName });
+  }
+  return matchDbReferences([...targets.values()], ref);
+}
+
+/** 服务端既有 owner 解析与 CLI 分配+授权解析共用名字匹配边界。 */
+function matchDbReferences<T extends { id: string; dbName: string; instanceName: string }>(rows: T[], ref: string): T[] {
+  const needle = ref.trim();
+  const byId = rows.filter(r => r.id === needle);
+  if (byId.length) return byId;
+  const at = needle.lastIndexOf('@');
+  return at > 0
+    ? rows.filter(r => r.dbName === needle.slice(0, at) && r.instanceName === needle.slice(at + 1))
+    : rows.filter(r => r.dbName === needle);
 }

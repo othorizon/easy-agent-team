@@ -1,5 +1,5 @@
-import { dbCredentialsToEnv, matchDbAssignments, resolveDbInstance } from '@eat/shared';
-import type { DbAssignmentInfo, DbCredentials, DbInstanceInfo } from '@eat/shared';
+import { dbCredentialsToEnv, matchDbAssignments, matchDbCredentialTargets, resolveDbInstance } from '@eat/shared';
+import type { DbAccessCredentials, DbAccessGrantInfo, DbAssignmentInfo, DbCredentials, DbCredentialTarget, DbCatalogInfo, DbPersonalPasswordReset, DbInstanceInfo } from '@eat/shared';
 import { Api } from '../client.js';
 import { mergeEnvFile, printWriteResult, writeEnvFile } from '../dotenv-file.js';
 import { formatDotenvLine, PRINT_FORMATS, renderPrinted, type PrintFormat } from '../dotenv-format.js';
@@ -72,31 +72,30 @@ function refOf(r: DbAssignmentInfo, rows: DbAssignmentInfo[]): string {
 
 const FULL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** 库名 / `库名@实例名` 在自己名下找；完整 id 直接放行（管理员可按 id 取别人的，权限由服务端判） */
-async function resolveAssignmentId(api: Api, ref: string): Promise<string> {
-  if (FULL_UUID.test(ref.trim())) return ref.trim();
-  const rows = await api.request<DbAssignmentInfo[]>('GET', '/api/db/assignments/mine');
-  const hits = matchDbAssignments(rows, ref);
-  if (hits.length === 1) return hits[0].id;
-  if (hits.length > 1) {
-    throw new Error(
-      `有 ${hits.length} 个名为 ${ref} 的库，请写成「库名@实例名」：\n${hits.map((h) => `  ${h.dbName}@${h.instanceName}`).join('\n')}`,
-    );
-  }
-  const names = rows.filter((r) => r.status === 'active').map((r) => refOf(r, rows));
-  throw new Error(
-    `名下没有库 ${ref}。${names.length > 0 ? `可用的有：${names.join('、')}` : '还没有已开通的库，eat db list 查看申请进度'}`,
-  );
+/** 完整分配 UUID 保留旧管理员入口；名字只从本人的有效分配与授权中选择。 */
+async function resolveCredentialTarget(api: Api, ref: string): Promise<Pick<DbCredentialTarget, 'kind' | 'id'>> {
+  if (FULL_UUID.test(ref.trim())) return { kind: 'owner', id: ref.trim() };
+  const [rows, grants] = await Promise.all([
+    api.request<DbAssignmentInfo[]>('GET', '/api/db/assignments/mine'),
+    api.request<DbAccessGrantInfo[]>('GET', '/api/db/access/grants?scope=mine'),
+  ]);
+  const hits = matchDbCredentialTargets(rows, grants, ref);
+  if (hits.length === 1) return hits[0];
+  if (hits.length > 1) throw new Error(`有 ${hits.length} 个名为 ${ref} 的库，请写成「库名@实例名」：\n${hits.map(h => `  ${h.dbName}@${h.instanceName}`).join('\n')}`);
+  const names = [...new Set([...rows.filter(r => r.status === 'active'), ...grants.filter(g => g.state === 'active')].map(r => {
+    return matchDbCredentialTargets(rows, grants, r.dbName).length > 1 ? `${r.dbName}@${r.instanceName}` : r.dbName;
+  }))];
+  throw new Error(`没有库 ${ref} 的有效分配或授权。${names.length ? `可用的有：${names.join('、')}。` : ''}用 eat db access list 查看开放申请的库，在控制台数据库权限页向 Owner 申请。`);
 }
 
 /** `--print` 的格式：在 dotenv / shell / json 之外多一个 url——只输出连接串，`psql "$(…)"` 一行连上 */
 const CREDENTIAL_PRINT_FORMATS = [...PRINT_FORMATS, 'url'] as const;
 type CredentialPrintFormat = (typeof CREDENTIAL_PRINT_FORMATS)[number];
 
-async function fetchCredentials(ref: string): Promise<DbCredentials> {
+async function fetchCredentials(ref: string): Promise<DbCredentials | DbAccessCredentials> {
   const api = Api.fromSaved();
-  const id = await resolveAssignmentId(api, ref);
-  return api.request<DbCredentials>('POST', `/api/db/assignments/${id}/credentials`);
+  const target = await resolveCredentialTarget(api, ref);
+  return api.request('POST', target.kind === 'owner' ? `/api/db/assignments/${target.id}/credentials` : `/api/db/access/catalog/${target.id}/credentials`);
 }
 
 /**
@@ -149,4 +148,44 @@ export async function dbCredentialsRun(ref: string, command: string[]): Promise<
   if (command.length === 0) throw new Error('缺少要运行的命令：eat db credentials run <库> -- <命令...>');
   const cred = await fetchCredentials(ref);
   await runWithEnv(command, new Map(dbCredentialsToEnv(cred)));
+}
+
+/** 与 credentials run 使用同一个函数，参数与执行语义完全一致。 */
+export const dbRun = dbCredentialsRun;
+
+export async function dbAccessList(): Promise<void> {
+  const api = Api.fromSaved();
+  const [catalog, grants] = await Promise.all([
+    api.request<DbCatalogInfo[]>('GET', '/api/db/access/catalog'),
+    api.request<DbAccessGrantInfo[]>('GET', '/api/db/access/grants?scope=mine'),
+  ]);
+  console.log('开放申请的库：');
+  for (const c of catalog.filter(c => c.open)) console.log(`  ${c.dbName}@${c.instanceName} · Owner ${c.ownerName}`);
+  console.log('我的授权：');
+  for (const g of grants) console.log(`  [${g.state}] ${g.dbName}@${g.instanceName} · ${g.level === 'read' ? '只读' : '读写'}${g.error ? ` · ${g.error}` : ''}`);
+  console.log('申请入口：控制台 → 数据库 → 数据库权限。个人凭证只供本人临时使用，不要配进线上服务。');
+}
+
+async function resolveOwnGrant(api: Api, ref: string, activeOnly: boolean): Promise<DbAccessGrantInfo> {
+  const rows = await api.request<DbAccessGrantInfo[]>('GET', '/api/db/access/grants?scope=mine');
+  const eligible = rows.filter(g => activeOnly ? g.state === 'active' : g.state !== 'revoked');
+  const hits = matchDbCredentialTargets([], eligible.map(g => ({ ...g, state: 'active' })), ref);
+  if (hits.length > 1) throw new Error(`有多个同名库，请写成「库名@实例名」：${hits.map(h => `${h.dbName}@${h.instanceName}`).join('、')}`);
+  if (!hits.length) throw new Error(`没有库 ${ref} 的${activeOnly ? '有效' : ''}个人授权。用 eat db access list 查看，在控制台数据库权限页申请。`);
+  return eligible.find(g => g.catalogId === hits[0].id)!;
+}
+export async function dbAccessRevoke(ref: string): Promise<void> {
+  const api = Api.fromSaved();
+  const grant = await resolveOwnGrant(api, ref, false);
+  const result = await api.request<DbAccessGrantInfo>('POST', `/api/db/access/grants/${grant.id}/relinquish`);
+  if (result.state !== 'revoked') throw new Error(`放弃授权尚未完成：${result.error ?? result.state}。请在控制台重试。`);
+  console.log(`已放弃 ${grant.dbName}@${grant.instanceName} 的授权`);
+}
+export async function dbAccessResetPassword(ref: string): Promise<void> {
+  const api = Api.fromSaved();
+  const grant = await resolveOwnGrant(api, ref, true);
+  console.error(`提示：同一实例 ${grant.instanceName} 上其他库的授权也会使用新密码。个人凭证不要配进线上服务。`);
+  const result = await api.request<DbPersonalPasswordReset>('POST', `/api/db/access/catalog/${grant.catalogId}/reset-password`);
+  if (result.state !== 'complete') throw new Error(`个人密码重置待完成：${result.error ?? '平台将自动重试'}。请稍后用 eat db run 重试。`);
+  console.log('个人密码已重置。下次 eat db run 将自动使用新密码。');
 }

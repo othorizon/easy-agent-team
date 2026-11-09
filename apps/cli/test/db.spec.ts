@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { DbAssignmentInfo, DbCredentials } from '@eat/shared';
+import type { DbAccessGrantInfo, DbAssignmentInfo, DbCredentials } from '@eat/shared';
 import { matchDbAssignments } from '@eat/shared';
 import { Api } from '../src/client.js';
-import { dbCredentialsPull, dbCredentialsRun } from '../src/commands/db.js';
+import { dbAccessList, dbAccessResetPassword, dbAccessRevoke, dbCredentialsPull, dbCredentialsRun, dbRun } from '../src/commands/db.js';
 
 const ID_A = '11111111-1111-4111-8111-111111111111';
 const ID_B = '22222222-2222-4222-8222-222222222222';
@@ -17,7 +17,7 @@ function assignment(id: string, dbName: string, instanceName: string, status = '
     dbName,
     instanceName,
     status,
-    instanceId: 'i',
+    instanceId: instanceName,
     instanceHost: 'db.local',
     instancePort: 5432,
     engine: 'postgres',
@@ -53,9 +53,14 @@ const CRED: DbCredentials = {
 let dir: string;
 let stdout: string;
 
-function fixture() {
+function grant(dbName = 'analytics', instanceName = '测试 PG', instanceId = '测试 PG'): DbAccessGrantInfo {
+  return { id: 'grant-reader', catalogId: 'catalog-reader', dbName, instanceName, instanceId, userId: 'reader', userName: '读者', level: 'read', state: 'active', error: null, canManage: false, updatedAt: '' };
+}
+
+function fixture(grants: DbAccessGrantInfo[] = []) {
   const request = vi.fn(async (method: string, url: string) => {
     if (method === 'GET' && url === '/api/db/assignments/mine') return MINE;
+    if (method === 'GET' && url === '/api/db/access/grants?scope=mine') return grants;
     if (method === 'POST' && url.endsWith('/credentials')) return { ...CRED, assignmentId: url.split('/')[4] };
     throw new Error(`unexpected ${method} ${url}`);
   });
@@ -167,4 +172,78 @@ describe('eat db credentials run', () => {
     await expect(dbCredentialsRun('crm', [])).rejects.toThrow(/eat db credentials run <库> -- <命令/);
     expect(request).not.toHaveBeenCalled();
   });
+});
+
+
+describe('分配与个人授权共用名字解析', () => {
+  it('授权持有人可以run授权的库，且同库同时有分配时优先owner凭证', async () => {
+    const request = fixture([grant(), grant('crm')]);
+    try {
+      await dbCredentialsRun('analytics', [process.execPath, '-e', 'process.exit(process.env.DB_PASSWORD ? 7 : 9)']);
+      expect(process.exitCode).toBe(7);
+      expect(request).toHaveBeenCalledWith('POST', '/api/db/access/catalog/catalog-reader/credentials');
+      request.mockClear();
+      await dbCredentialsRun('crm', [process.execPath, '-e', 'process.exit(0)']);
+      expect(request).toHaveBeenCalledWith('POST', `/api/db/assignments/${ID_A}/credentials`);
+      expect(request).not.toHaveBeenCalledWith('POST', '/api/db/access/catalog/catalog-reader/credentials');
+    } finally { process.exitCode = undefined; }
+  });
+});
+
+
+it('credentials pull也支持本人授权，打印连接串沿用既有格式', async () => {
+  const request = fixture([grant()]);
+  await dbCredentialsPull('analytics@测试 PG', { print: true, format: 'url' });
+  expect(request).toHaveBeenCalledWith('POST', '/api/db/access/catalog/catalog-reader/credentials');
+  expect(stdout).toBe(`${CRED.url}\n`);
+});
+
+it('分配和授权在不同实例同名时报歧义；无有效授权时不取凭证、不启动命令', async () => {
+  const request = fixture([grant('crm', '另一个 PG', 'another'), { ...grant('revoked'), state: 'revoked' }]);
+  const marker = path.join(dir, 'started');
+  const command = [process.execPath, '-e', `require('fs').writeFileSync(${JSON.stringify(marker)}, 'started')`];
+  await expect(dbRun('crm', command)).rejects.toThrow(/crm@另一个 PG[\s\S]*crm@测试 PG/);
+  await expect(dbRun('revoked', command)).rejects.toThrow(/eat db access list[\s\S]*申请/);
+  expect(request.mock.calls.filter(([method]) => method === 'POST')).toEqual([]);
+  expect(fs.readdirSync(dir)).toEqual([]);
+});
+
+it('db run支持显式sh -c管道，六个变量只进子进程，父环境和工作目录保持原样', async () => {
+  fixture([grant()]);
+  const old = process.env.DB_PASSWORD;
+  process.env.DB_PASSWORD = 'parent-password';
+  const previousCwd = process.cwd();
+  process.chdir(dir);
+  try {
+    const script = `const env=process.env; if(env.DB_HOST!=="db.local" || env.DB_PORT!=="5432" || env.DB_NAME!=="crm" || env.DB_USER!=="u_crm" || env.DB_PASSWORD!==${JSON.stringify(CRED.password)} || env.DATABASE_URL!==${JSON.stringify(CRED.url)}) process.exit(31)`;
+    await dbRun('analytics', ['sh', '-c', '"$@" && printf ok | cat >/dev/null && exit 13', 'eat-test', process.execPath, '-e', script]);
+    expect(process.exitCode).toBe(13);
+    expect(process.env.DB_PASSWORD).toBe('parent-password');
+    expect(fs.readdirSync(dir)).toEqual([]);
+  } finally {
+    process.chdir(previousCwd);
+    if (old === undefined) delete process.env.DB_PASSWORD; else process.env.DB_PASSWORD = old;
+    process.exitCode = undefined;
+  }
+});
+
+it('access list只展示开放目录和我的授权；放弃按本人授权，重置前提示整实例影响', async () => {
+  const request = fixture([grant()]);
+  request.mockImplementation(async (method, url) => {
+    if (method === 'GET' && url.includes('scope=mine')) return [grant()];
+    if (method === 'GET' && url.endsWith('/catalog')) return [{ dbName: 'open', instanceName: 'PG', open: true }, { dbName: 'closed', instanceName: 'PG', open: false }] as any;
+    if (url.endsWith('/relinquish')) return { ...grant(), state: 'revoked' } as any;
+    if (url.endsWith('/reset-password')) {
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('同一实例'));
+      return { instanceId: 'i', state: 'complete', error: null } as any;
+    }
+    throw new Error(`unexpected ${method} ${url}`);
+  });
+  await dbAccessList();
+  expect(console.log).toHaveBeenCalledWith(expect.stringContaining('open@PG'));
+  expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining('closed@PG'));
+  await dbAccessRevoke('analytics');
+  expect(request).toHaveBeenCalledWith('POST', '/api/db/access/grants/grant-reader/relinquish');
+  await dbAccessResetPassword('analytics');
+  expect(request).toHaveBeenCalledWith('POST', '/api/db/access/catalog/catalog-reader/reset-password');
 });

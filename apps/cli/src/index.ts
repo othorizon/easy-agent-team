@@ -19,7 +19,7 @@ import {
   envUpdate,
 } from './commands/env.js';
 import { askCreate, askDelete, askList, askReply, askResolve, askShow, askTargets } from './commands/ask.js';
-import { dbCredentialsPull, dbCredentialsRun, dbInstances, dbList, dbRequest } from './commands/db.js';
+import { dbAccessList, dbAccessResetPassword, dbAccessRevoke, dbRun, dbCredentialsPull, dbCredentialsRun, dbInstances, dbList, dbRequest } from './commands/db.js';
 import {
   appCreate,
   appDelete,
@@ -251,6 +251,16 @@ dbCredentials
   .description('把连接凭证注入子进程后运行命令（命令写在 -- 之后）：值不落盘，退出码透传；平台值覆盖当前 shell 的同名变量')
   .showHelpAfterError('提示：要运行的命令写在 -- 之后，例如 eat db credentials run crm -- npm run migrate')
   .action(dbCredentialsRun);
+
+db.command('run <db> <command...>')
+  .usage('<db> -- <command...>')
+  .description('将 owner 或本人授权的连接凭证注入子进程；值不落盘，退出码透传；管道请显式用 sh -c')
+  .showHelpAfterError('提示：eat db run crm -- npm run migrate')
+  .action(dbRun);
+const dbAccess = db.command('access').description('数据库权限：开放目录、本人授权、放弃授权与重置个人密码');
+dbAccess.command('list').description('开放申请的库与我的授权').action(dbAccessList);
+dbAccess.command('revoke <db>').description('放弃自己的授权（库名或库名@实例名）').action(dbAccessRevoke);
+dbAccess.command('reset-password <db>').description('重置本人个人密码；同一实例的其他库授权也会改用新密码').action(dbAccessResetPassword);
 
 // deploy 留在顶层：最高频，且做成 `app deploy` 会与 `app <slug>` 形式的参数打架
 program

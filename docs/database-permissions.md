@@ -26,6 +26,14 @@ Owner 和管理员可以撤销授权并填写原因。EAT 退出该库的组角�
 
 个人凭证只有持有人本人能读取，管理员查看授权清单不会取得别人的密码。接口响应使用 `Cache-Control: no-store`，控制台只把凭证留在当前弹窗中，隐藏或关闭即清除。开放、关闭、授予、重新应用、撤销、放弃和每次凭证读取均记审计。
 
+控制台的个人凭证弹窗可以「重置个人密码」。重置影响本人在同一实例上的全部库授权，原密码失效，分配出去的 owner 密码不变。新密码先加密保存为待应用状态，目标 PostgreSQL 修改成功后才替换当前密文；目标修改或平台完成写入失败时保留待应用密文，启动及每 30 秒幂等恢复。重置待完成时，凭证端点先恢复操作，未完成则拒绝返回可能已经失效的密码。
+
+CLI 使用 `eat db run <库名>[@实例名] -- <命令>`，与 `eat db credentials run` 相同；`credentials pull` 也支持本人授权。名字同时匹配自己的有效分配与授权，同一实例同一库优先 owner；跨实例同名时报错并给出 `库名@实例名`，不会读取凭证或启动命令。完整分配 UUID 保留管理员原有读取入口。
+
+`run` 将 `DB_HOST`、`DB_PORT`、`DB_NAME`、`DB_USER`、`DB_PASSWORD` 和 `DATABASE_URL` 注入子进程，不落盘、不修改父环境，透传退出码。管道与 shell 展开请显式使用 `-- sh -c '…'`。首次使用会自动生成缺少的个人凭证，创建失败后可以重试。
+
+`eat db access list` 查看开放目录与自己的授权，`eat db access revoke <库>` 放弃本人授权，`eat db access reset-password <库>` 重置个人密码；重置前提示整个实例的影响。申请入口在控制台「数据库权限」页。CLI 只查询 `scope=mine`，不会把可管理的他人授权当作本人凭证候选。
+
 执行失败的授权会显示失败原因，可由 Owner 或管理员重试。未完成的开放、待执行授权和撤销中记录持久化保存，应用启动及每 30 秒恢复一次；执行失败的授予保留失败状态，等待明确重试。撤销未完成时不会显示已撤销。
 
 ## 管理角色与恢复
@@ -45,11 +53,12 @@ Owner 和管理员可以撤销授权并填写原因。EAT 退出该库的组角�
 | `GET /api/db/access/catalog` | 开放目录及自己负责的库 |
 | `POST /api/db/assignments/:id/access` | 开放或关闭申请，选择或修改 schema |
 | `POST /api/db/access/catalog/:id/reapply` | 重新应用现有对象及默认权限，保留开放状态 |
-| `GET /api/db/access/grants` | 本人持有及可管理的授权 |
+| `GET /api/db/access/grants` | 本人持有及可管理的授权；`?scope=mine` 只返回本人持有 |
 | `POST /api/db/access/catalog/:id/grants` | 直接授予只读/读写，或修改已有级别 |
 | `POST /api/db/access/grants/:id/retry` | 重试未完成或失败的操作 |
 | `POST /api/db/access/grants/:id/revoke` | 管理者撤销，原因选填 |
 | `POST /api/db/access/grants/:id/relinquish` | 本人放弃授权 |
+| `POST /api/db/access/catalog/:id/reset-password` | 本人重置该实例的个人密码，返回完成或待恢复状态 |
 | `POST /api/db/access/catalog/:id/credentials` | 本人按需读取个人凭证 |
 
 服务端 e2e 在本地 PostgreSQL 16 上用非超级管理角色验证查询、写入拒绝、schema 范围、未来对象默认权限、双库隔离、改级别、断会话、通知、失败重试、并发幂等及重启恢复；读写、未来表和序列、其他角色的新表、schema 增减与重应用另见 `db-access-levels.spec.ts`。

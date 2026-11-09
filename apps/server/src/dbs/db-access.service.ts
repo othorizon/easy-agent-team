@@ -1,8 +1,8 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { and, eq, inArray, or } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, or } from 'drizzle-orm';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { dbConnectionUrl, type DbAccessCredentials, type DbAccessGrantInfo, type DbCatalogInfo, type GrantDbAccessRequest, type OpenDbAccessRequest } from '@eat/shared';
+import { dbConnectionUrl, type DbAccessCredentials, type DbAccessGrantInfo, type DbCatalogInfo, type DbPersonalPasswordReset, type GrantDbAccessRequest, type OpenDbAccessRequest } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
 import { decryptSecret, encryptSecret } from '../common/crypto';
@@ -11,10 +11,12 @@ import { DB, PG_POOL, type Db } from '../db/db.module';
 import { dbAccessGrants, dbAssignments, dbCatalog, dbInstances, dbPersonalRoles, users } from '../db/schema';
 import { NotifierService } from '../notify/notifier.service';
 import { grantPostgresAccess, openPostgresAccess, revokePostgresAccess } from './access-provisioner';
+import { resetPostgresPersonalPassword } from './personal-role-provisioner';
 import type { AdminConn } from './provisioner';
 
 type Catalog = typeof dbCatalog.$inferSelect;
 type Grant = typeof dbAccessGrants.$inferSelect;
+type PersonalRole = typeof dbPersonalRoles.$inferSelect;
 @Injectable()
 export class DbAccessService {
   private readonly logger = new Logger(DbAccessService.name);
@@ -43,6 +45,14 @@ export class DbAccessService {
     await this.lockPool.end();
   }
   private async recover() {
+    const rotating = await this.db.select().from(dbPersonalRoles).where(isNotNull(dbPersonalRoles.pendingPasswordEncrypted));
+    for (const initial of rotating) {
+      if (this.stopped) return;
+      await this.locked(initial.instanceId, async guard => {
+        const [identity] = await this.db.select().from(dbPersonalRoles).where(eq(dbPersonalRoles.id, initial.id));
+        if (identity?.pendingPasswordEncrypted) await this.applyPassword(identity, guard);
+      });
+    }
     // 这些行就是持久化的未完成操作；执行失败保留原因，由管理者显式重试。
     const opening = await this.db.select().from(dbCatalog).where(eq(dbCatalog.state, 'pending')).orderBy(dbCatalog.updatedAt).limit(20);
     for (const initial of opening) {
@@ -163,11 +173,11 @@ export class DbAccessService {
       await this.db.update(dbCatalog).set({ state: 'failed', error: this.error(e), updatedAt: new Date() }).where(eq(dbCatalog.id, row.id));
     }
   }
-  async listGrants(user: AuthUser): Promise<DbAccessGrantInfo[]> {
+  async listGrants(user: AuthUser, scope: 'visible' | 'mine' = 'visible'): Promise<DbAccessGrantInfo[]> {
     const rows = await this.db.select({ g: dbAccessGrants, c: dbCatalog, i: dbInstances, userName: users.name })
       .from(dbAccessGrants).innerJoin(dbCatalog, eq(dbCatalog.id, dbAccessGrants.catalogId))
       .innerJoin(dbInstances, eq(dbInstances.id, dbCatalog.instanceId)).innerJoin(users, eq(users.id, dbAccessGrants.userId))
-      .where(user.role === 'admin' ? undefined : or(eq(dbAccessGrants.userId, user.id), eq(dbCatalog.ownerId, user.id)));
+      .where(scope === 'mine' ? eq(dbAccessGrants.userId, user.id) : user.role === 'admin' ? undefined : or(eq(dbAccessGrants.userId, user.id), eq(dbCatalog.ownerId, user.id)));
     return rows.map(({ g, c, i, userName }) => ({ id: g.id, catalogId: c.id, instanceId: i.id, instanceName: i.name, dbName: c.dbName, userId: g.userId, userName, level: g.level, state: g.state, error: g.error, canManage: user.role === 'admin' || c.ownerId === user.id, updatedAt: g.updatedAt.toISOString() }));
   }
   private async info(user: AuthUser, id: string): Promise<DbAccessGrantInfo> {
@@ -199,8 +209,13 @@ export class DbAccessService {
       let [identity] = await this.db.select().from(dbPersonalRoles).where(and(eq(dbPersonalRoles.instanceId, c.instanceId), eq(dbPersonalRoles.userId, g.userId)));
       guard();
       if (!identity) [identity] = await this.db.insert(dbPersonalRoles).values({ instanceId: c.instanceId, userId: g.userId, roleName: `eat-${g.userId}`, passwordEncrypted: encryptSecret(randomBytes(24).toString('hex')) }).returning();
+      if (identity.pendingPasswordEncrypted) {
+        if (!await this.applyPassword(identity, guard)) throw new ConflictException('个人密码重置待完成，请稍后重试');
+        [identity] = await this.db.select().from(dbPersonalRoles).where(eq(dbPersonalRoles.id, identity.id));
+      }
       await grantPostgresAccess(await this.connection(c.instanceId), c, g.level, { ...identity, password: decryptSecret(identity.passwordEncrypted) }, guard);
       guard();
+      await this.db.update(dbPersonalRoles).set({ provisioned: true }).where(eq(dbPersonalRoles.id, identity.id));
       await this.db.update(dbAccessGrants).set({ state: 'active', error: null, updatedAt: new Date() }).where(eq(dbAccessGrants.id, g.id));
     } catch (e) {
       guard();
@@ -208,18 +223,79 @@ export class DbAccessService {
     }
     await this.audit.record({ actorId: g.grantedBy, action: 'db_access.granted', targetType: 'db_access_grant', targetId: g.id, meta: { userId: g.userId, level: g.level } });
   }
+  private async ownActiveGrant(user: AuthUser, c: Catalog): Promise<Grant> {
+    const [row] = await this.db.select({ g: dbAccessGrants }).from(dbAccessGrants).innerJoin(users, eq(users.id, dbAccessGrants.userId)).where(and(eq(dbAccessGrants.catalogId, c.id), eq(dbAccessGrants.userId, user.id), eq(dbAccessGrants.state, 'active'), eq(users.status, 'active')));
+    const g = row?.g;
+    if (!g) throw new ForbiddenException('只有授权持有人本人可读取或重置个人凭证，且授权必须已生效');
+    return g;
+  }
+  private async personalIdentity(c: Catalog, g: Grant, guard: () => void): Promise<PersonalRole> {
+    let [identity] = await this.db.select().from(dbPersonalRoles).where(and(eq(dbPersonalRoles.instanceId, c.instanceId), eq(dbPersonalRoles.userId, g.userId)));
+    if (!identity) {
+      guard();
+      [identity] = await this.db.insert(dbPersonalRoles).values({ instanceId: c.instanceId, userId: g.userId, roleName: `eat-${g.userId}`, passwordEncrypted: encryptSecret(randomBytes(24).toString('hex')) }).returning();
+    }
+    if (!identity.provisioned) {
+      try {
+        await grantPostgresAccess(await this.connection(c.instanceId), c, g.level, { ...identity, password: decryptSecret(identity.passwordEncrypted) }, guard);
+        guard();
+        [identity] = await this.db.update(dbPersonalRoles).set({ provisioned: true }).where(eq(dbPersonalRoles.id, identity.id)).returning();
+      } catch (e) { throw new ConflictException(`个人身份创建待完成，请稍后重试：${this.error(e)}`); }
+    }
+    return identity;
+  }
+  /** pending密文先落平台，外部ALTER幂等重放；最后一次原子UPDATE才替换当前密码。 */
+  private async applyPassword(identity: PersonalRole, guard: () => void): Promise<boolean> {
+    if (!identity.pendingPasswordEncrypted) return true;
+    try {
+      await resetPostgresPersonalPassword(await this.connection(identity.instanceId), identity, decryptSecret(identity.pendingPasswordEncrypted), guard);
+      guard();
+      await this.db.update(dbPersonalRoles).set({ passwordEncrypted: identity.pendingPasswordEncrypted, pendingPasswordEncrypted: null, passwordError: null }).where(eq(dbPersonalRoles.id, identity.id));
+      return true;
+    } catch (e) {
+      guard();
+      await this.db.update(dbPersonalRoles).set({ passwordError: this.error(e) }).where(and(eq(dbPersonalRoles.id, identity.id), isNotNull(dbPersonalRoles.pendingPasswordEncrypted)));
+      return false;
+    }
+  }
+  async resetPassword(user: AuthUser, catalogId: string): Promise<DbPersonalPasswordReset> {
+    const c = await this.catalog(catalogId);
+    return this.locked(c.instanceId, async guard => {
+      const g = await this.ownActiveGrant(user, c);
+      let identity = await this.personalIdentity(c, g, guard);
+      if (!identity.pendingPasswordEncrypted) {
+        guard();
+        try {
+          [identity] = await this.db.update(dbPersonalRoles).set({ pendingPasswordEncrypted: encryptSecret(randomBytes(24).toString('hex')), passwordError: null }).where(eq(dbPersonalRoles.id, identity.id)).returning();
+        } catch { throw new ConflictException('暂时无法保存新个人密码，密码尚未修改，请稍后重试'); }
+      }
+      const complete = await this.applyPassword(identity, guard);
+      const [current] = await this.db.select().from(dbPersonalRoles).where(eq(dbPersonalRoles.id, identity.id));
+      await this.audit.record({ actorId: user.id, action: 'db_access.password.reset', targetType: 'db_personal_role', targetId: identity.id, meta: { instanceId: c.instanceId, state: complete ? 'complete' : 'pending' } });
+      return { instanceId: c.instanceId, state: complete ? 'complete' : 'pending', error: current.passwordError };
+    });
+  }
   async credentials(user: AuthUser, catalogId: string, ip?: string): Promise<DbAccessCredentials> {
     const c = await this.catalog(catalogId);
-    const [g] = await this.db.select().from(dbAccessGrants).where(and(eq(dbAccessGrants.catalogId, c.id), eq(dbAccessGrants.userId, user.id), eq(dbAccessGrants.state, 'active')));
-    if (!g) throw new ForbiddenException('只有授权持有人本人可读取个人凭证，且授权必须已生效');
-    const [identity] = await this.db.select().from(dbPersonalRoles).where(and(eq(dbPersonalRoles.instanceId, c.instanceId), eq(dbPersonalRoles.userId, user.id)));
-    if (!identity) throw new ConflictException('个人身份尚未创建，请重试授权');
-    const i = await this.connection(c.instanceId);
-    await this.audit.record({ actorId: user.id, actorTokenId: user.tokenId, action: 'db_access.credentials.read', targetType: 'db_access_grant', targetId: g.id, ip });
-    const base = { engine: 'postgres' as const, host: i.host, port: i.port, database: c.dbName, user: identity.roleName, password: decryptSecret(identity.passwordEncrypted) };
-    return { grantId: g.id, instanceId: c.instanceId, ...base, url: dbConnectionUrl(base) };
+    return this.locked(c.instanceId, async guard => {
+      const g = await this.ownActiveGrant(user, c);
+      let identity = await this.personalIdentity(c, g, guard);
+      if (identity.pendingPasswordEncrypted) {
+        if (!await this.applyPassword(identity, guard)) throw new ConflictException('个人密码重置待完成，平台将自动重试；请稍后再读取凭证');
+        [identity] = await this.db.select().from(dbPersonalRoles).where(eq(dbPersonalRoles.id, identity.id));
+      }
+      const i = await this.connection(c.instanceId);
+      await this.audit.record({ actorId: user.id, actorTokenId: user.tokenId, action: 'db_access.credentials.read', targetType: 'db_access_grant', targetId: g.id, ip });
+      const base = { engine: 'postgres' as const, host: i.host, port: i.port, database: c.dbName, user: identity.roleName, password: decryptSecret(identity.passwordEncrypted) };
+      return { grantId: g.id, instanceId: c.instanceId, ...base, url: dbConnectionUrl(base) };
+    });
   }
-  private error(e: unknown): string { return (e instanceof Error ? e.message : String(e)).slice(0, 1000); }
+  private error(e: unknown): string {
+    // Drizzle 包装错误含 SQL 参数；只呈现底层错误，避免把密文送到日志和客户端。
+    const seen = new Set<unknown>();
+    while (e instanceof Error && e.cause instanceof Error && !seen.has(e)) { seen.add(e); e = e.cause; }
+    return (e instanceof Error ? e.message : String(e)).slice(0, 1000);
+  }
 
   async revoke(user: AuthUser, id: string, reason: string, relinquish = false): Promise<DbAccessGrantInfo> {
     const initial = await this.grant(id);

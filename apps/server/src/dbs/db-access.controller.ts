@@ -1,6 +1,6 @@
-import { Body, Controller, Get, Header, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Header, Param, Post, Query, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
-import { dbAccessCredentialsSchema, dbAccessGrantInfoSchema, dbAccessGrantListSchema, dbCatalogInfoSchema, dbCatalogListSchema, grantDbAccessSchema, openDbAccessSchema, revokeDbAccessSchema, type GrantDbAccessRequest, type OpenDbAccessRequest, type RevokeDbAccessRequest } from '@eat/shared';
+import { dbAccessGrantQuerySchema, dbPersonalPasswordResetSchema, type DbAccessGrantQuery, dbAccessCredentialsSchema, dbAccessGrantInfoSchema, dbAccessGrantListSchema, dbCatalogInfoSchema, dbCatalogListSchema, grantDbAccessSchema, openDbAccessSchema, revokeDbAccessSchema, type GrantDbAccessRequest, type OpenDbAccessRequest, type RevokeDbAccessRequest } from '@eat/shared';
 import { CurrentUser, type AuthUser } from '../auth/auth.decorators';
 import { ZodValidationPipe } from '../common/zod.pipe';
 import { DbAccessService } from './db-access.service';
@@ -15,12 +15,15 @@ export class DbAccessController {
   @Post('access/catalog/:id/reapply')
   async reapply(@CurrentUser() user: AuthUser, @Param('id') id: string) { return dbCatalogInfoSchema.parse(await this.access.reapply(user, id)); }
   @Get('access/grants')
-  async grants(@CurrentUser() user: AuthUser) { return dbAccessGrantListSchema.parse(await this.access.listGrants(user)); }
+  async grants(@CurrentUser() user: AuthUser, @Query(new ZodValidationPipe(dbAccessGrantQuerySchema)) query: DbAccessGrantQuery) { return dbAccessGrantListSchema.parse(await this.access.listGrants(user, query.scope)); }
   @Post('access/catalog/:id/grants')
   async give(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodValidationPipe(grantDbAccessSchema)) body: GrantDbAccessRequest) { return dbAccessGrantInfoSchema.parse(await this.access.give(user, id, body)); }
   @Post('access/catalog/:id/credentials')
   @Header('Cache-Control', 'no-store')
   async credentials(@CurrentUser() user: AuthUser, @Param('id') id: string, @Req() req: FastifyRequest) { return dbAccessCredentialsSchema.parse(await this.access.credentials(user, id, req.ip)); }
+  @Post('access/catalog/:id/reset-password')
+  @Header('Cache-Control', 'no-store')
+  async resetPassword(@CurrentUser() user: AuthUser, @Param('id') id: string) { return dbPersonalPasswordResetSchema.parse(await this.access.resetPassword(user, id)); }
   @Post('access/grants/:id/revoke')
   async revoke(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodValidationPipe(revokeDbAccessSchema)) body: RevokeDbAccessRequest) { return dbAccessGrantInfoSchema.parse(await this.access.revoke(user, id, body.reason)); }
   @Post('access/grants/:id/relinquish')
