@@ -43,6 +43,9 @@ export class TestRamCloud extends RamCloud {
   failKeyStatus = false;
   failCleanup = false;
   failListPoliciesMarker: string | undefined;
+  failActions = new Map<string, string>();
+  lostUserResponse = false;
+  afterAttach?: () => Promise<void>;
   constructor() {
     super();
     this.registerAccount(
@@ -69,6 +72,9 @@ export class TestRamCloud extends RamCloud {
     this.keySerial = this.userSerial = 0;
     this.lostKeyResponse = this.failKeyStatus = this.failCleanup = false;
     this.failListPoliciesMarker = undefined;
+    this.failActions.clear();
+    this.lostUserResponse = false;
+    this.afterAttach = undefined;
   }
   isManagement(c: RamCredentials): boolean {
     return this.credentials.get(c.accessKeyId)?.secret === c.accessKeySecret;
@@ -132,6 +138,8 @@ export class TestRamCloud extends RamCloud {
     action: string,
     args: Raw,
   ): Promise<Raw> {
+    const failure = this.failActions.get(action);
+    if (failure) throw new RamCloudError(action, failure);
     const { users, policies } = this.accounts.get(this.accountId(c))!;
     const user = users.get(args.userName);
     if (action === 'CreatePolicy') {
@@ -221,6 +229,10 @@ export class TestRamCloud extends RamCloud {
     }
     if (action === 'CreateUser') {
       if (user) throw new RamCloudError(action, 'EntityAlreadyExists.User');
+      if (Array.from(args.comments ?? '').length > 128)
+        throw new RamCloudError(action, 'InvalidParameter.Comments');
+      if (Array.from(args.displayName ?? '').length > 128)
+        throw new RamCloudError(action, 'InvalidParameter.DisplayName');
       const created: TestRamUser = {
         userName: args.userName,
         comments: args.comments ?? '',
@@ -230,6 +242,10 @@ export class TestRamCloud extends RamCloud {
         keys: [],
       };
       users.set(args.userName, created);
+      if (this.lostUserResponse) {
+        this.lostUserResponse = false;
+        throw new RamCloudError(action, 'NETWORK_ERROR');
+      }
       return { user: created };
     }
     if (!user) throw new RamCloudError(action, 'EntityNotExist.User');
@@ -253,6 +269,7 @@ export class TestRamCloud extends RamCloud {
         )
           throw new RamCloudError(action, 'LimitExceeded.Policy');
         user.attached.add(args.policyName);
+        await this.afterAttach?.();
         return {};
       }
       case 'DetachPolicyFromUser':
@@ -265,6 +282,10 @@ export class TestRamCloud extends RamCloud {
         users.delete(args.userName);
         return {};
       case 'UpdateUser': {
+        if (Array.from(args.newComments ?? '').length > 128)
+          throw new RamCloudError(action, 'InvalidParameter.Comments');
+        if (Array.from(args.newDisplayName ?? '').length > 128)
+          throw new RamCloudError(action, 'InvalidParameter.DisplayName');
         if (
           args.newUserName &&
           args.newUserName !== args.userName &&

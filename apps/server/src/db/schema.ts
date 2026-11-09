@@ -1319,3 +1319,46 @@ export const aliyunPermissions = pgTable('aliyun_permission', {
   discoveredAt: timestamp('discovered_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [uniqueIndex('aliyun_permission_connection_policy_unique').on(t.connectionId, t.policyName)]);
+
+/** Shared by OSS and Aliyun permissions; independent of either capability's settings. */
+export const cloudIdentities = pgTable('cloud_identity', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  accountId: text('account_id').notNull(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  ramName: text('ram_name').notNull(),
+  cloudUserId: text('cloud_user_id'),
+  userEnabled: boolean('user_enabled').notNull().default(true),
+  syncPending: boolean('sync_pending').notNull().default(false),
+  lastError: text('last_error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex('cloud_identity_account_user_unique').on(t.accountId, t.userId), uniqueIndex('cloud_identity_account_ram_unique').on(t.accountId, t.ramName)]);
+
+export const aliyunGrants = pgTable('aliyun_grant', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  permissionId: uuid('permission_id').notNull().references(() => aliyunPermissions.id, { onDelete: 'restrict' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  identityId: uuid('identity_id').references(() => cloudIdentities.id, { onDelete: 'restrict' }),
+  state: text('state', { enum: ['pending', 'active', 'failed', 'revoking', 'revoked'] }).notNull().default('pending'),
+  source: text('source', { enum: ['direct', 'approval', 'self'] }).notNull(),
+  error: text('error'),
+  grantedBy: uuid('granted_by').notNull().references(() => users.id),
+  revokedBy: uuid('revoked_by').references(() => users.id),
+  revocationReason: text('revocation_reason'),
+  relinquished: boolean('relinquished').notNull().default(false),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex('aliyun_grant_permission_user_unique').on(t.permissionId, t.userId)]);
+
+export const aliyunOperations = pgTable('aliyun_operation', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  grantId: uuid('grant_id').notNull().references(() => aliyunGrants.id, { onDelete: 'cascade' }),
+  kind: text('kind', { enum: ['grant', 'revoke'] }).notNull(),
+  state: text('state', { enum: ['pending', 'running', 'failed', 'complete'] }).notNull().default('pending'),
+  actorId: uuid('actor_id').notNull().references(() => users.id),
+  attempts: integer('attempts').notNull().default(0),
+  lastError: text('last_error'),
+  retryAt: timestamp('retry_at', { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex('aliyun_operation_grant_unique').on(t.grantId), index('aliyun_operation_retry_idx').on(t.state, t.retryAt)]);

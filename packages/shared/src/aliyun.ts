@@ -69,3 +69,29 @@ export const aliyunPermissionInfoSchema = z.object({
 });
 export const aliyunPermissionsSchema = z.array(aliyunPermissionInfoSchema);
 export type AliyunPermissionInfo = z.infer<typeof aliyunPermissionInfoSchema>;
+
+export const grantAliyunPermissionSchema = z.object({ userId: z.string().uuid() });
+export const revokeAliyunGrantSchema = z.object({ reason: z.string().trim().max(2000).default('') });
+export const aliyunGrantStateSchema = z.enum(['pending', 'active', 'failed', 'revoking', 'revoked']);
+export const aliyunGrantSourceSchema = z.enum(['direct', 'approval', 'self']);
+export const aliyunGrantInfoSchema = z.object({
+  id: z.string().uuid(), permissionId: z.string().uuid(), connectionId: z.string().uuid(),
+  connectionName: z.string(), accountId: z.string(), policyName: z.string(),
+  userId: z.string().uuid(), userName: z.string(), identityId: z.string().uuid().nullable(),
+  state: aliyunGrantStateSchema, error: z.string().nullable(), source: aliyunGrantSourceSchema,
+  grantedBy: z.string().uuid(), revokedBy: z.string().uuid().nullable(), revocationReason: z.string().nullable(),
+  relinquished: z.boolean(), canManage: z.boolean(), createdAt: z.string(), updatedAt: z.string(),
+});
+export const aliyunIdentityAccountInfoSchema = z.object({
+  accountId: z.string(), connectionId: z.string().uuid(), connectionName: z.string(),
+  connectionStatus: z.enum(['enabled', 'paused']), identityId: z.string().uuid(), ramName: z.string(),
+  customPolicyCount: z.number().int().nonnegative().nullable(), error: z.string().nullable(),
+});
+export const aliyunGrantsResultSchema = z.object({
+  grants: z.array(aliyunGrantInfoSchema), accounts: z.array(aliyunIdentityAccountInfoSchema),
+});
+export type GrantAliyunPermissionRequest = z.infer<typeof grantAliyunPermissionSchema>;
+export type RevokeAliyunGrantRequest = z.infer<typeof revokeAliyunGrantSchema>;
+export type AliyunGrantInfo = z.infer<typeof aliyunGrantInfoSchema>;
+export type AliyunGrantSource = z.infer<typeof aliyunGrantSourceSchema>;
+export type AliyunGrantsResult = z.infer<typeof aliyunGrantsResultSchema>;

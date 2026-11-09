@@ -2,9 +2,10 @@ import type {
   AliyunAvailability,
   AliyunConnectionInfo,
   AliyunPermissionInfo,
+  AliyunGrantsResult,
 } from '@eat/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api, getStoredUser } from '../api';
@@ -19,11 +20,14 @@ import {
   TabsTrigger,
 } from '../components/ui/tabs';
 import { Tip } from '../components/ui/tooltip';
+import { AliyunGrantDialog, AliyunGrants } from './AliyunGrants';
 
 export function AliyunPage() {
   const admin = getStoredUser()?.role === 'admin';
   const [params, setParams] = useSearchParams();
-  const tab = admin && params.get('tab') === 'manage' ? 'manage' : 'catalog';
+  const managed = useQuery({ queryKey: ['aliyun', 'grants', 'manage'], queryFn: () => api<AliyunGrantsResult>('GET', '/api/aliyun/grants/manage') });
+  const canManage = admin || !!managed.data?.grants.length;
+  const tab = canManage && params.get('tab') === 'manage' ? 'manage' : params.get('tab') === 'mine' ? 'mine' : 'catalog';
   const available = useQuery({
     queryKey: ['aliyun', 'status'],
     queryFn: () => api<AliyunAvailability>('GET', '/api/aliyun/status'),
@@ -58,7 +62,8 @@ export function AliyunPage() {
         <Tabs value={tab} onValueChange={(value) => setParams({ tab: value })}>
           <TabsList>
             <TabsTrigger value="catalog">目录</TabsTrigger>
-            {admin && <TabsTrigger value="manage">管理</TabsTrigger>}
+            <TabsTrigger value="mine">我的权限</TabsTrigger>
+            {canManage && <TabsTrigger value="manage">管理</TabsTrigger>}
           </TabsList>
           <TabsContent value="catalog" className="pt-5">
             <p className="py-8 text-sm text-muted-foreground">
@@ -67,7 +72,9 @@ export function AliyunPage() {
           </TabsContent>
           <TabsContent value="manage" className="pt-5">
             {admin && tab === 'manage' && <AliyunDirectoryManagement />}
+            {canManage && tab === 'manage' && <div className="mt-6"><AliyunGrants manage /></div>}
           </TabsContent>
+          <TabsContent value="mine" className="pt-5">{tab === 'mine' && <AliyunGrants />}</TabsContent>
         </Tabs>
       )}
     </div>
@@ -75,6 +82,7 @@ export function AliyunPage() {
 }
 
 function AliyunDirectoryManagement() {
+  const [granting, setGranting] = useState<AliyunPermissionInfo | null>(null);
   const client = useQueryClient();
   const started = useRef(false);
   const connections = useQuery({
@@ -138,6 +146,11 @@ function AliyunDirectoryManagement() {
         </Badge>
       ),
     },
+    { id: 'actions', header: '操作', meta: { className: 'w-32' }, cell: ({ row: { original: p } }) => {
+      const paused = connections.data?.find(c => c.id === p.connectionId)?.status === 'paused';
+      const reason = !p.cloudExists ? '权限点在云端已删除' : paused ? '接入已暂停，恢复后可授予' : null;
+      return reason ? <Tip content={reason}><span tabIndex={0}><Button size="sm" variant="outline" disabled>直接授予</Button></span></Tip> : <Button size="sm" variant="outline" onClick={() => setGranting(p)}>直接授予</Button>;
+    } },
   ];
   if (connections.isError || permissions.isError)
     return (
@@ -156,6 +169,7 @@ function AliyunDirectoryManagement() {
     );
   return (
     <div className="space-y-5">
+      <AliyunGrantDialog permission={granting} onClose={() => setGranting(null)} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           打开管理时自动刷新一次；可随时手动同步策略与说明。

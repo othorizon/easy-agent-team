@@ -14,6 +14,10 @@ import {
   aliyunConnectionInfoSchema,
   aliyunPermissionsSchema,
   aliyunConnectionStatusSchema,
+  grantAliyunPermissionSchema,
+  revokeAliyunGrantSchema,
+  aliyunGrantInfoSchema,
+  aliyunGrantsResultSchema,
 } from '../packages/shared/dist/index.js';
 
 const dist = resolve('apps/web/dist'),
@@ -59,6 +63,9 @@ let connections = [],
   refreshCalls = 0,
   saves = 0,
   failRefresh = false,
+  grantScenario = false,
+  failGrant = true,
+  grants = [],
   adminRequests = 0;
 const runtimeErrors = [];
 async function context(user, viewport) {
@@ -85,6 +92,34 @@ async function context(user, viewport) {
     if (path === '/api/requests') return reply({ items: [], pendingCount: 0 });
     if (path === '/api/aliyun/status')
       return reply({ available: connections.length > 0 });
+    if (path === '/api/aliyun/grants' || path === '/api/aliyun/grants/manage') {
+      const manage = path.endsWith('/manage');
+      const rows = (manage && user.role !== 'admin' ? [] : grants.filter(g => manage || g.userId === user.id)).map(g => ({ ...g, canManage: user.role === 'admin' }));
+      return reply(aliyunGrantsResultSchema.parse({ grants: rows, accounts: !manage && grants.length ? [{
+        connectionId: connections[0].id, connectionName: connections[0].name, accountId: connections[0].accountId,
+        connectionStatus: connections[0].status, identityId: grants[0].identityId, ramName: `eat-${me.id.replaceAll('-', '')}`,
+        customPolicyCount: grants.filter(g => g.state === 'active').length, error: null,
+      }] : [] }));
+    }
+    if (path === '/api/users') return reply([me]);
+    const giving = path.match(/^\/api\/aliyun\/permissions\/([^/]+)\/grants$/);
+    if (giving) {
+      assert.equal(user.role, 'admin');
+      const dto = grantAliyunPermissionSchema.parse(body), p = permissions.find(p => p.id === giving[1]), c = connections[0];
+      const grant = aliyunGrantInfoSchema.parse({ id: randomUUID(), permissionId: p.id, connectionId: c.id, connectionName: c.name, accountId: c.accountId,
+        policyName: p.policyName, userId: dto.userId, userName: me.name, identityId: grants[0]?.identityId ?? randomUUID(),
+        state: failGrant ? 'failed' : 'active', error: failGrant ? '已达到该 RAM 用户可绑定的自定义策略上限，请在阿里云配额中心调高' : null,
+        source: 'direct', grantedBy: me.id, revokedBy: null, revocationReason: null, relinquished: false, canManage: true,
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      failGrant = false; grants = [grant]; return reply(grant, 201);
+    }
+    const action = path.match(/^\/api\/aliyun\/grants\/([^/]+)\/(revoke|retry|relinquish)$/);
+    if (action) {
+      const g = grants.find(g => g.id === action[1]); assert.ok(g);
+      if (action[2] === 'retry') { g.state = 'active'; g.error = null; }
+      else { g.state = 'revoked'; g.error = null; g.revokedBy = user.id; g.relinquished = action[2] === 'relinquish'; g.revocationReason = g.relinquished ? null : revokeAliyunGrantSchema.parse(body).reason; }
+      return reply(aliyunGrantInfoSchema.parse(g), 201);
+    }
     adminRequests++;
     assert.equal(
       user.role,
@@ -145,7 +180,7 @@ async function context(user, viewport) {
             connectionId: c.id,
             policyName: 'eat-perm-read-data',
             description: refreshCalls === 1 ? '初次发现' : 'RAM 说明已更新',
-            cloudExists: refreshCalls < 3,
+            cloudExists: grantScenario || refreshCalls < 3,
             open: false,
             purpose: '',
             dataScope: '',
@@ -252,6 +287,36 @@ try {
     path: join(screenshots, 'mobile-manage.png'),
     fullPage: true,
   });
+  grantScenario = true;
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.reload();
+  await page.getByRole('button', { name: '直接授予', exact: true }).click();
+  await page.getByRole('button', { name: '授予权限', exact: true }).click();
+  await page.getByRole('dialog').getByRole('alert').waitFor();
+  await page.getByRole('combobox').click();
+  await page.getByRole('option', { name: /测试管理员/ }).click();
+  await page.getByRole('button', { name: '授予权限', exact: true }).click();
+  await page.getByRole('cell', { name: /执行失败/ }).waitFor();
+  await page.getByRole('button', { name: '重试', exact: true }).click();
+  await page.getByRole('cell', { name: '已生效', exact: true }).waitFor();
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await page.getByRole('textbox', { name: '撤销原因（选填）' }).fill('项目结束');
+  await page.getByRole('button', { name: '撤销授权', exact: true }).click();
+  await page.getByRole('cell', { name: '已撤销', exact: true }).waitFor();
+  assert.equal(grants[0].revocationReason, '项目结束');
+  await page.getByRole('button', { name: '直接授予', exact: true }).click();
+  await page.getByRole('combobox').click();
+  await page.getByRole('option', { name: /测试管理员/ }).click();
+  await page.getByRole('button', { name: '授予权限', exact: true }).click();
+  await page.getByRole('cell', { name: '已生效', exact: true }).waitFor();
+  await page.getByRole('tab', { name: '我的权限', exact: true }).click();
+  await page.getByText('已绑定的自定义策略：1 条', { exact: true }).waitFor();
+  await page.locator('[data-sonner-toast]').last().waitFor({ state: 'hidden' });
+  await noOverflow(page);
+  await page.screenshot({ path: join(screenshots, 'desktop-mine.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await noOverflow(page);
+  await page.screenshot({ path: join(screenshots, 'mobile-mine.png'), fullPage: true });
   const beforeMember = adminRequests;
   const member = await context(
     { ...me, role: 'member' },
@@ -264,6 +329,13 @@ try {
     0,
   );
   assert.equal(adminRequests, beforeMember);
+  await member.page.getByRole('tab', { name: '我的权限', exact: true }).click();
+  await member.page.getByText('已绑定的自定义策略：1 条', { exact: true }).waitFor();
+  await member.page.getByRole('button', { name: '放弃', exact: true }).click();
+  await member.page.getByRole('button', { name: '放弃授权', exact: true }).click();
+  await member.page.getByRole('cell', { name: '已撤销', exact: true }).waitFor();
+  assert.equal(grants[0].relinquished, true);
+  await noOverflow(member.page);
   await member.ctx.close();
   await page.goto(`${base}/settings?section=aliyun`);
   await page.getByRole('button', { name: '删除', exact: true }).click();
