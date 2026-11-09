@@ -1,6 +1,6 @@
 ---
 name: eat-platform-guide
-description: 通过团队 EAT 平台获取内部配置与密钥、申请数据库或 OSS 存储、管理或调用 LLM API、创建部署应用、发布 Folio、同步 Skill/MCP、查询团队经验与求助、查询用户和发送通知。当任务涉及 EAT 资源、eat CLI、平台 MCP 或这些平台操作报错时使用；普通编程和非 EAT 服务不需要本 Skill。
+description: 通过团队 EAT 平台获取内部配置与密钥、申请数据库分配、数据库权限、阿里云权限或 OSS 存储、管理或调用 LLM API、创建部署应用、发布 Folio、同步 Skill/MCP、查询团队经验与求助、查询用户和发送通知。当任务涉及 EAT 资源、eat CLI、平台 MCP 或这些平台操作报错时使用；普通编程和非 EAT 服务不需要本 Skill。
 ---
 
 # eat 平台使用指南
@@ -14,9 +14,10 @@ EAT（easy-agent-team）统一管理团队资源、权限与审计。终端可�
 | 当前任务 | 先读取 | 操作要点 |
 |---|---|---|
 | 登录、区分凭证，或查询审批进度与驳回理由 | [身份、登录与申请](references/access.md) | 区分 EAT、HTTP MCP、模型 Key；用 `eat requests` / `list_requests` 查看历次申请，按驳回原因修改后再提交 |
-| 获取配置、密钥、连接串或申请权限；建环境、写入变量 | [环境变量](references/environment.md) | 先查清单，按需取值；无权限走申请；写入只在用户要求时，`--prune` 先预演 |
-| 为自己的应用申请数据库、取它的连接凭证 | [数据库](references/databases.md) | 先看已有分配，再按需申请独立账号；凭证用 `eat db credentials pull` / `run` 取，不在环境变量里 |
-| 申请文件存储、读取 OSS 凭证或修改公开读 | [OSS 对象存储](references/oss.md) | 先审批；用户共用 AK/SK；区分目录公开读与 CDN |
+| 获取团队共享配置、密钥或申请其读取权限；建环境、写入变量 | [环境变量](references/environment.md) | 先查清单，按需取值；无权限走申请；写入只在用户要求时，`--prune` 先预演 |
+| 读取团队数据，或为自己的应用建库存数据 | [数据库](references/databases.md) | 只读取数用权限申请与 `eat db run`；要自己存数据才申请建库分配 |
+| 申请阿里云权限、取本人 Key 或临时运行云命令 | [阿里云权限](references/aliyun.md) | 先查目录并申请；`eat aliyun run` 不落盘，Key 与同云账号 OSS 共用 |
+| 申请文件存储、读取 OSS 凭证或修改公开读 | [OSS 对象存储](references/oss.md) | 先审批；本人临时 Key 与同云账号阿里云权限共用；区分目录公开读与 CDN |
 | 申请模型 Key、查询额度、编写模型调用代码 | [LLM API](references/llm-api.md) | 个人 Key、可用模型及 New API 官方调用文档 |
 | 创建应用、配置 env、部署或排查服务 | [应用与部署](references/applications.md) | Git 源、整体 env 覆盖、部署授权与日志 |
 | 发布网页、演示、报告或处理页面反馈 | [Folio](references/folio.md) | 静态产物、先确认访问范围、版本与评论 |

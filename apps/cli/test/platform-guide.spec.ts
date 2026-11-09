@@ -56,4 +56,18 @@ describe('内置平台指南的按需加载结构', () => {
       '$eat-platform-guide',
     );
   });
+
+  it('读取已有数据走个人授权，云端个人凭证通过临时命令使用', () => {
+    const guide = platformGuideSyncSkill();
+    const ref = (name: string) => guide.files.find((f) => f.path === `references/${name}.md`)?.content ?? '';
+    expect(ref('databases')).toContain('eat db access request');
+    expect(ref('databases')).toContain('eat db run');
+    expect(ref('databases')).not.toContain('让申请人自己转交');
+    expect(ref('environment')).not.toContain('含别人业务库的只读连接信息');
+    expect(ref('aliyun')).toContain('eat aliyun run');
+    expect(ref('aliyun')).toContain('ossutil 2');
+    expect(ref('aliyun')).toContain('不落盘');
+    expect(ref('aliyun')).toContain('只供本人临时使用');
+    expect(ref('access')).toContain('db-access|aliyun');
+  });
 });

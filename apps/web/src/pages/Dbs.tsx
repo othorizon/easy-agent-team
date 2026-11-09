@@ -20,7 +20,7 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Tip } from '../components/ui/tooltip';
 import { Card, CardContent } from '../components/ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Input, Textarea } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
@@ -393,7 +393,7 @@ export function DbsPage() {
         )}
       </Tabs>
 
-      <Dialog open={!!editingCredentials} onOpenChange={v => !v && setEditingCredentials(null)}><DialogContent><DialogHeader><DialogTitle>修改实例管理凭证</DialogTitle></DialogHeader>{editingCredentials && <InstanceCredentialsForm instance={editingCredentials} done={() => { setEditingCredentials(null); invalidate(); }} />}</DialogContent></Dialog>
+      <Dialog open={!!editingCredentials} onOpenChange={v => !v && setEditingCredentials(null)}><DialogContent><DialogHeader><DialogTitle>修改实例管理凭证</DialogTitle><DialogDescription>仅管理员可修改后台连接凭证，保存后可重试未完成的清理。</DialogDescription></DialogHeader>{editingCredentials && <InstanceCredentialsForm instance={editingCredentials} done={() => { setEditingCredentials(null); invalidate(); }} />}</DialogContent></Dialog>
       {externalInstance && <ExternalDbDialog instance={externalInstance} close={() => setExternalInstance(null)} done={() => { void queryClient.invalidateQueries({ queryKey: ['db-access-catalog'] }); }} />}
       {addingInstance && (
         <AddInstanceDialog

@@ -5,6 +5,10 @@
 | 分组 | 分类 | 配置内容 | 直达地址 |
 |---|---|---|---|
 | 账号管理 | 注册与登录 | 开放注册、邮箱后缀、强制个人简介和飞书通知 | `/settings?section=registration` |
+| 消息通知 | 飞书通知 | 通知渠道、自建应用与绑定 | `/settings?section=feishu` |
+| 资源存储 | OSS 存储 | Bucket、管理凭证、启用检查与身份迁移 | `/settings?section=oss` |
+| 资源存储 | 阿里云接入 | 云账号管理凭证、暂停、清理与重试 | `/settings?section=aliyun` |
+| 应用托管 | GitHub 接入 | GitHub App 与组织协作 | `/settings?section=github` |
 | AI 与模型 | 平台 AI | 自动整理团队经验使用的模型连接与开关 | `/settings?section=platform-ai` |
 | AI 与模型 | LLM API 网关 | New API 公共账户连接、首次申请赠送、公共钱包余额 | `/settings?section=llm-gateway` |
 | 应用托管 | 部署接入 | Dokploy 连接、项目、环境、SSH Key、自动域名 | `/settings?section=deployment` |

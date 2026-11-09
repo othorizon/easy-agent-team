@@ -1,13 +1,27 @@
-# 数据库账号与凭证
+# 数据库权限与分配
 
-只读地取别人的业务库数据时，按[环境变量流程](environment.md)获取已授权的连接信息。**需要自己写数据**（建表、存跑批结果、落任务状态）时才申请一个自己的库——别往只读账号的库里写，也别把结果塞进别人的业务表。
+只读取数先申请数据库权限；要为自己的应用或任务存数据、建表才申请建库「分配」。数据库权限支持 PostgreSQL。个人凭证只供本人临时使用，不配置到线上服务；分配的 owner 凭证属于资源，可用于该应用连接。
 
-1. 先看名下有没有现成的：`eat db list`（MCP: `list_db_assignments`）。`status=active` 的就能直接用。
-2. 取连接凭证：`eat db credentials …`（简写 `eat db creds …`；MCP: `get_db_credentials`）。**申请来的库的凭证只在这里取，不在环境变量里**，`eat env pull db-xxx` 那条老路已经没有了。
-   - 只给一条命令用（迁移、跑脚本、起服务）优先 `eat db credentials run <库名> -- <命令>`：值只注入子进程、不落盘；要和环境变量一起用就嵌套 `eat env run <环境> -- eat db credentials run <库名> -- <命令>`。
-   - 要写进项目：`eat db credentials pull <库名>`，落盘规则与 `eat env pull` 相同——默认写 `./.env`（DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD 和 DATABASE_URL），同名文件不是 eat 写的就中止，已有手写 `.env` 的项目用 `--merge`；**不要习惯性加 `--force`**。
-   - 只看不落盘：`--print`（`--format shell|json|url`，`url` 只输出连接串，如 `psql "$(eat db credentials pull <库名> --print --format url)"`）。
-   - 同名库分在两台实例上时写 `<库名>@<实例名>`。每次读取都会审计，只有申请人和管理员能读，没有授权给别人这条路——同事要用，让申请人自己转交，或各自申请。
-3. 没有就自己提：`eat db instances`（MCP: `list_db_instances`）挑一台实例，再 `eat db request <库名> --instance <实例> --purpose "<用途>"`（MCP: `request_db`）。库名是小写字母开头、小写字母/数字/下划线、3–31 位；用途写清楚，审批人看的就是这句。
-4. 提交后是 `pending`，等管理员批准——**告诉用户已经提交、需要谁去批，不要反复申请**。批准时平台会在实例上真实建库建号，状态转 `active`，之后按第 2 步取凭证。用 `eat db list`（MCP: `list_db_assignments`）查进度，`failed` 时 `error` 里是原因。
-5. `active` 但取凭证报 `DB_CREDENTIALS_MISSING`：平台上已没有这个账号的密码，告诉用户找管理员在实例上重置，不要自己去猜或重新申请同名库。
+## 访问团队数据
+
+1. `eat db access list` 查看开放目录与自己的授权。指定范围是 schema 下的表和视图；只读可查询，读写增加增、改、删数据及序列使用，不含改表结构或 TRUNCATE。
+2. `eat db access request <库名>[@实例名] --level read|write --reason "用途"` 申请。用途说明实际任务，只有要修改数据时才选读写。当前 Owner 或管理员自己申请会直接授予；其他申请等待 Owner 或管理员批准。
+3. `eat requests list --type db-access` / `eat requests show <申请ID>` 查状态和驳回原因。批准与执行分开；执行失败让 Owner 或管理员重试原授权，不重复申请。已有只读授权申请升级时仍可按只读访问。
+4. 批准生效后优先 `eat db run <库名>[@实例名] -- <命令>`，或 `eat db run <库名> -- sh -c 'psql "$DATABASE_URL" -c "select 1"'`。值只注入子进程，不落盘，不改父环境，透传退出码。需要环境配置时可嵌套 `eat env run <环境> -- eat db run <库名> -- <命令>`。
+5. 不再需要时 `eat db access revoke <库名>[@实例名]` 放弃授权。撤销或降级会断开本人在该库的旧会话。
+
+同一实例共用一个个人登录角色和密码。只有本人可读取个人凭证，管理员不能代取。`eat db access reset-password <库名>` 会使本人同实例全部授权改用新密码，先向用户说明影响。重置待恢复时先等待平台完成，再取凭证。`eat db credentials pull` 也可解析本人授权，临时任务优先用 `run`。
+
+跨实例同名库使用 `<库名>@<实例名>`；同实例同库同时有本人分配与授权时优先 owner 分配。名称歧义会在读取密码和启动子进程前报错。无权或重复待办时按返回信息处理，不猜密码或循环提交。
+
+本期没有数据库权限申请或个人凭证 MCP 工具。既有 `list_requests` / `get_request_status` 可查询申请；无 shell 时请用户在控制台「数据库 → 数据库权限」申请。
+
+## 为应用申请独立数据库
+
+1. `eat db list`（MCP: `list_db_assignments`）检查自己的分配。已有 `active` 库可直接使用。
+2. `eat db instances`（MCP: `list_db_instances`）选实例，`eat db request <库名> --instance <实例> --purpose "用途"`（MCP: `request_db`）申请。库名小写字母开头，含小写字母、数字、下划线，3–31 位。
+3. 告知用户已提交、需管理员批准。`eat db list` 查询；`failed` 查看原因，让管理员处理，不重复申请同名库。
+4. owner 凭证从 `eat db credentials pull|run <库名>`（别名 `creds`；MCP: `get_db_credentials`）取得，不在环境变量中。`run` 可用于迁移和服务启动；应用确需落配置时用 `pull`，默认写 `./.env`，已有手写文件用 `--merge`、别处用 `--out`，只查看用 `--print --format shell|json|url`。依提示处理文件冲突，按明确授权使用 `--force`。
+5. 同事要取数请 Owner 开放申请或直接授予数据库权限。owner 凭证留给应用，不转交代替个人授权。停用 Owner 不影响 owner 连接；页面会提示「Owner 已停用」，由管理员接手审批。
+
+`DB_CREDENTIALS_MISSING` 表示分配密码已不可用，请管理员重置。外部库权限报告里的 PUBLIC 或其他角色旁路由 DBA 收紧；EAT 撤销仅清自己的组成员关系。

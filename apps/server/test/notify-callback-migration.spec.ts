@@ -21,7 +21,7 @@ it('0038 快照只在 0037 上新增回复回调与广播权限，不覆盖上�
   expect(current).toEqual(previous);
 });
 
-it('0037 升级至 0038 保留数据库凭证、飞书配置与绑定、求助历史；新权限默认关闭且重跑不重置', async () => {
+it('0037 升级至当前版本保留数据库凭证、飞书配置与绑定、求助历史；新权限默认关闭且重跑不重置', async () => {
   await pool.query('drop schema public cascade; create schema public; drop schema if exists drizzle cascade;');
   const old = await mkdtemp(join(tmpdir(), 'eat-before-notify-callback-'));
   try {
@@ -45,7 +45,8 @@ it('0037 升级至 0038 保留数据库凭证、飞书配置与绑定、求助�
     for (let i = 0; i < tables.length; i++) {
       const after = (await pool.query(`select * from ${tables[i]}`)).rows;
       const expected = before[i].rows.map(row => tables[i] === '"user"' ? { ...row, can_notify_all: false }
-        : tables[i] === 'help_request' ? { ...row, reply_callback_url: null } : row);
+        : tables[i] === 'help_request' ? { ...row, reply_callback_url: null }
+        : tables[i] === 'db_instance' ? { ...row, cleanup_error: null } : row);
       expect(after).toEqual(expected);
     }
     await pool.query(`update "user" set can_notify_all=true where id=$1`, [user]);

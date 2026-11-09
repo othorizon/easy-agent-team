@@ -52,7 +52,7 @@ export class GithubClient {
       throw e;
     }
   }
-  private transport: typeof fetch = (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(15000) });
+  private transport: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch> = (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(15000) });
   private sdk() { return octokitModule(); }
   private cached?: { fingerprint: string; app: any };
   private async app(c: GithubConfig) {

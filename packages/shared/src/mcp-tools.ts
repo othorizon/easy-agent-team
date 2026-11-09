@@ -205,7 +205,7 @@ function dbTools(): EatToolDef[] {
     {
       name: 'request_db',
       description:
-        '申请在某实例上创建一个库和一个专属账号。**需要自己写数据（建表、落结果）时才申请库**；只读地取别人的业务库数据走 list_env_variables / get_env_values 那条路。提交后状态是 pending，要等管理员批准——告诉用户已提交、需要谁去批，不要反复申请。批准时平台会真实建库建号，状态转 active，用 list_db_assignments 查进度、get_db_credentials 取连接凭证。',
+        '申请在某实例上创建一个库和一个专属账号。**需要自己写数据（建表、落结果）时才申请库**；只读取数应在控制台申请数据库权限，或用 eat db access request，再用 eat db run 临时访问。本期 MCP 只用 list_requests / get_request_status 查询此类申请，没有数据库权限申请工具。提交后状态是 pending，要等管理员批准——告诉用户已提交、需要谁去批，不要反复申请。批准时平台会真实建库建号，状态转 active，用 list_db_assignments 查进度、get_db_credentials 取连接凭证。',
       inputSchema: {
         type: 'object',
         properties: {

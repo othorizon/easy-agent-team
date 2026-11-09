@@ -125,15 +125,26 @@ function AliyunDirectoryManagement() {
     {
       header: '策略名称',
       cell: ({ row }) => (
-        <Tip content={row.original.policyName}>
-          <span className="block max-w-64 truncate font-mono text-xs">
-            {row.original.policyName}
-          </span>
-        </Tip>
+        <div className="min-w-0 space-y-2">
+          <Tip content={row.original.policyName}>
+            <span className="block max-w-40 truncate font-mono text-xs md:max-w-64">
+              {row.original.policyName}
+            </span>
+          </Tip>
+          <div className="max-w-40 space-y-2 md:hidden">
+            <p className="break-words text-xs text-muted-foreground">{row.original.description || '—'}</p>
+            <div className="flex flex-wrap gap-1">
+              <Badge variant="secondary">{row.original.cloudExists ? '存在' : '云端已删除'}</Badge>
+              <Badge variant={row.original.open ? 'success' : 'secondary'}>{row.original.open ? '已开放' : '未开放'}</Badge>
+            </div>
+            <p className="break-words text-xs text-muted-foreground">{row.original.ownerName || '管理员审批'}{row.original.ownerStatus === 'disabled' ? ' · Owner 已停用' : ''}</p>
+          </div>
+        </div>
       ),
     },
     {
       header: 'RAM 说明',
+      meta: { hideBelow: 'md' },
       cell: ({ row }) => (
         <p className="max-w-md break-words text-sm">
           {row.original.description || '—'}
@@ -142,13 +153,14 @@ function AliyunDirectoryManagement() {
     },
     {
       header: '云端状态',
+      meta: { hideBelow: 'md' },
       cell: ({ row }) => (
         <Badge variant="secondary">
           {row.original.cloudExists ? '存在' : '云端已删除'}
         </Badge>
       ),
     },
-    { id: 'open', header: '开放申请', meta: { className: 'w-28' }, cell: ({ row: { original: p } }) => <div className="text-sm"><Badge variant={p.open ? 'success' : 'secondary'}>{p.open ? '已开放' : '未开放'}</Badge><p className="mt-1 text-xs text-muted-foreground">{p.ownerName || '管理员审批'}{p.ownerStatus === 'disabled' ? ' · Owner 已停用' : ''}</p></div> },
+    { id: 'open', header: '开放申请', meta: { hideBelow: 'md', className: 'w-28' }, cell: ({ row: { original: p } }) => <div className="text-sm"><Badge variant={p.open ? 'success' : 'secondary'}>{p.open ? '已开放' : '未开放'}</Badge><p className="mt-1 text-xs text-muted-foreground">{p.ownerName || '管理员审批'}{p.ownerStatus === 'disabled' ? ' · Owner 已停用' : ''}</p></div> },
     { id: 'actions', header: '操作', meta: { className: 'w-32' }, cell: ({ row: { original: p } }) => {
       const paused = p.connectionStatus === 'paused';
       const reason = !p.cloudExists ? '权限点在云端已删除' : paused ? '接入已暂停，恢复后可授予' : !admin && !p.open ? '未开放申请时仅管理员可直接授予' : null;

@@ -37,7 +37,7 @@ function AlertDialogFooter({ className, ...props }: React.HTMLAttributes<HTMLDiv
 }
 
 function AlertDialogTitle({ className, ...props }: React.ComponentProps<typeof AlertDialogPrimitive.Title>) {
-  return <AlertDialogPrimitive.Title className={cn('text-base font-semibold', className)} {...props} />;
+  return <AlertDialogPrimitive.Title className={cn('break-words text-base font-semibold', className)} {...props} />;
 }
 
 function AlertDialogDescription({
@@ -46,7 +46,7 @@ function AlertDialogDescription({
 }: React.ComponentProps<typeof AlertDialogPrimitive.Description>) {
   return (
     <AlertDialogPrimitive.Description
-      className={cn('text-sm text-muted-foreground leading-relaxed', className)}
+      className={cn('break-words text-sm text-muted-foreground leading-relaxed', className)}
       {...props}
     />
   );

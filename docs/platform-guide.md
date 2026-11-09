@@ -1,6 +1,6 @@
 # 内置平台指南的组织与分发
 
-`eat-platform-guide` v37 使用精简入口与按任务加载的参考文件。设计依据是 [OpenAI Skill Creator](https://github.com/openai/skills/blob/main/skills/.system/skill-creator/SKILL.md) 和 [Claude Skill Creator](https://github.com/anthropics/skills/blob/main/skills/skill-creator/SKILL.md) 对渐进披露、明确触发描述和主题组织的建议。
+`eat-platform-guide` 从 v37 起使用精简入口与按任务加载的参考文件。设计依据是 [OpenAI Skill Creator](https://github.com/openai/skills/blob/main/skills/.system/skill-creator/SKILL.md) 和 [Claude Skill Creator](https://github.com/anthropics/skills/blob/main/skills/skill-creator/SKILL.md) 对渐进披露、明确触发描述和主题组织的建议。
 
 ## 源文件
 
@@ -12,6 +12,8 @@ packages/shared/src/eat-platform-guide/
     ├── access.md
     ├── environment.md
     ├── databases.md
+    ├── aliyun.md
+    ├── oss.md
     ├── llm-api.md
     ├── applications.md
     ├── folio.md
@@ -47,7 +49,8 @@ packages/shared/src/eat-platform-guide/
 | 用户任务 | 应读取的主题 | 需要保留的行为 |
 |---|---|---|
 | 使用团队模型写调用代码 | LLM API | 查询实际模型，导出个人 Key，先阅读官方 API 文档 |
-| 获取已有业务库的只读连接串 | 环境变量 | 先查清单，取值无权限时申请 |
+| 读取团队业务库 | 数据库 | 先查权限目录，申请只读/读写，用 `eat db run` 临时访问 |
+| 运行阿里云命令 | 阿里云权限 | 申请权限点，用 `eat aliyun run`，Key 与 OSS 共用且仅本人临时使用 |
 | 给自己的应用申请数据库 | 数据库 | 先查已有分配，按需申请独立账号 |
 | 发布带密码的静态报告 | Folio | 遵循已确认的访问选择，交付分享链接及有效期 |
 | 部署后接口报错 | 应用与部署 | 区分部署状态、构建日志与运行日志 |

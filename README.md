@@ -23,7 +23,7 @@ EAT 是人和 Agent 与企业上下文之间的协调层，把这些障碍收进
 | | 能力 |
 |---|---|
 | **可理解**<br>让 Agent 读懂团队 | 数据持续集成<sup>※</sup> · [Skill 规范](docs/features.md#skill-管理与分发) · [角色模板](docs/features.md#角色模板) · [MCP 配置分发](docs/features.md#mcp-配置分发) |
-| **可调用**<br>按权限取用资源 | [环境变量与凭证](docs/features.md#环境变量) · [数据库](docs/features.md#数据库账号分配) · [阿里云权限](docs/features.md#阿里云权限) · [对象存储](docs/features.md#oss-对象存储) · [LLM 网关](docs/features.md#llm-api-网关) · [应用部署](docs/features.md#部署托管dokploy) · [Folio 页面发布](docs/features.md#folio-发布与评论) |
+| **可调用**<br>按权限取用资源 | [环境变量与凭证](docs/features.md#环境变量) · [数据库分配](docs/features.md#数据库账号分配) · [数据库权限](docs/features.md#数据库权限) · [阿里云权限](docs/features.md#阿里云权限) · [对象存储](docs/features.md#oss-对象存储) · [LLM 网关](docs/features.md#llm-api-网关) · [应用部署](docs/features.md#部署托管dokploy) · [Folio 页面发布](docs/features.md#folio-发布与评论) |
 | **可流动**<br>人与 Agent 间流转 | [求助](docs/features.md#求助系统人机协作) · [权限审批](docs/features.md#环境变量) · [飞书通知与卡片审批](docs/feishu-app.md) · [Folio 评论 @](docs/folios.md) · [GitHub 组织协作](docs/features.md#github-组织协作) |
 | **可积累**<br>解决一次，复用多次 | [经验沉淀与检索](docs/features.md#经验沉淀) · [Skill 版本与订阅](docs/features.md#skill-管理与分发) · [审计留痕](docs/features.md#安全与审计) |
 
@@ -151,7 +151,7 @@ flowchart TB
 
 - **单体 + 单库**：API 与后台任务在同一个 NestJS 进程里，业务数据与审计写进同一个 PostgreSQL，不引入 Redis、不部署独立 worker。
 - **三端一套契约**：请求 / 响应以 zod 定义在 `packages/shared`，服务端、CLI、控制台共用同一份类型。
-- **Agent 是一等用户**：面向人的能力都有对应的 CLI 命令与 MCP 工具，Agent 能自己办，不需要人转述。
+- **Agent 是一等用户**：常用能力提供 CLI 与 MCP 入口；数据库权限和阿里云权限通过 CLI 或控制台申请，MCP 可查询申请状态。
 - **元数据公开、取值受控**：Agent 默认看得到某个配置存在、用来做什么，取值要授权；没权限时给出可以直接执行的申请命令，而不是静默失败。
 
 ## 文档
@@ -160,12 +160,13 @@ flowchart TB
 |---|---|
 | [功能清单](docs/features.md) | 按四个支柱整理的全部能力与入口 |
 | [界面截图与录屏](docs/screenshots.md) | 控制台每个页面与 CLI 关键流程 |
-| [产品设计文档](docs/product-design.md) | 产品与技术设计的唯一事实源：权限模型、数据模型、接口与全部决策记录 |
+| [产品设计文档](docs/product-design.md) | 历史产品与技术决策；现行行为见功能文档，新决策见 [ADR](docs/adr/) |
 | [部署文档](docs/deployment.md) | 镜像构建、Dokploy 部署、备份、升级、CLI 分发与 Dokploy 版本兼容性 |
 | [系统设置](docs/settings.md) | 管理员设置的分类、直达链接与界面 |
 | [内置平台指南](docs/platform-guide.md) | `eat-platform-guide` 的组织方式与分发 |
 | [Folio 发布与评论](docs/folios.md) · [上传协议](docs/folio-uploads.md) · [CDN 加速](docs/folio-cdn.md) | 独立页面发布、访问控制、评论与运维 |
-| [OSS 对象存储](docs/oss-storage.md) | 空间申请审批、共享凭证、公开读与管理凭证权限 |
+| [数据库权限](docs/database-permissions.md) · [阿里云权限](docs/aliyun-permissions.md) | 个人授权、临时凭证、管理员配置、停用、清理与排查 |
+| [OSS 对象存储](docs/oss-storage.md) | 空间申请审批、统一个人身份、迁移、公开读与管理凭证权限 |
 | [LLM API 网关](docs/llm-gateway.md) · [额度一致性](docs/llm-gateway-consistency.md) | 个人模型 Key、额度与接入升级 |
 | [飞书自建应用通知](docs/feishu-app.md) | 通知渠道切换、机器人私聊与审批卡片 |
 | [GitHub 组织协作接入](docs/github.md) | GitHub App 接入向导、身份关联与仓库权限 |
