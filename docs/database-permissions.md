@@ -12,6 +12,14 @@ EAT 建的 PostgreSQL 库，由分配申请人担任 Owner。Owner 和管理员�
 
 每人在每个实例只有一个个人登录角色 `eat-<用户 UUID>` 和一套密码；每个库各有一条授权。重复授予和失败重试复用原记录、角色与密码。对已有授权选择新级别会修改同一条授权；从读写降为只读时，先加入只读组再退出读写组，提交后终止这个人在该库的会话，同实例其他库不受影响。升级则先加入读写组再退出只读组。角色有 EAT 来源标记，来源不明的同名角色会让执行失败，平台不会接管。
 
+## 申请与 Owner 审批
+
+成员在目录选择库、只读或读写级别并填写用途，也可执行 `eat db access request <库名>[@实例名] --level read|write --reason "用途"`。同人同库最多一条待审批申请，重复提交需要先撤回。只读持有人可从「我的授权」申请升级，待审批期间仍按原只读级别访问，批准后升级原授权；读写持有人不能申请降级为只读。Owner 或管理员自己申请时直接授予并记审计，不创建待审批记录。
+
+申请进入统一申请中心的「数据库权限」类型（`db-access`）。库的当前 Owner 和管理员可以审批，飞书卡片展示申请人、用途、库、实例和级别，快捷同意使用相同的授权执行路径。Owner 停用时，详情提示「Owner 已停用」，由管理员审批。关闭申请仅拒绝新申请，原待办仍可审批；资源删除或申请人停用使待办失效。驳回、撤回和重新提交保留各轮历史。
+
+批准与数据库执行分别显示。批准时把决策与待执行授权一起保存，再执行目标 PostgreSQL 操作；目标失败显示「已批准、执行失败」。Owner 或管理员在数据库权限页重试原授权，复用身份和授权、不新建审批轮次；启动及每 30 秒恢复时同步申请中心的执行状态。`eat requests list --type db-access`、`eat requests show <申请ID>` 和既有 MCP `list_requests` / `get_request_status` 可查进度；本期没有数据库权限申请 MCP 工具，`get_db_credentials` 仍只支持原 owner 分配凭证。
+
 ## 外部库登记
 
 管理员在「数据库实例」的 PostgreSQL 实例行中选择「登记外部库」，填写实际库名、EAT Owner、schema 列表和可选的建表角色。登记前校验目标库连接、CREATEROLE、库 CONNECT 的授予能力，以及各 schema、表、视图和序列的实际授权能力。管理账号可以预先取得实际对象 owner 的 SET 权限，或持有相应权限的 GRANT OPTION；填写建表角色时还需能切换到该角色以维护默认权限。校验失败显示 DBA 可执行的修复 SQL，不会把 PostgreSQL 的 warning 当作授权成功。
@@ -42,7 +50,7 @@ CLI 使用 `eat db run <库名>[@实例名] -- <命令>`，与 `eat db credentia
 
 `run` 将 `DB_HOST`、`DB_PORT`、`DB_NAME`、`DB_USER`、`DB_PASSWORD` 和 `DATABASE_URL` 注入子进程，不落盘、不修改父环境，透传退出码。管道与 shell 展开请显式使用 `-- sh -c '…'`。首次使用会自动生成缺少的个人凭证，创建失败后可以重试。
 
-`eat db access list` 查看开放目录与自己的授权，`eat db access revoke <库>` 放弃本人授权，`eat db access reset-password <库>` 重置个人密码；重置前提示整个实例的影响。申请入口在控制台「数据库权限」页。CLI 只查询 `scope=mine`，不会把可管理的他人授权当作本人凭证候选。
+`eat db access list` 查看开放目录与自己的授权，`eat db access revoke <库>` 放弃本人授权，`eat db access reset-password <库>` 重置个人密码；重置前提示整个实例的影响。申请可通过控制台「数据库权限」页或 `eat db access request`。CLI 只查询 `scope=mine`，不会把可管理的他人授权当作本人凭证候选。
 
 执行失败的授权会显示失败原因，可由 Owner 或管理员重试。未完成的开放、待执行授权和撤销中记录持久化保存，应用启动及每 30 秒恢复一次；执行失败的授予保留失败状态，等待明确重试。撤销未完成时不会显示已撤销。
 
@@ -66,6 +74,7 @@ CLI 使用 `eat db run <库名>[@实例名] -- <命令>`，与 `eat db credentia
 | `POST /api/db/assignments/:id/access` | 开放或关闭申请，选择或修改 schema |
 | `POST /api/db/access/catalog/:id/reapply` | 重新应用现有对象及默认权限，保留开放状态 |
 | `GET /api/db/access/grants` | 本人持有及可管理的授权；`?scope=mine` 只返回本人持有 |
+| `POST /api/db/access/catalog/:id/requests` | 成员申请只读/读写；Owner 或管理员自己申请直接授予 |
 | `POST /api/db/access/catalog/:id/grants` | 直接授予只读/读写，或修改已有级别 |
 | `POST /api/db/access/grants/:id/retry` | 重试未完成或失败的操作 |
 | `POST /api/db/access/grants/:id/revoke` | 管理者撤销，原因选填 |

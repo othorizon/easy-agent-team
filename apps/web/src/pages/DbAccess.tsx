@@ -1,4 +1,4 @@
-import { grantDbAccessSchema, openDbAccessSchema, revokeDbAccessSchema, type DbAccessCredentials, type DbAccessGrantInfo, type DbCatalogInfo, type DbPersonalPasswordReset, type GrantDbAccessRequest, type OpenDbAccessRequest, type RevokeDbAccessRequest, type UserPublic } from '@eat/shared';
+import { requestDbAccessSchema, type RequestDbAccess, type DbAccessRequestResult, grantDbAccessSchema, openDbAccessSchema, revokeDbAccessSchema, type DbAccessCredentials, type DbAccessGrantInfo, type DbCatalogInfo, type DbPersonalPasswordReset, type GrantDbAccessRequest, type OpenDbAccessRequest, type RevokeDbAccessRequest, type UserPublic } from '@eat/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Eye, EyeOff, KeyRound } from 'lucide-react';
@@ -33,6 +33,7 @@ export function DbAccessTab({ keyword }: { keyword: string }) {
   const [opening, setOpening] = useState<DbCatalogInfo | null>(null);
   const [configuring, setConfiguring] = useState(false);
   const [checking, setChecking] = useState<DbCatalogInfo | null>(null);
+  const [requesting, setRequesting] = useState<{ id: string; dbName: string; instanceName: string; upgrade?: boolean } | null>(null);
   const [granting, setGranting] = useState<DbCatalogInfo | null>(null);
   const [revoking, setRevoking] = useState<DbAccessGrantInfo | null>(null);
   const [credentials, setCredentials] = useState<DbAccessGrantInfo | null>(null);
@@ -41,6 +42,8 @@ export function DbAccessTab({ keyword }: { keyword: string }) {
   const invalidate = () => {
     void client.invalidateQueries({ queryKey: ['db-access-catalog'] });
     void client.invalidateQueries({ queryKey: ['db-access-grants'] });
+    void client.invalidateQueries({ queryKey: ['requests'] });
+    void client.invalidateQueries({ queryKey: ['request-detail'] });
   };
   const act = useMutation({
     mutationFn: ({ path, payload }: { path: string; payload?: unknown }) => api<DbAccessGrantInfo | DbCatalogInfo>('POST', path, payload),
@@ -65,7 +68,7 @@ export function DbAccessTab({ keyword }: { keyword: string }) {
       {r.publicCheck && <Button size="sm" variant="outline" onClick={() => setChecking(r)}>权限检查</Button>}
       {r.id && <Button size="sm" variant="outline" disabled={act.isPending} onClick={() => act.mutate({ path: `/api/db/access/catalog/${r.id}/reapply` })}>重新应用授权</Button>}
       {r.id && r.state === 'active' && <Button size="sm" variant="outline" onClick={() => setGranting(r)}>授予权限</Button>}
-    </div> : <span className="text-xs text-muted-foreground">联系 Owner 授予</span> },
+    </div> : r.id && r.open && r.state === 'active' ? <Button size="sm" variant="outline" onClick={() => setRequesting({ ...r, id: r.id! })}>申请权限</Button> : null },
   ];
   const grantColumns = (manage: boolean): DataTableColumn<DbAccessGrantInfo>[] => [
     { id: 'db', header: '库', cell: ({ row: { original: r } }) => <div className="space-y-1"><InlineCode>{r.dbName}</InlineCode><div className="text-xs text-muted-foreground">{r.instanceName}</div></div> },
@@ -73,6 +76,7 @@ export function DbAccessTab({ keyword }: { keyword: string }) {
     { id: 'level', header: '级别', meta: { className: 'w-20' }, cell: ({ row: { original: r } }) => r.level === 'write' ? '读写' : '只读' },
     { id: 'state', header: '状态', meta: { className: 'w-28' }, cell: ({ row: { original: r } }) => <div className="space-y-1"><Badge variant={r.state === 'active' ? 'success' : r.error ? 'destructive' : 'secondary'}>{r.error && r.state === 'revoking' ? '撤销失败' : STATE[r.state]}</Badge>{r.error && <Tip content={r.error}><p className="max-w-40 truncate text-xs text-destructive">{r.error}</p></Tip>}</div> },
     { id: 'actions', header: '操作', meta: { className: 'w-48' }, cell: ({ row: { original: r } }) => <div className="flex flex-wrap gap-1.5">
+      {!manage && r.userId === me?.id && r.state === 'active' && r.level === 'read' && catalog.data?.some(c => c.id === r.catalogId && c.open) && <Button size="sm" variant="outline" onClick={() => setRequesting({ id: r.catalogId, dbName: r.dbName, instanceName: r.instanceName, upgrade: true })}>申请读写</Button>}
       {r.userId === me?.id && r.state === 'active' && <Button size="sm" variant="outline" onClick={() => setCredentials(r)}><KeyRound />个人凭证</Button>}
       {(r.state === 'failed' || r.state === 'pending' || r.state === 'revoking') && (r.canManage || (r.userId === me?.id && r.state === 'revoking')) && <Button size="sm" variant="outline" disabled={act.isPending} onClick={() => act.mutate({ path: `/api/db/access/grants/${r.id}/retry` })}>重试</Button>}
       {r.state !== 'revoked' && r.state !== 'revoking' && (manage ? <Button size="sm" variant="outline-destructive" onClick={() => setRevoking(r)}>撤销</Button> : <Confirm title="放弃这条授权？" description="你在这个库上的连接会被断开；同实例其他库不受影响。" confirmText="放弃授权" onConfirm={() => act.mutate({ path: `/api/db/access/grants/${r.id}/relinquish` })}><Button size="sm" variant="outline-destructive" disabled={act.isPending}>放弃</Button></Confirm>)}
@@ -81,7 +85,7 @@ export function DbAccessTab({ keyword }: { keyword: string }) {
   if (catalog.isError || grants.isError) return <Empty text="数据库权限加载失败" action={<Button variant="outline" onClick={invalidate}>重试</Button>} />;
   return <div className="space-y-5">
     <Card><CardContent className="space-y-4">
-      <div><h2 className="text-sm font-semibold">数据库目录</h2><p className="mt-1 text-sm text-muted-foreground">查询或修改团队数据，请联系 Owner 授予。Owner 和管理员可在此开放自己的库。</p></div>
+      <div><h2 className="text-sm font-semibold">数据库目录</h2><p className="mt-1 text-sm text-muted-foreground">选择开放的库申请只读或读写权限，获批后领取个人凭证。Owner 和管理员可在此开放自己的库。</p></div>
       <DataTable columns={columns} data={(catalog.data ?? []).filter(matches)} loading={catalog.isLoading} getRowId={r => r.id ?? r.assignmentId!} empty={<Empty text="暂无开放申请的库" />} />
     </CardContent></Card>
     <Card><CardContent className="space-y-4">
@@ -89,6 +93,7 @@ export function DbAccessTab({ keyword }: { keyword: string }) {
       <DataTable columns={grantColumns(false)} data={mine} loading={grants.isLoading} getRowId={r => r.id} empty={<Empty text="暂无数据库授权" />} />
     </CardContent></Card>
     {managed.length > 0 && <Card><CardContent className="space-y-4"><h2 className="text-sm font-semibold">授权管理</h2><DataTable columns={grantColumns(true)} data={managed} getRowId={r => r.id} /></CardContent></Card>}
+    <Dialog open={!!requesting} onOpenChange={v => !v && setRequesting(null)}><DialogContent><DialogHeader><DialogTitle>{requesting?.upgrade ? '申请升级为读写' : '申请数据库权限'}</DialogTitle><DialogDescription>写明用途供 Owner 审批；升级待审批期间原只读授权照常可用。</DialogDescription></DialogHeader>{requesting && <RequestForm row={requesting} done={() => { setRequesting(null); invalidate(); }} />}</DialogContent></Dialog>
     <Dialog open={!!opening} onOpenChange={v => !v && setOpening(null)}><DialogContent><DialogHeader><DialogTitle>{configuring ? '配置数据库权限' : '开放数据库申请'}</DialogTitle><DialogDescription>{opening?.source === 'external' ? '外部库保留 PUBLIC 与已有角色的权限。建表角色留空时，新对象依赖重新应用授权。' : '收回 PUBLIC 的 CONNECT 和 public schema 的 CREATE。owner 账号照常可用。'}</DialogDescription></DialogHeader>{opening && <OpenForm key={opening.id ?? opening.assignmentId!} row={opening} configuring={configuring} done={() => { setOpening(null); invalidate(); }} />}</DialogContent></Dialog>
     <Dialog open={!!checking} onOpenChange={v => !v && setChecking(null)}><DialogContent className="max-h-[85vh] overflow-y-auto"><DialogHeader><DialogTitle>外部库权限检查</DialogTitle><DialogDescription>{checking?.dbName} · 重新应用授权会刷新检查结果。</DialogDescription></DialogHeader>{checking?.publicCheck && <DbPublicCheckReport check={checking.publicCheck} />}</DialogContent></Dialog>
     <Dialog open={!!granting} onOpenChange={v => !v && setGranting(null)}><DialogContent><DialogHeader><DialogTitle>授予数据库权限</DialogTitle><DialogDescription>{granting?.dbName} · 已有授权会改为所选级别；降级会断开这个库上的连接。</DialogDescription></DialogHeader>{granting && <GrantForm row={granting} done={() => { setGranting(null); invalidate(); }} />}</DialogContent></Dialog>
@@ -159,4 +164,15 @@ function PersonalCredentials({ grant }: { grant: DbAccessGrantInfo }) {
     </div> : <div className="flex items-center gap-3"><InlineCode>••••••••••••</InlineCode><Button variant="outline" loading={loading} disabled={resetting} onClick={() => void reveal()}><Eye />查看个人凭证</Button></div>}
     <div className="border-t pt-4"><Confirm title="重置个人密码？" description={`同一实例「${grant.instanceName}」上其他库的授权也会使用新密码。已保存的旧密码将失效。个人凭证只供本人临时使用，不要配进线上服务。`} confirmText="重置个人密码" onConfirm={() => void reset()}><Button variant="outline" loading={resetting} disabled={loading}>重置个人密码</Button></Confirm></div>
   </div>;
+}
+
+function RequestForm({ row, done }: { row: { id: string; dbName: string; instanceName: string; upgrade?: boolean }; done: () => void }) {
+  const form = useForm<RequestDbAccess>({ resolver: zodResolver(requestDbAccessSchema), defaultValues: { level: row.upgrade ? 'write' : 'read', reason: '' } });
+  const save = useMutation({ mutationFn: (v: RequestDbAccess) => api<DbAccessRequestResult>('POST', `/api/db/access/catalog/${row.id}/requests`, v), onSuccess: r => { if (r.requestId) toast.success('申请已提交，可在申请中心查看进度'); else if (r.grant?.error) toast.error(r.grant.error); else toast.success('授权已生效'); done(); }, onError: e => toast.error(errorMessage(e)) });
+  return <form className="space-y-4" onSubmit={form.handleSubmit(v => save.mutate(v))}>
+    <p className="text-sm"><InlineCode>{row.dbName}</InlineCode> · {row.instanceName}</p>
+    <Field label="授权级别" htmlFor="request-db-level" error={form.formState.errors.level?.message} hint="读写可增、改、删数据；不含修改表结构。"><Controller control={form.control} name="level" render={({ field }) => <Select value={field.value} onValueChange={field.onChange} disabled={row.upgrade}><SelectTrigger id="request-db-level"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="read">只读</SelectItem><SelectItem value="write">读写</SelectItem></SelectContent></Select>} /></Field>
+    <Field label="申请用途" htmlFor="request-db-reason" error={form.formState.errors.reason?.message}><Textarea id="request-db-reason" {...form.register('reason')} /></Field>
+    <div className="flex justify-end"><Button type="submit" loading={save.isPending}>提交申请</Button></div>
+  </form>;
 }

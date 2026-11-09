@@ -368,6 +368,7 @@ function RequestDialog({
                 <p className="whitespace-pre-wrap break-words">{r.reason || '未填写'}</p>
                 {r.presentation?.lines.map((line, index) => <p key={index} className="mt-3 whitespace-pre-wrap break-words">{line}</p>)}
               </div>
+              {typeof r.details.ownerNotice === 'string' && <p className="text-sm text-amber-700">{r.details.ownerNotice}</p>}
               {r.presentation?.appSlug && <GithubAppSummary slug={r.presentation.appSlug} />}
               {r.status === 'rejected' && (
                 <div className="rounded-lg border border-destructive/30 p-4 text-sm">

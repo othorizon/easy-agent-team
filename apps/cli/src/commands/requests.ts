@@ -14,7 +14,7 @@ export function registerRequestCommands(program: Command) {
     .command('list')
     .description('查看我发起的各类申请')
     .option('--status <status>', 'all / ongoing / pending / approved / rejected / withdrawn / invalid', 'all')
-    .option('--type <type>', 'env / mcp / db / oss / app')
+    .option('--type <type>', 'env / mcp / db / db-access / oss / app')
     .option('--page <page>', '页码', '1')
     .option('--json', '输出 JSON')
     .action(async (opts) => {

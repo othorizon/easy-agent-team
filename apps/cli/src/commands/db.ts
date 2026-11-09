@@ -1,5 +1,5 @@
-import { dbCredentialsToEnv, matchDbAssignments, matchDbCredentialTargets, resolveDbInstance } from '@eat/shared';
-import type { DbAccessCredentials, DbAccessGrantInfo, DbAssignmentInfo, DbCredentials, DbCredentialTarget, DbCatalogInfo, DbPersonalPasswordReset, DbInstanceInfo } from '@eat/shared';
+import { requestDbAccessSchema, dbCredentialsToEnv, matchDbAssignments, matchDbCredentialTargets, resolveDbInstance } from '@eat/shared';
+import type { DbAccessRequestResult, DbAccessCredentials, DbAccessGrantInfo, DbAssignmentInfo, DbCredentials, DbCredentialTarget, DbCatalogInfo, DbPersonalPasswordReset, DbInstanceInfo } from '@eat/shared';
 import { Api } from '../client.js';
 import { mergeEnvFile, printWriteResult, writeEnvFile } from '../dotenv-file.js';
 import { formatDotenvLine, PRINT_FORMATS, renderPrinted, type PrintFormat } from '../dotenv-format.js';
@@ -163,7 +163,7 @@ export async function dbAccessList(): Promise<void> {
   for (const c of catalog.filter(c => c.open)) console.log(`  ${c.dbName}@${c.instanceName} · Owner ${c.ownerName}`);
   console.log('我的授权：');
   for (const g of grants) console.log(`  [${g.state}] ${g.dbName}@${g.instanceName} · ${g.level === 'read' ? '只读' : '读写'}${g.error ? ` · ${g.error}` : ''}`);
-  console.log('申请入口：控制台 → 数据库 → 数据库权限。个人凭证只供本人临时使用，不要配进线上服务。');
+  console.log('申请：eat db access request <库@实例> --level read|write --reason "用途"。个人凭证只供本人临时使用，不要配进线上服务。');
 }
 
 async function resolveOwnGrant(api: Api, ref: string, activeOnly: boolean): Promise<DbAccessGrantInfo> {
@@ -188,4 +188,17 @@ export async function dbAccessResetPassword(ref: string): Promise<void> {
   const result = await api.request<DbPersonalPasswordReset>('POST', `/api/db/access/catalog/${grant.catalogId}/reset-password`);
   if (result.state !== 'complete') throw new Error(`个人密码重置待完成：${result.error ?? '平台将自动重试'}。请稍后用 eat db run 重试。`);
   console.log('个人密码已重置。下次 eat db run 将自动使用新密码。');
+}
+
+export async function dbAccessRequest(ref: string, opts: { level: string; reason: string }): Promise<void> {
+  const dto = requestDbAccessSchema.parse(opts);
+  const api = Api.fromSaved();
+  const rows = await api.request<DbCatalogInfo[]>('GET', '/api/db/access/catalog');
+  const hits = matchDbAssignments(rows.filter(c => c.id && c.open && c.state === 'active').map(c => ({ ...c, id: c.id!, status: 'active' })), ref);
+  if (hits.length > 1) throw new Error(`有多个同名库，请写成「库名@实例名」：${hits.map(c => `${c.dbName}@${c.instanceName}`).join('、')}`);
+  if (!hits.length) throw new Error(`未找到开放申请的库 ${ref}，用 eat db access list 查看`);
+  const result = await api.request<DbAccessRequestResult>('POST', `/api/db/access/catalog/${hits[0].id}/requests`, dto);
+  if (result.requestId) console.log(`申请已提交：${result.requestId}。用 eat requests show ${result.requestId} 查看审批与执行状态。`);
+  else if (result.grant?.state === 'active') console.log('数据库权限已生效（Owner 或管理员自己申请直接授予）。');
+  else console.log(`已授予，执行尚未完成：${result.grant?.error ?? result.grant?.state}。请在控制台重试，无需重新申请。`);
 }

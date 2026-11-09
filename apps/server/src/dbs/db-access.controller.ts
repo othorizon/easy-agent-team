@@ -1,13 +1,17 @@
-import { Body, Controller, Get, Header, Param, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, Header, Param, ParseUUIDPipe, Post, Query, Req } from '@nestjs/common';
 import type { FastifyRequest } from 'fastify';
 import { dbAccessGrantQuerySchema, dbPersonalPasswordResetSchema, type DbAccessGrantQuery, dbAccessCredentialsSchema, dbAccessGrantInfoSchema, dbAccessGrantListSchema, dbCatalogInfoSchema, dbCatalogListSchema, grantDbAccessSchema, openDbAccessSchema, registerExternalDbSchema, revokeDbAccessSchema, type GrantDbAccessRequest, type OpenDbAccessRequest, type RegisterExternalDbRequest, type RevokeDbAccessRequest } from '@eat/shared';
 import { CurrentUser, type AuthUser } from '../auth/auth.decorators';
 import { ZodValidationPipe } from '../common/zod.pipe';
+import { DbAccessRequests } from './db-access-requests';
+import { requestDbAccessSchema, dbAccessRequestResultSchema, type RequestDbAccess } from '@eat/shared';
 import { DbAccessService } from './db-access.service';
 
 @Controller('api/db')
 export class DbAccessController {
-  constructor(private readonly access: DbAccessService) {}
+  constructor(private readonly access: DbAccessService, private readonly requests: DbAccessRequests) {}
+  @Post('access/catalog/:id/requests')
+  async request(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body(new ZodValidationPipe(requestDbAccessSchema)) body: RequestDbAccess) { return dbAccessRequestResultSchema.parse(await this.requests.submit(user, id, body)); }
   @Get('access/catalog')
   async catalog(@CurrentUser() user: AuthUser) { return dbCatalogListSchema.parse(await this.access.listCatalog(user)); }
   @Post('instances/:id/access/catalog')

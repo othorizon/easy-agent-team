@@ -85,3 +85,18 @@ it('两种 MCP 接入公开相同的统一申请查询工具', () => {
   expect(pick('local')).toHaveLength(2);
   expect(pick('local')).toEqual(pick('remote'));
 });
+it('db-access 类型进入CLI筛选和两种MCP查询枚举，既有凭证工具仍只有owner分配入口', async () => {
+  const f = fixture({ items: [{ id: 'access-one', type: 'db-access', targetName: '分析库', status: 'approved', execution: 'failed', executionError: '连接失败' }], total: 1, page: 1 });
+  await f.run('list', '--type', 'db-access');
+  expect(f.request).toHaveBeenCalledWith('GET', '/api/requests?scope=mine&status=all&page=1&pageSize=20&type=db-access');
+  expect(f.log.mock.calls.flat().join('\n')).toContain('数据库权限');
+  expect(f.log.mock.calls.flat().join('\n')).toContain('执行状态：failed · 连接失败');
+  for (const mode of ['local', 'remote'] as const) {
+    const tools = buildEatTools(mode);
+    const list = tools.find(t => t.name === 'list_requests')!;
+    expect((list.inputSchema as any).properties.type.enum).toContain('db-access');
+    expect(tools.some(t => t.name === 'request_db_access')).toBe(false);
+    const credentials = tools.find(t => t.name === 'get_db_credentials')!;
+    expect((credentials.inputSchema as any).properties).not.toHaveProperty('catalogId');
+  }
+});

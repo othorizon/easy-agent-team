@@ -247,3 +247,40 @@ it('access list只展示开放目录和我的授权；放弃按本人授权，�
   await dbAccessResetPassword('analytics');
   expect(request).toHaveBeenCalledWith('POST', '/api/db/access/catalog/catalog-reader/reset-password');
 });
+
+describe('数据库权限申请', () => {
+  it('按库@实例唯一定位目录，真实命令函数发送级别用途并输出申请ID', async () => {
+    const { dbAccessRequest } = await import('../src/commands/db.js');
+    const request = vi.fn(async (method: string, url: string, body?: unknown) => {
+      if (method === 'GET') return [
+        { id: ID_A, dbName: 'reports', instanceName: '主库', open: true, state: 'active' },
+        { id: ID_B, dbName: 'reports', instanceName: '备用', open: true, state: 'active' },
+      ];
+      expect([method, url, body]).toEqual(['POST', `/api/db/access/catalog/${ID_B}/requests`, { level: 'write', reason: '修正报表数据' }]);
+      return { requestId: ID_C, grant: null };
+    });
+    vi.spyOn(Api, 'fromSaved').mockReturnValue({ request } as unknown as Api);
+    await dbAccessRequest('reports@备用', { level: 'write', reason: '修正报表数据' });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining(ID_C));
+    request.mockClear();
+    await expect(dbAccessRequest('reports', { level: 'read', reason: '统计' })).rejects.toThrow('同名');
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+  it('非法级别、空用途和未开放目录不产生POST，自助直授呈现执行结果', async () => {
+    const { dbAccessRequest } = await import('../src/commands/db.js');
+    const request = vi.fn(async (method: string) => method === 'GET'
+      ? [{ id: ID_A, dbName: 'reports', instanceName: '主库', open: true, state: 'active' }]
+      : { requestId: null, grant: { state: 'active', level: 'read' } });
+    vi.spyOn(Api, 'fromSaved').mockReturnValue({ request } as unknown as Api);
+    await expect(dbAccessRequest('reports', { level: 'owner', reason: 'x' })).rejects.toThrow();
+    await expect(dbAccessRequest('reports', { level: 'read', reason: ' ' })).rejects.toThrow();
+    expect(request).not.toHaveBeenCalled();
+    await dbAccessRequest('reports', { level: 'read', reason: '自己查询' });
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('已生效'));
+    request.mockResolvedValueOnce([{ id: ID_A, dbName: 'closed', instanceName: '主库', open: false, state: 'active' }] as never);
+    request.mockClear();
+    await expect(dbAccessRequest('closed', { level: 'read', reason: '统计' })).rejects.toThrow('未找到');
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+});

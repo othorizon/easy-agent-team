@@ -4,6 +4,7 @@ export const REQUEST_TYPES = {
   env: '环境变量读取',
   mcp: 'MCP 配置订阅',
   db: '数据库申请',
+  'db-access': '数据库权限',
   oss: 'OSS 空间申请',
   app: '应用部署授权',
 } as const;
@@ -14,7 +15,7 @@ export const REQUEST_STATUSES = {
   withdrawn: '已撤回',
   invalid: '已失效',
 } as const;
-export const requestTypeSchema = z.enum(['env', 'mcp', 'db', 'oss', 'app']);
+export const requestTypeSchema = z.enum(['env', 'mcp', 'db', 'oss', 'app', 'db-access']);
 export const requestStatusSchema = z.enum(['pending', 'approved', 'rejected', 'withdrawn', 'invalid']);
 export const requestListSchema = z.object({
   scope: z.enum(['inbox', 'mine', 'history', 'resource']).default('mine'),

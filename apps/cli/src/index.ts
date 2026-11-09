@@ -19,7 +19,7 @@ import {
   envUpdate,
 } from './commands/env.js';
 import { askCreate, askDelete, askList, askReply, askResolve, askShow, askTargets } from './commands/ask.js';
-import { dbAccessList, dbAccessResetPassword, dbAccessRevoke, dbRun, dbCredentialsPull, dbCredentialsRun, dbInstances, dbList, dbRequest } from './commands/db.js';
+import { dbAccessRequest, dbAccessList, dbAccessResetPassword, dbAccessRevoke, dbRun, dbCredentialsPull, dbCredentialsRun, dbInstances, dbList, dbRequest } from './commands/db.js';
 import {
   appCreate,
   appDelete,
@@ -258,6 +258,7 @@ db.command('run <db> <command...>')
   .showHelpAfterError('提示：eat db run crm -- npm run migrate')
   .action(dbRun);
 const dbAccess = db.command('access').description('数据库权限：开放目录、本人授权、放弃授权与重置个人密码');
+dbAccess.command('request <db>').description('申请只读或读写权限（库名或库名@实例名）').requiredOption('--level <read|write>', '授权级别').requiredOption('--reason <用途>', '申请用途').action(dbAccessRequest);
 dbAccess.command('list').description('开放申请的库与我的授权').action(dbAccessList);
 dbAccess.command('revoke <db>').description('放弃自己的授权（库名或库名@实例名）').action(dbAccessRevoke);
 dbAccess.command('reset-password <db>').description('重置本人个人密码；同一实例的其他库授权也会改用新密码').action(dbAccessResetPassword);

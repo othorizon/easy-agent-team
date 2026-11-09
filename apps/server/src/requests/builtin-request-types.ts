@@ -2,6 +2,7 @@ import { ConflictException, type Provider } from '@nestjs/common';
 import { AuditService } from '../audit/audit.service';
 import { AccessRequestsService } from '../envs/access-requests.service';
 import { McpConfigsService } from '../mcp-configs/mcp-configs.service';
+import { DbAccessRequests } from '../dbs/db-access-requests';
 import { DbsService } from '../dbs/dbs.service';
 import { OssService } from '../oss/oss.service';
 import { AppsService } from '../deploy/apps.service';
@@ -9,9 +10,10 @@ import { RequestTypes, sourceRequest, type RequestAction } from './request-types
 
 export const builtinRequestTypes: Provider = {
   provide: RequestTypes,
-  inject: [AccessRequestsService, McpConfigsService, DbsService, OssService, AppsService, AuditService],
-  useFactory(env: AccessRequestsService, mcp: McpConfigsService, dbs: DbsService, oss: OssService, apps: AppsService, audit: AuditService) {
+  inject: [AccessRequestsService, McpConfigsService, DbsService, OssService, AppsService, AuditService, DbAccessRequests],
+  useFactory(env: AccessRequestsService, mcp: McpConfigsService, dbs: DbsService, oss: OssService, apps: AppsService, audit: AuditService, dbAccess: DbAccessRequests) {
     const types = new RequestTypes();
+    types.register(dbAccess.type());
     const legacy = (name: string, target: string, resource = false) => async ({ row, user }: RequestAction) => audit.record({
       actorId: user.id, action: name, targetType: target,
       targetId: resource ? row.resource_id : row.source_id, meta: { decision: 'rejected' },

@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { and, eq, inArray, isNotNull, or } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { dbConnectionUrl, type DbAccessCredentials, type DbAccessGrantInfo, type DbCatalogInfo, type DbPersonalPasswordReset, type DbPublicCheck, type GrantDbAccessRequest, type OpenDbAccessRequest, type RegisterExternalDbRequest } from '@eat/shared';
@@ -78,6 +78,8 @@ export class DbAccessService {
         else if (g.state === 'revoking') await this.executeRevoke(c, g, guard);
       });
     }
+    // 外部执行已完成但快照写入前进程退出时，下次恢复仍会修正申请中心。
+    await this.syncRequestExecution();
   }
 
   /** 跨进程按实例串行执行；外部 PG 操作不放在平台数据库事务中。 */
@@ -234,7 +236,7 @@ export class DbAccessService {
   private async info(user: AuthUser, id: string): Promise<DbAccessGrantInfo> {
     return (await this.listGrants(user)).find(g => g.id === id)!;
   }
-  async give(user: AuthUser, catalogId: string, dto: GrantDbAccessRequest): Promise<DbAccessGrantInfo> {
+  async give(user: AuthUser, catalogId: string, dto: GrantDbAccessRequest, requestId?: string): Promise<DbAccessGrantInfo> {
     const initial = await this.catalog(catalogId);
     this.manage(user, initial.ownerId);
     return this.locked(initial.instanceId, async guard => {
@@ -242,13 +244,28 @@ export class DbAccessService {
       const c = await this.catalog(catalogId);
       this.manage(user, c.ownerId);
       if (c.state !== 'active') throw new ConflictException('请先完成库的开放配置');
+      if (c.assignmentId) {
+        const [assignment] = await this.db.select().from(dbAssignments).where(eq(dbAssignments.id, c.assignmentId));
+        if (!assignment || !['active', 'disabled'].includes(assignment.status)) throw new ConflictException('数据库已删除或不可用');
+      }
       const [target] = await this.db.select().from(users).where(eq(users.id, dto.userId));
       if (!target || target.status !== 'active') throw new BadRequestException('请选择启用中的 EAT 用户');
       let [g] = await this.db.select().from(dbAccessGrants).where(and(eq(dbAccessGrants.catalogId, c.id), eq(dbAccessGrants.userId, target.id)));
-      if (!g) [g] = await this.db.insert(dbAccessGrants).values({ catalogId: c.id, userId: target.id, level: dto.level, grantedBy: user.id }).returning();
-      if (g.state === 'active' && g.level === dto.level) return this.info(user, g.id);
-      if (g.state === 'revoking') throw new ConflictException('授权正在撤销，请先重试完成撤销');
-      await this.db.update(dbAccessGrants).set({ state: 'pending', level: dto.level, error: null, grantedBy: user.id, updatedAt: new Date() }).where(eq(dbAccessGrants.id, g.id));
+      if (requestId && g?.state === 'active' && g.level === 'write' && dto.level === 'read') throw new ConflictException('申请人已持有读写权限，不能通过申请降级为只读');
+      if (g?.state === 'revoking') throw new ConflictException('授权正在撤销，请先重试完成撤销');
+      const alreadyActive = g?.state === 'active' && g.level === dto.level;
+      g = await this.db.transaction(async tx => {
+        if (!g) [g] = await tx.insert(dbAccessGrants).values({ catalogId: c.id, userId: target.id, level: dto.level, grantedBy: user.id }).returning();
+        if (!alreadyActive) [g] = await tx.update(dbAccessGrants).set({ state: 'pending', level: dto.level, error: null, grantedBy: user.id, updatedAt: new Date() }).where(eq(dbAccessGrants.id, g.id)).returning();
+        if (requestId) {
+          const approved = await tx.execute(sql`UPDATE approval_request SET status='approved',execution=${alreadyActive ? 'active' : 'provisioning'},execution_error=NULL,decided_by=${user.id},decided_at=now(),details=details || jsonb_build_object('grantId',${g.id}::text) WHERE id=${requestId} AND status='pending' RETURNING id`);
+          if (!approved.rowCount) throw new ConflictException('申请状态已变化');
+          await tx.execute(sql`INSERT INTO approval_notification(request_id,event) VALUES(${requestId},'approved') ON CONFLICT DO NOTHING`);
+        }
+        return g;
+      });
+      await this.syncRequestExecution(g.id);
+      if (alreadyActive) return this.info(user, g.id);
       await this.executeGrant(c, { ...g, level: dto.level, grantedBy: user.id }, guard);
       return this.info(user, g.id);
     });
@@ -272,7 +289,12 @@ export class DbAccessService {
       guard();
       await this.db.update(dbAccessGrants).set({ state: 'failed', error: this.error(e), updatedAt: new Date() }).where(eq(dbAccessGrants.id, g.id));
     }
+    await this.syncRequestExecution(g.id);
     await this.audit.record({ actorId: g.grantedBy, action: 'db_access.granted', targetType: 'db_access_grant', targetId: g.id, meta: { userId: g.userId, level: g.level } });
+  }
+  private async syncRequestExecution(grantId?: string) {
+    await this.db.execute(sql`UPDATE approval_request r SET execution=CASE g.state WHEN 'pending' THEN 'provisioning' ELSE g.state END,execution_error=g.error
+      FROM db_access_grant g WHERE (${grantId ?? null}::uuid IS NULL OR g.id=${grantId ?? null}::uuid) AND r.type='db-access' AND r.status='approved' AND r.latest AND r.details->>'grantId'=g.id::text`);
   }
   private async ownActiveGrant(user: AuthUser, c: Catalog): Promise<Grant> {
     const [row] = await this.db.select({ g: dbAccessGrants }).from(dbAccessGrants).innerJoin(users, eq(users.id, dbAccessGrants.userId)).where(and(eq(dbAccessGrants.catalogId, c.id), eq(dbAccessGrants.userId, user.id), eq(dbAccessGrants.state, 'active'), eq(users.status, 'active')));
@@ -378,8 +400,10 @@ export class DbAccessService {
     } catch (e) {
       guard();
       await this.db.update(dbAccessGrants).set({ error: this.error(e), updatedAt: new Date() }).where(eq(dbAccessGrants.id, g.id));
+      await this.syncRequestExecution(g.id);
       return;
     }
+    await this.syncRequestExecution(g.id);
     await this.audit.record({ actorId, action: actorId === g.userId ? 'db_access.relinquished' : 'db_access.revoked', targetType: 'db_access_grant', targetId: g.id, meta: { reason: why } });
     if (actorId !== g.userId) {
       const [actor] = await this.db.select({ name: users.name }).from(users).where(eq(users.id, actorId));

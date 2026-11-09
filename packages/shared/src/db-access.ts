@@ -55,3 +55,8 @@ export type DbAccessGrantQuery = z.infer<typeof dbAccessGrantQuerySchema>;
 /** 重置不返回密码；本人从凭证端点按需读取，pending表示已持久化并将恢复重试。 */
 export const dbPersonalPasswordResetSchema = z.object({ instanceId: z.string(), state: z.enum(['complete', 'pending']), error: z.string().nullable() });
 export type DbPersonalPasswordReset = z.infer<typeof dbPersonalPasswordResetSchema>;
+
+export const requestDbAccessSchema = z.object({ level: dbAccessLevelSchema, reason: z.string().trim().min(1).max(2000) });
+export type RequestDbAccess = z.infer<typeof requestDbAccessSchema>;
+export const dbAccessRequestResultSchema = z.object({ requestId: z.uuid().nullable(), grant: dbAccessGrantInfoSchema.nullable() });
+export type DbAccessRequestResult = z.infer<typeof dbAccessRequestResultSchema>;
