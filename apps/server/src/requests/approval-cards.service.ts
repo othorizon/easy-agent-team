@@ -11,6 +11,7 @@ import {
   type FeishuCardActionContext,
   type FeishuCardActionResult,
 } from '../notify/feishu/feishu-callback.service';
+import { RequestTypes } from './request-types';
 import { RequestsService } from './requests.service';
 import { approvalCardState, buildApprovalCard, type ApprovalCardRow, type ApprovalCardView } from './approval-card';
 
@@ -46,6 +47,7 @@ export class ApprovalCards implements OnModuleInit {
     private readonly feishu: FeishuAppService,
     private readonly callback: FeishuCallbackService,
     private readonly requests: RequestsService,
+    private readonly types: RequestTypes,
     private readonly audit: AuditService,
   ) {}
 
@@ -58,7 +60,8 @@ export class ApprovalCards implements OnModuleInit {
   }
 
   private async load(id: string): Promise<ApprovalCardRow | null> {
-    return (await this.pool.query(`${SELECT} WHERE r.id=$1`, [id])).rows[0] ?? null;
+    const row = (await this.pool.query(`${SELECT} WHERE r.id=$1`, [id])).rows[0];
+    return row ? this.types.present(row) : null;
   }
 
   private respond(
@@ -179,7 +182,8 @@ export class ApprovalCards implements OnModuleInit {
       ORDER BY c.updated_at LIMIT 50`,
       requestId ? [settings.appId, requestId] : [settings.appId],
     );
-    for (const row of rows) {
+    for (const raw of rows) {
+      const row = this.types.present(raw);
       try {
         await api.updateCard(row.message_id, buildApprovalCard(row, { view: 'result', detailUrl: this.detailUrl(row.id) }));
         await this.pool.query('UPDATE feishu_card SET state=$2,update_error=NULL,updated_at=now() WHERE id=$1 AND state=$3', [

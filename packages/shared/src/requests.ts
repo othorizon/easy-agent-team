@@ -42,7 +42,15 @@ export const requestDecisionSchema = z
 export const requestResubmitSchema = z.object({ reason: z.string().trim().min(1).max(2000) });
 export type RequestListQuery = z.infer<typeof requestListSchema>;
 export type RequestDecision = z.infer<typeof requestDecisionSchema>;
+export interface RequestPresentation {
+  label: string;
+  lines: string[];
+  allowExpiry?: boolean;
+  approvalNotice?: string;
+  appSlug?: string;
+}
 export interface ApprovalRequest {
+  presentation?: RequestPresentation;
   id: string;
   type: keyof typeof REQUEST_TYPES;
   sourceId: string;
@@ -70,6 +78,7 @@ export interface ApprovalRequest {
   notificationError: string | null;
 }
 export interface ApprovalRequestPage {
+  types?: Record<string, string>;
   items: ApprovalRequest[];
   total: number;
   page: number;

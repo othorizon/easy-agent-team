@@ -5,6 +5,7 @@ import { PG_POOL } from '../db/db.module';
 import { WebhookService } from '../notify/webhook.service';
 import { decryptSecret } from '../common/crypto';
 import { loadConfig } from '../config';
+import { RequestTypes } from './request-types';
 import { RequestsService } from './requests.service';
 import { createRequestActionToken } from './request-action-link';
 import { FeishuAppService } from '../notify/feishu/feishu-app.service';
@@ -21,6 +22,7 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly webhook: WebhookService,
     private readonly requests: RequestsService,
+    private readonly types: RequestTypes,
     private readonly feishu: FeishuAppService,
     private readonly cards: ApprovalCards,
   ) {}
@@ -59,14 +61,15 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
         return false;
       }
       const {
-        rows: [r],
+        rows: [raw],
       } = await c.query(
         `SELECT r.*,u.name requester_name,u.email requester_email,a.name approver_name
         FROM approval_request r LEFT JOIN "user" u ON u.id=r.requester_id
         LEFT JOIN "user" a ON a.id=r.decided_by WHERE r.id=$1`,
         [event.request_id],
       );
-      if (r.type === 'env' && (await c.query("SELECT 1 FROM environment WHERE id=$1 AND visibility='private'", [r.resource_id])).rowCount) {
+      const r = this.types.present(raw);
+      if (!(await c.query(`SELECT (${this.types.expression('notificationsAllowed')}) allowed FROM approval_request r WHERE r.id=$1`, [r.id])).rows[0].allowed) {
         await c.query(`UPDATE approval_notification SET state='skipped' WHERE id=$1`, [event.id]);
         await c.query('COMMIT');
         return true;
@@ -86,8 +89,8 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
         LEFT JOIN user_notification n ON n.user_id=u.id
         LEFT JOIN feishu_binding b ON b.user_id=u.id AND b.app_id=$4
         WHERE u.status='active' AND coalesce(n.${submitted ? 'notify_approval_request' : 'notify_approval_result'},true)
-        AND $1::uuid IS NOT NULL AND ${submitted ? `(u.role='admin' OR u.id=CASE $2 WHEN 'env' THEN (SELECT owner_id FROM environment WHERE id=$3) WHEN 'mcp' THEN (SELECT owner_id FROM mcp_config WHERE id=$3) ELSE NULL END)` : `u.id=$1 AND $2::text IS NOT NULL AND $3::uuid IS NOT NULL`}`,
-        [r.requester_id, r.type, r.resource_id, feishu.appId],
+        AND $1::uuid IS NOT NULL AND $2::text IS NOT NULL AND $3::uuid IS NOT NULL AND $5::uuid IS NOT NULL AND ${submitted ? `(u.role='admin' OR u.id=(SELECT (${this.types.expression('owner')}) FROM approval_request r WHERE r.id=$5))` : `u.id=$1`}`,
+        [r.requester_id, r.type, r.resource_id, feishu.appId, r.id],
       );
       // Opting out is intentional, not a delivery failure. Recheck on every retry.
       if (!subscribers.length) {
@@ -146,10 +149,9 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
               ]
             : [button('查看详情', url)];
           const content = [
-            `申请类型：${REQUEST_TYPES[r.type as keyof typeof REQUEST_TYPES]}`,
+            `申请类型：${r.type_label}`,
             `申请资源：${r.target_name}`,
-            ...(Array.isArray(r.details?.keys) ? [`申请变量：${r.details.keys.join('、')}`] : []),
-            ...(r.type === 'app' && r.details?.repoUrl ? [`仓库：${r.details.repoUrl}`, `分支：${r.details.branch ?? '未记录'}`] : []),
+            ...r.detail_lines,
             `申请人：${r.requester_name ?? '已删除用户'}${r.requester_email ? `（${r.requester_email}）` : ''}`,
             `申请时间：${new Date(r.created_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}（北京时间）`,
             `申请原因：${r.reason || '未填写'}`,
@@ -178,7 +180,7 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
                     content,
                   },
                 },
-                ...(submitted && r.type === 'env'
+                ...(submitted && r.approval_hint
                   ? [
                       {
                         tag: 'note',
@@ -186,7 +188,7 @@ export class RequestNotifications implements OnModuleInit, OnModuleDestroy {
                           {
                             tag: 'plain_text',
                             content:
-                              '快捷同意将授权本次申请的全部变量，不设置到期时间；需要限制有效期请查看详情。',
+                              '快捷' + r.approval_hint,
                           },
                         ],
                       },

@@ -15,6 +15,7 @@ import { resolve, join } from "node:path";
 import * as bcrypt from "bcryptjs";
 import { beforeAll, afterAll, it, expect, vi } from "vitest";
 import { AppModule } from "../src/app.module";
+import { RequestTypes } from '../src/requests/request-types';
 import { DbsService } from "../src/dbs/dbs.service";
 import { RequestNotifications } from "../src/requests/requests.notifications";
 import { WebhookService } from "../src/notify/webhook.service";
@@ -789,4 +790,51 @@ it('通知包含申请人和原因，快捷同意绑定收件人、轮次和权�
     await pool.query(`UPDATE "user" SET role='admin' WHERE id=$1`, [ids.admin]);
     await pool.query(`UPDATE user_notification SET verified_at=NULL,notify_approval_request=true,notify_approval_result=true`);
   }
+});
+
+
+it('注册的测试申请类型参与清单、当前 Owner 审批和自己的批准 / 驳回处理', async () => {
+  const types = app.get(RequestTypes);
+  const handled: string[] = [];
+  types.register({
+    type: 'test-access', label: '测试权限',
+    presentation: () => ({ lines: ['测试详情：当前资源'] }),
+    owner: '(SELECT owner_id FROM environment WHERE id=r.resource_id)',
+    resourceExists: 'EXISTS(SELECT 1 FROM environment WHERE id=r.resource_id)',
+    invalidReason: "CASE WHEN NOT EXISTS(SELECT 1 FROM environment WHERE id=r.resource_id) THEN '测试资源已删除' END",
+    async approve({ row, client }) {
+      handled.push('approved');
+      await client.query("UPDATE approval_request SET status='approved',execution='active' WHERE id=$1", [row.id]);
+    },
+    async reject({ row, client, decision, user }) {
+      handled.push('rejected');
+      await client.query("UPDATE approval_request SET status='rejected',rejection_reason=$2,decided_by=$3,decided_at=now() WHERE id=$1", [row.id, decision.reason, user.id]);
+    },
+    async withdraw() {}, async resubmit() {},
+  });
+  const resource = (await pool.query("SELECT id FROM environment WHERE slug='request-env'")).rows[0].id;
+  const create = async () => {
+    const id = randomUUID();
+    await pool.query(`INSERT INTO approval_request(id,type,source_id,resource_id,requester_id,owner_id,group_key,round,target_name,resource_url,reason,status)
+      VALUES($1,'test-access',$1,$2,$3,$4,$5,1,'测试资源','/requests','测试用途','pending')`, [id, resource, ids.member, ids.owner, id]);
+    return id;
+  };
+  const approved = await create();
+  const pending = (await api('GET', `/api/requests/${approved}`, 'member')).body.request;
+  expect(pending.canResubmit).toBe(false);
+  expect(pending.presentation).toMatchObject({ label: '测试权限', lines: ['测试详情：当前资源'] });
+  expect((await list('member', 'scope=mine')).types['test-access']).toBe('测试权限');
+  expect((await list('owner', 'scope=inbox&type=test-access')).items.map((r: any) => r.id)).toContain(approved);
+  await pool.query('UPDATE environment SET owner_id=$2 WHERE id=$1', [resource, ids.other]);
+  expect((await api('POST', `/api/requests/${approved}/decision`, 'owner', { decision: 'approved' })).status).toBe(404);
+  expect((await list('other', 'scope=inbox&type=test-access')).pendingCount).toBeGreaterThan(0);
+  const result = await api('POST', `/api/requests/${approved}/decision`, 'other', { decision: 'approved' });
+  expect(result.status, JSON.stringify(result.body)).toBe(201);
+  expect(result.body.request).toMatchObject({ status: 'approved', execution: 'active' });
+  const rejected = await create();
+  const refusal = await api('POST', `/api/requests/${rejected}/decision`, 'other', { decision: 'rejected', reason: '补充用途' });
+  expect(refusal.status, JSON.stringify(refusal.body)).toBe(201);
+  expect(refusal.body.request).toMatchObject({ status: 'rejected', rejectionReason: '补充用途' });
+  expect(handled).toEqual(['approved', 'rejected']);
+  await pool.query('UPDATE environment SET owner_id=$2 WHERE id=$1', [resource, ids.owner]);
 });

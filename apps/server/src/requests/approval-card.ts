@@ -7,6 +7,9 @@ import { REQUEST_STATUSES, REQUEST_TYPES } from '@eat/shared';
  * 文本一律用 plain_text：申请原因等是用户输入，不能让它被当成 Markdown 渲染出链接。
  */
 export interface ApprovalCardRow {
+  type_label?: string;
+  detail_lines?: string[];
+  approval_hint?: string;
   id: string;
   type: string;
   status: string;
@@ -61,10 +64,9 @@ const row = (...buttons: Record<string, unknown>[]) => ({
 export function approvalCardLines(r: ApprovalCardRow, audience: 'approver' | 'requester'): string {
   const details = r.details ?? {};
   return [
-    `申请类型：${REQUEST_TYPES[r.type as keyof typeof REQUEST_TYPES] ?? r.type}`,
+    `申请类型：${r.type_label ?? REQUEST_TYPES[r.type as keyof typeof REQUEST_TYPES] ?? r.type}`,
     `申请资源：${r.target_name}`,
-    ...(Array.isArray(details.keys) ? [`申请变量：${details.keys.join('、')}`] : []),
-    ...(r.type === 'app' && details.repoUrl ? [`仓库：${details.repoUrl}`, `分支：${details.branch ?? '未记录'}`] : []),
+    ...(r.detail_lines ?? []),
     ...(audience === 'approver' || r.status === 'pending'
       ? [`申请人：${r.requester_name ?? '已删除用户'}${r.requester_email ? `（${r.requester_email}）` : ''}`]
       : []),
@@ -98,9 +100,9 @@ export function buildApprovalCard(
   const detail = button('查看详情', 'default', { type: 'open_url', default_url: opts.detailUrl });
   const elements: Record<string, unknown>[] = [text(approvalCardLines(r, audience))];
   if (view === 'pending' && audience === 'approver') {
-    if (r.type === 'env') {
+    if (r.approval_hint) {
       elements.push(
-        text('同意将授权本次申请的全部变量，不设置到期时间；需要限制有效期请查看详情。', {
+        text(r.approval_hint, {
           text_size: 'notation',
           text_color: 'grey',
         }),

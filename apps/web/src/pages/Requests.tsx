@@ -110,7 +110,7 @@ export function RequestsPage() {
     page: String(page),
     pageSize: String(pageSize),
   });
-  if (p.type in REQUEST_TYPES) params.set('type', p.type);
+  if (p.type !== 'all') params.set('type', p.type);
   if (p.resourceId) params.set('resourceId', p.resourceId);
   if (p.sourceId) params.set('sourceId', p.sourceId);
   const list = useQuery({
@@ -150,7 +150,7 @@ export function RequestsPage() {
             label="申请类型"
             value={p.type}
             onChange={(v) => set({ type: v, page: '1' })}
-            options={{ all: '全部类型', ...REQUEST_TYPES }}
+            options={{ all: '全部类型', ...(list.data?.types ?? REQUEST_TYPES) }}
           />
           {tab !== 'inbox' && (
             <Filter
@@ -221,7 +221,7 @@ export function RequestsPage() {
                 >
                   <div className="min-w-0 flex-1 space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs text-muted-foreground">{REQUEST_TYPES[r.type]}</span>
+                      <span className="text-xs text-muted-foreground">{r.presentation?.label ?? REQUEST_TYPES[r.type]}</span>
                       <RequestStatus r={r} />
                     </div>
                     <p className="truncate font-medium">{r.targetName}</p>
@@ -324,7 +324,7 @@ function RequestDialog({
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{r?.targetName ?? '申请详情'}</DialogTitle>
-          <DialogDescription>{r ? REQUEST_TYPES[r.type] : '正在读取申请'}</DialogDescription>
+          <DialogDescription>{r ? r.presentation?.label ?? REQUEST_TYPES[r.type] : '正在读取申请'}</DialogDescription>
         </DialogHeader>
         {detail.isError ? (
           <div>
@@ -366,19 +366,9 @@ function RequestDialog({
               <div className="rounded-lg bg-muted/50 p-4 text-sm">
                 <p className="mb-2 font-medium">申请说明</p>
                 <p className="whitespace-pre-wrap break-words">{r.reason || '未填写'}</p>
-                {Array.isArray(r.details.keys) && <p className="mt-3 break-words">变量：{r.details.keys.join('、')}</p>}
-                {typeof r.details.prefix === 'string' && <p className="mt-3 break-all">存储目录：{r.details.prefix}</p>}
+                {r.presentation?.lines.map((line, index) => <p key={index} className="mt-3 whitespace-pre-wrap break-words">{line}</p>)}
               </div>
-              {r.type === 'app' && (
-                <>
-                  <div className="text-sm break-all">
-                    仓库：{String(r.details.repoUrl ?? '未记录')}
-                    <br />
-                    分支：{String(r.details.branch ?? '未记录')}
-                  </div>
-                  {typeof r.details.slug === 'string' && <GithubAppSummary slug={r.details.slug} />}
-                </>
-              )}
+              {r.presentation?.appSlug && <GithubAppSummary slug={r.presentation.appSlug} />}
               {r.status === 'rejected' && (
                 <div className="rounded-lg border border-destructive/30 p-4 text-sm">
                   <p className="mb-1 font-medium text-destructive">驳回原因</p>
@@ -462,7 +452,7 @@ function RequestDialog({
                       rows={4}
                     />
                   )}
-                  {action === 'approved' && r.type === 'env' && (
+                  {action === 'approved' && r.presentation?.allowExpiry && (
                     <div className="space-y-1.5 text-sm">
                       <p>授权有效期（留空为永久）</p>
                       <DateTimePicker
@@ -474,13 +464,8 @@ function RequestDialog({
                       />
                     </div>
                   )}
-                  {action === 'approved' && ['db', 'oss'].includes(r.type) && (
-                    <p className="text-sm text-muted-foreground">
-                      批准后将执行资源开通。开通中或失败的状态会独立显示。
-                    </p>
-                  )}
-                  {action === 'approved' && r.type === 'app' && (
-                    <p className="text-sm text-muted-foreground">批准当前仓库版本的部署权限，并允许管理应用成员。</p>
+                  {action === 'approved' && r.presentation?.approvalNotice && (
+                    <p className="text-sm text-muted-foreground">{r.presentation.approvalNotice}</p>
                   )}
                   <div className="flex gap-2">
                     <Button
