@@ -2,21 +2,25 @@ import type { Client } from 'pg';
 import type { DbAccessDrift } from '@eat/shared';
 import { revokeAccessMemberships, type AccessDatabase } from './access-provisioner';
 import { q, withAdmin, type AdminConn } from './provisioner';
+import { accessMemberships, administrativeMembership, expectedMembershipOptions, membershipOptionsDiffer, normalizeAccessMembership } from './access-memberships';
 export interface ExpectedDbMember { role: string; groups: string[]; marker?: string }
 async function inspect(c: Client, conn: AdminConn, d: AccessDatabase, desired: ExpectedDbMember[]): Promise<DbAccessDrift> {
   const groups = [d.readRole,d.writeRole];
   const { rows: roles } = await c.query<{ name: string; marker: string }>("select rolname name,shobj_description(oid,'pg_authid') marker from pg_roles where rolname=any($1::text[])",[groups]);
   for (const [i,group] of groups.entries()) if (roles.find(r => r.name===group)?.marker !== `eat:db-catalog:${d.id}:${i===0?'read':'write'}`) throw new Error(`组角色 ${group} 缺失或来源不明，请管理员先核对配置`);
-  const version = Number((await c.query('show server_version_num')).rows[0].server_version_num);
-  const { rows: actual } = await c.query<{ role: string; group: string; administrative: boolean }>(`select m.rolname role,r.rolname "group",${version>=160000?'a.admin_option and not a.inherit_option and not a.set_option':'false'} administrative from pg_auth_members a join pg_roles r on r.oid=a.roleid join pg_roles m on m.oid=a.member where r.rolname=any($1::text[]) order by m.rolname,r.rolname`,[groups]);
+  const actual = await accessMemberships(c, groups);
   const expected = new Map(desired.map(m => [m.role,m.groups]));
   if (d.source !== 'external') expected.set(conn.adminUser,[d.readRole]);
-  const relevant = actual.filter(m => !(m.role===conn.adminUser && m.administrative));
+  const relevant = actual.filter(m => !(m.role===conn.adminUser && administrativeMembership(m)));
   const members = [...new Set([...expected.keys(),...relevant.map(m=>m.role)])].sort().map(role => {
     const want = [...(expected.get(role)??[])].sort(), have = [...new Set(relevant.filter(m=>m.role===role).map(m=>m.group))].sort();
-    return { role,expected:want,actual:have,missing:want.filter(g=>!have.includes(g)),extra:have.filter(g=>!want.includes(g)) };
+    const optionDiffs = relevant.filter(m => m.role === role && want.includes(m.group)).flatMap(m => {
+      const options = expectedMembershipOptions(m, role === conn.adminUser);
+      return membershipOptionsDiffer(m.options, options) ? [{ group: m.group, grantor: m.grantor, expected: options, actual: m.options }] : [];
+    });
+    return { role,expected:want,actual:have,missing:want.filter(g=>!have.includes(g)),extra:have.filter(g=>!want.includes(g)),optionDiffs };
   });
-  return { checkedAt:new Date().toISOString(),consistent:members.every(m=>!m.missing.length&&!m.extra.length),error:null,members };
+  return { checkedAt:new Date().toISOString(),consistent:members.every(m=>!m.missing.length&&!m.extra.length&&!m.optionDiffs.length),error:null,members };
 }
 export async function inspectPostgresAccess(conn: AdminConn, d: AccessDatabase, desired: ExpectedDbMember[]): Promise<DbAccessDrift> {
   return withAdmin(conn,'postgres',c=>inspect(c,conn,d,desired));
@@ -31,12 +35,11 @@ export async function repairPostgresAccess(conn: AdminConn, d: AccessDatabase, d
         const { rows:[role] }=await c.query("select shobj_description(oid,'pg_authid') marker from pg_roles where rolname=$1",[member.role]);
         if (!role || role.marker!==member.marker) throw new Error(`个人角色 ${member.role} 缺失或来源不明，请先重试授权`);
       }
-      const version=Number((await c.query('show server_version_num')).rows[0].server_version_num);
       for (const member of state.members) {
-        for (const group of member.missing) {
-          guard(); await c.query(`grant ${q(group)} to ${q(member.role)}${version>=160000 ? member.role===conn.adminUser ? ' with inherit true, set false' : ' with inherit true, set true' : ''}`);
+        for (const group of new Set([...member.missing, ...member.optionDiffs.map(diff => diff.group)])) {
+          guard(); await normalizeAccessMembership(c, group, member.role, member.role === conn.adminUser);
         }
-        for (const group of member.extra) { guard(); await revokeAccessMemberships(c,[group],member.role); }
+        for (const group of member.extra) { guard(); await revokeAccessMemberships(c,[group],member.role,member.role===conn.adminUser); }
       }
       const after=await inspect(c,conn,d,desired);
       if (!after.consistent) throw new Error('未能撤掉由其他管理身份授予的成员关系，请 DBA 先撤销后重试；本次修复已回滚');

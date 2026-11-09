@@ -28,9 +28,15 @@ export const dbPublicCheckSchema = z.object({
   tighteningSql: z.array(z.string()),
 });
 export type DbPublicCheck = z.infer<typeof dbPublicCheckSchema>;
+/** PG16 has per-membership INHERIT/SET; older servers report these as null. */
+const dbMembershipOptionsSchema = z.object({ admin: z.boolean(), inherit: z.boolean().nullable(), set: z.boolean().nullable() });
+export type DbMembershipOptions = z.infer<typeof dbMembershipOptionsSchema>;
 export const dbAccessDriftSchema = z.object({
   checkedAt: z.string(), consistent: z.boolean(), error: z.string().nullable(),
-  members: z.array(z.object({ role: z.string(), expected: z.array(z.string()), actual: z.array(z.string()), missing: z.array(z.string()), extra: z.array(z.string()) })),
+  members: z.array(z.object({
+    role: z.string(), expected: z.array(z.string()), actual: z.array(z.string()), missing: z.array(z.string()), extra: z.array(z.string()),
+    optionDiffs: z.array(z.object({ group: z.string(), grantor: z.string(), expected: dbMembershipOptionsSchema, actual: dbMembershipOptionsSchema })),
+  })),
 });
 export type DbAccessDrift = z.infer<typeof dbAccessDriftSchema>;
 export const dbAccessDeletedSchema = z.object({ ok: z.literal(true) });

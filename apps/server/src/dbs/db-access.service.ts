@@ -450,7 +450,12 @@ export class DbAccessService {
         return g;
       });
       await this.syncRequestExecution(g.id);
-      if (alreadyActive) return this.info(user, g.id);
+      if (alreadyActive) {
+        const drift = await this.inspectDrift(c);
+        const member = drift.members.find(m => m.role === `eat-${target.id}`);
+        // A normal duplicate grant remains a no-op, including its existing read sessions.
+        if (member && !member.missing.length && !member.extra.length && !member.optionDiffs.length) return this.info(user, g.id);
+      }
       await this.executeGrant(c, { ...g, level: dto.level, grantedBy: user.id }, guard);
       return this.info(user, g.id);
     });

@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { chromium } from 'playwright-core';
 
-export async function runPermissionsUi({ origin, viewport, actors, api, callbacks, seed }) {
+export async function runPermissionsUi({ origin, viewport, actors, api, callbacks, seed, scenario }) {
   assert.equal(new URL(origin).hostname, '127.0.0.1');
-  const dir = `/tmp/eat-ticket19-ui/${viewport.width}`;
+  const dir = `${scenario === 'membership-options' ? '/tmp/eat-review-ui' : '/tmp/eat-ticket19-ui'}/${viewport.width}`;
   await mkdir(dir, { recursive: true });
   const browser = await chromium.connectOverCDP(process.env.BROWSER_CDP_URL);
   const contexts = [], pages = {}, report = { origin, viewport, browser: browser.version(), checks: [], errors: [], httpErrors: [], consoleErrors: [], browserWarnings: [], requestFailures: [] };
@@ -66,6 +66,40 @@ export async function runPermissionsUi({ origin, viewport, actors, api, callback
       p.on('console', msg => { if (msg.type() === 'error') report.consoleErrors.push({ who, text: msg.text() }); else if (msg.type() === 'warning') report.browserWarnings.push({ who, text: msg.text() }); });
       p.on('requestfailed', request => { const reason = request.failure()?.errorText ?? ''; if (!reason.includes('ERR_ABORTED')) report.requestFailures.push({ who, path: new URL(request.url()).pathname, reason }); });
       p.on('response', r => { if (r.status() >= 400) report.httpErrors.push({ who, status: r.status(), url: new URL(r.url()).pathname }); });
+    }
+    if (scenario === 'membership-options') {
+      const catalog = (await api('POST', `/api/db/assignments/${seed.assignment.id}/access`, 'owner', { open: true })).body;
+      const path = `/api/db/access/catalog/${catalog.id}`;
+      await api('POST', `${path}/grants`, 'owner', { userId: actors.member.user.id, level: 'read' });
+      let p = await go('admin', '/db?tab=access'); await check(p, 'options-consistent');
+      assert.equal(await button(row(p, seed.eatDb), '云端不一致').count(), 0);
+      await callbacks.membershipOptions(catalog.id, actors.member.user.id, false);
+      const before = await callbacks.membershipSnapshot(catalog.id, actors.member.user.id);
+      p = await go('admin', '/db?tab=access'); await button(row(p, seed.eatDb), '云端不一致').click();
+      await text(dialog(p), '成员选项不一致').waitFor();
+      for (const value of ['ADMIN FALSE', 'INHERIT TRUE', 'SET TRUE', 'ADMIN TRUE', 'INHERIT FALSE', 'SET FALSE', seed.manager]) await text(dialog(p), value).waitFor();
+      await check(p, 'options-diff');
+      assert.deepEqual(await callbacks.membershipSnapshot(catalog.id, actors.member.user.id), before);
+      await confirm(p, button(dialog(p), '按 EAT 记录修复'), '修复成员关系', 'options-repair-confirm');
+      await dialog(p).waitFor({ state: 'hidden' });
+      await button(row(p, seed.eatDb), '云端不一致').waitFor({ state: 'hidden' }); await check(p, 'options-repaired');
+      await callbacks.membershipOptions(catalog.id, actors.member.user.id, true);
+      p = await go('admin', '/db?tab=access'); await button(row(p, seed.eatDb), '云端不一致').click();
+      await text(dialog(p), 'dev').waitFor(); await check(p, 'options-foreign-grantor');
+      const foreignBefore = await callbacks.membershipSnapshot(catalog.id, actors.member.user.id);
+      await confirm(p, button(dialog(p), '按 EAT 记录修复'), '修复成员关系', 'options-foreign-repair-confirm');
+      await p.getByText(/成员选项由 dev 授予/).waitFor(); await check(p, 'options-foreign-repair-failed');
+      assert.deepEqual(await callbacks.membershipSnapshot(catalog.id, actors.member.user.id), foreignBefore);
+      await callbacks.removeForeignMembership(catalog.id, actors.member.user.id);
+      await confirm(p, button(dialog(p), '按 EAT 记录修复'), '修复成员关系', 'options-dba-handled-retry');
+      await dialog(p).waitFor({ state: 'hidden' }); await check(p, 'options-retry-complete');
+      const final = (await api('GET', '/api/db/access/catalog')).body.find(c => c.id === catalog.id);
+      assert.equal(final.drift.consistent, true);
+      report.unexpectedHttpErrors = report.httpErrors.filter(e => !(e.status === 409 && e.url === `${path}/repair`));
+      report.unexpectedConsoleErrors = report.consoleErrors.filter(e => !/^Failed to load resource: the server responded with a status of 409/.test(e.text));
+      assert.deepEqual(report.unexpectedHttpErrors, []); assert.deepEqual(report.unexpectedConsoleErrors, []);
+      assert.deepEqual(report.errors, []); assert.deepEqual(report.requestFailures, []); assert.deepEqual(report.browserWarnings, []);
+      return;
     }
     // OSS migration: read-only conflict report, persistent partial success, explicit retry and shared Key warnings.
     let p = await go('admin', '/settings?section=oss'); await check(p, 'oss-settings');

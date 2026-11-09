@@ -1,6 +1,7 @@
 import type { Client } from 'pg';
 import type { DbAccessLevel } from '@eat/shared';
 import { allowSetRole, q, withAdmin, type AdminConn } from './provisioner';
+import { accessMemberships, administrativeMembership, normalizeAccessMembership } from './access-memberships';
 
 export interface AccessDatabase {
   id: string;
@@ -130,7 +131,7 @@ export async function grantPostgresAccess(conn: AdminConn, d: AccessDatabase, le
     const desired = level === 'write' ? d.writeRole : d.readRole;
     const previous = level === 'write' ? d.readRole : d.writeRole;
     // 先加入新组，再退出旧组；同一目标事务保证重试没有权限空窗。
-    await c.query(`grant ${q(desired)} to ${q(identity.roleName)}`);
+    await normalizeAccessMembership(c, desired, identity.roleName);
     await revokeAccessMemberships(c,[previous],identity.roleName);
   }, guard);
   // 只读执行包含崩溃后的重放：即使旧写组已退出，也必须补完断会话。
@@ -138,16 +139,22 @@ export async function grantPostgresAccess(conn: AdminConn, d: AccessDatabase, le
 }
 
 /** PG16成员关系按grantor分别存储，默认REVOKE会静默保留其他grantor的授予。 */
-export async function revokeAccessMemberships(c: Client, groups: string[], member: string): Promise<void> {
+export async function revokeAccessMemberships(c: Client, groups: string[], member: string, preserveManagementAdmin = false): Promise<void> {
   const version=Number((await c.query('show server_version_num')).rows[0].server_version_num);
-  const { rows: memberships }=await c.query<{ parent:string; grantor:string }>(`select r.rolname parent,g.rolname grantor from pg_auth_members a join pg_roles r on r.oid=a.roleid join pg_roles m on m.oid=a.member join pg_roles g on g.oid=a.grantor where r.rolname=any($1::text[]) and m.rolname=$2`,[groups,member]);
+  const memberships = (await accessMemberships(c, groups)).filter(m => m.role === member);
   for (const m of memberships) {
-    const statement=`revoke ${q(m.parent)} from ${q(member)}${version>=160000?` granted by ${q(m.grantor)}`:''}`;
+    // Pure ADMIN is authority to manage a group, not personal data access.
+    if (preserveManagementAdmin && administrativeMembership(m)) continue;
+    const grantor = version >= 160000 ? ` granted by ${q(m.grantor)}` : '';
+    const statement = preserveManagementAdmin && version >= 160000 && m.options.admin
+      ? `grant ${q(m.group)} to ${q(member)} with inherit false, set false${grantor}`
+      : `revoke ${q(m.group)} from ${q(member)}${grantor} restrict`;
     if (version>=160000 && !(await c.query("select pg_has_role(current_user,$1,'SET') ok",[m.grantor])).rows[0].ok) throw new Error(`成员关系由 ${m.grantor} 授予，管理角色不能代为撤销；请 DBA 执行：${statement}; 然后重试`);
-    await c.query(statement);
+    try { await c.query(statement); }
+    catch (e) { throw new Error(`成员关系撤销失败：${(e as Error).message}；请 DBA 核对依赖授予后执行：${statement}; 然后重试`); }
   }
-  const { rowCount }=await c.query('select 1 from pg_auth_members a join pg_roles r on r.oid=a.roleid join pg_roles m on m.oid=a.member where r.rolname=any($1::text[]) and m.rolname=$2',[groups,member]);
-  if (rowCount) throw new Error(`角色 ${member} 的组成员关系尚未撤净，请 DBA 核对后重试`);
+  const remaining = (await accessMemberships(c, groups)).filter(m => m.role === member && !(preserveManagementAdmin && administrativeMembership(m)));
+  if (remaining.length) throw new Error(`角色 ${member} 的组成员关系尚未撤净，请 DBA 核对后重试`);
 }
 
 export async function revokePostgresAccess(conn: AdminConn, d: AccessDatabase, identity: { id: string; roleName: string }, guard: () => void): Promise<void> {

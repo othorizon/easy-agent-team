@@ -1,5 +1,6 @@
 /** Local-only UI acceptance: EAT_PERMISSIONS_UI_QA=1 BROWSER_CDP_URL=ws://127.0.0.1:... vitest run --config vitest.ui-qa.config.ts */
-process.env.DATABASE_URL = 'postgres://dev@127.0.0.1:5433/eat_ui_19';
+const membershipOptionsOnly = process.env.EAT_PERMISSIONS_UI_QA_SCENARIO === 'membership-options';
+process.env.DATABASE_URL = `postgres://dev@127.0.0.1:5433/${membershipOptionsOnly ? 'eat_ui_review' : 'eat_ui_19'}`;
 process.env.EAT_CLOUD_KEY_PROPAGATION_MS = '0';
 process.env.EAT_KEK = Buffer.alloc(32, 19).toString('base64');
 process.env.EAT_PUBLIC_URL = 'http://127.0.0.1';
@@ -32,6 +33,7 @@ import { CloudIdentityStatusService } from '../src/cloud-identities/cloud-identi
 const enabled = process.env.EAT_PERMISSIONS_UI_QA === '1';
 const q = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const management = { accessKeyId: 'management-test', accessKeySecret: 'management-test-secret' };
+const evidenceDir = membershipOptionsOnly ? '/tmp/eat-review-ui' : '/tmp/eat-ticket19-ui';
 
 it.skipIf(!enabled)('desktop and mobile permissions through real loopback Nest HTTP and shared fake cloud', async () => {
   expect(process.env.BROWSER_CDP_URL).toMatch(/^ws:\/\/127\.0\.0\.1:/);
@@ -50,8 +52,8 @@ it.skipIf(!enabled)('desktop and mobile permissions through real loopback Nest H
     const roles = new Set([manager, externalOwner]);
     const password = randomUUID();
     const ram = new TestRamCloud(), oss = new TestOssCloud(ram);
-    await mkdir('/tmp/eat-ticket19-ui', { recursive: true });
-    const manifest = `/tmp/eat-ticket19-ui/pg-${suffix}.json`;
+    await mkdir(evidenceDir, { recursive: true });
+    const manifest = `${evidenceDir}/pg-${suffix}.json`;
     await writeFile(manifest, JSON.stringify({ suffix, dbNames: [...dbNames], roles: [...roles] }));
     let app: NestFastifyApplication | undefined;
     try {
@@ -103,6 +105,22 @@ it.skipIf(!enabled)('desktop and mobile permissions through real loopback Nest H
       await owned.connect();
       await owned.query('create table metrics(id serial primary key, body text); create schema analytics');
       await owned.end();
+      if (membershipOptionsOnly) {
+        const callbacks = {
+          membershipOptions: async (catalogId: string, userId: string, foreign: boolean) => {
+            const statement = `grant ${q(`eat-db-${catalogId}-read`)} to ${q(`eat-${userId}`)} with admin true, inherit false, set false`;
+            if (foreign) await adminPool.query(statement);
+            else {
+              const c = new Client({ host: '127.0.0.1', port: 5433, database: 'postgres', user: manager, password });
+              await c.connect(); try { await c.query(statement); } finally { await c.end(); }
+            }
+          },
+          membershipSnapshot: async (catalogId: string, userId: string) => (await adminPool.query(`select a.grantor,a.admin_option,a.inherit_option,a.set_option from pg_auth_members a join pg_roles r on r.oid=a.roleid join pg_roles m on m.oid=a.member where r.rolname=$1 and m.rolname=$2 order by a.grantor`, [`eat-db-${catalogId}-read`, `eat-${userId}`])).rows,
+          removeForeignMembership: async (catalogId: string, userId: string) => { await adminPool.query(`revoke ${q(`eat-db-${catalogId}-read`)} from ${q(`eat-${userId}`)} granted by "dev" restrict`); },
+        };
+        await runPermissionsUi({ origin, viewport, actors, api, callbacks, seed: { assignment, eatDb, manager }, scenario: 'membership-options' });
+        continue;
+      }
       // Keep EAT catalog unopened to exercise the Owner's first-open dialog.
       await api('PUT', '/api/admin/oss-settings', 'admin', { bucket: 'qa19-bucket', region: 'cn-beijing', ...management });
       await db.update(schema.ossSettings).set({ status: 'enabled', accountId: 'account-test' });
