@@ -20,7 +20,8 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { OnboardingStatus, ApprovalRequestPage } from '@eat/shared';
+import type { OnboardingStatus, ApprovalRequestPage, AliyunAvailability } from '@eat/shared';
+import { AliyunPage } from './pages/Aliyun';
 import { AccountPage } from './pages/Account';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { api, clearSession, getStoredUser, getToken } from './api';
@@ -99,6 +100,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/db', label: '数据库', icon: Database },
       { to: '/oss', label: 'OSS 对象存储', icon: HardDrive, match: ['/oss'] },
+      { to: '/aliyun', label: '阿里云权限', icon: ShieldCheck },
       { to: '/llm-gateway', label: 'LLM API 网关', icon: Network },
       { to: '/apps', label: '应用', icon: Rocket },
       { to: '/folios', label: 'Folio', icon: Files },
@@ -229,7 +231,13 @@ function Shell({ children }: { children: React.ReactNode }) {
   const { pathname } = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const approvalCount=useQuery({queryKey:['requests','nav-count'],queryFn:()=>api<ApprovalRequestPage>('GET','/api/requests?scope=inbox&pageSize=1'),refetchInterval:30000});
-  const groups: NavGroup[] = [...NAV_GROUPS.map(group=>({...group,items:group.items.map(item=>item.to==='/requests'?{...item,count:approvalCount.data?.pendingCount}:item)})), {
+  const aliyun = useQuery({ queryKey: ['aliyun', 'status'], queryFn: () => api<AliyunAvailability>('GET', '/api/aliyun/status') });
+  const groups: NavGroup[] = [...NAV_GROUPS.map((group) => ({
+    ...group,
+    items: group.items
+      .filter((item) => item.to !== '/aliyun' || aliyun.data?.available)
+      .map((item) => item.to === '/requests' ? { ...item, count: approvalCount.data?.pendingCount } : item),
+  })), {
     label: '管理',
     items: [
       { to: '/account', label: '个人中心', icon: UserRound },
@@ -320,6 +328,7 @@ export function App() {
       <Route path="/mcp-configs" element={<RequireAuth><McpConfigsPage /></RequireAuth>} />
       <Route path="/db" element={<RequireAuth><DbsPage /></RequireAuth>} />
       <Route path="/oss" element={<RequireAuth><OssPage /></RequireAuth>} />
+      <Route path="/aliyun" element={<RequireAuth><AliyunPage /></RequireAuth>} />
       <Route path="/oss/:id" element={<RequireAuth><OssDetailPage /></RequireAuth>} />
       <Route path="/db/:id" element={<RequireAuth><DbAssignmentDetailPage /></RequireAuth>} />
       <Route path="/apps" element={<RequireAuth><AppsPage /></RequireAuth>} />

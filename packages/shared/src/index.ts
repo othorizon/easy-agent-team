@@ -34,3 +34,4 @@ export * from './requests.js';
 export * from './feishu-app.js';
 export * from './notification.js';
 export * from './db-access.js';
+export * from './aliyun.js';

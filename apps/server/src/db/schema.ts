@@ -1285,3 +1285,31 @@ export const dbAccessGrants = pgTable('db_access_grant', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [uniqueIndex('db_access_grant_catalog_user_idx').on(t.catalogId, t.userId)]);
+
+
+/** One management connection per cloud account; both management credentials are envelope encrypted. */
+export const aliyunConnections = pgTable('aliyun_connection', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull().unique(),
+  accountId: text('account_id').notNull().unique(),
+  accessKeyIdEncrypted: text('access_key_id_encrypted').notNull(),
+  accessKeySecretEncrypted: text('access_key_secret_encrypted').notNull(),
+  defaultRegion: text('default_region').notNull().default(''),
+  status: text('status', { enum: ['enabled', 'paused'] }).notNull().default('enabled'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const aliyunPermissions = pgTable('aliyun_permission', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  connectionId: uuid('connection_id').notNull().references(() => aliyunConnections.id, { onDelete: 'cascade' }),
+  policyName: text('policy_name').notNull(),
+  description: text('description').notNull().default(''),
+  cloudExists: boolean('cloud_exists').notNull().default(true),
+  open: boolean('open').notNull().default(false),
+  purpose: text('purpose').notNull().default(''),
+  dataScope: text('data_scope').notNull().default(''),
+  ownerId: uuid('owner_id').references(() => users.id, { onDelete: 'restrict' }),
+  discoveredAt: timestamp('discovered_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [uniqueIndex('aliyun_permission_connection_policy_unique').on(t.connectionId, t.policyName)]);

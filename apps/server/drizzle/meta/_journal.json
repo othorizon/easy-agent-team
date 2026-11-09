@@ -288,6 +288,13 @@
       "when": 1794211169550,
       "tag": "0040_db_access",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1794212805123,
+      "tag": "0041_aliyun_discovery",
+      "breakpoints": true
     }
   ]
 }

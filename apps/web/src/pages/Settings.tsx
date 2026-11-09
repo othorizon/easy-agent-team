@@ -46,6 +46,7 @@ import { FolioSettingsCard } from './FolioSettings';
 import { FolioCdnSettings } from './FolioCdnSettings';
 import { LlmGatewaySettingsCard } from './LlmGatewaySettings';
 import { OssSettingsCard } from './OssSettings';
+import { AliyunSettingsCard } from './AliyunSettings';
 import './settings.css';
 import { RegistrationSettingsCard } from './RegistrationSettings';
 
@@ -60,7 +61,7 @@ const categories = [
       { id: 'llm-gateway', label: 'LLM API 网关', icon: Network },
     ],
   },
-  { group: '资源存储', items: [{ id: 'oss', label: 'OSS 存储', icon: Cloud }] },
+  { group: '资源存储', items: [{ id: 'oss', label: 'OSS 存储', icon: Cloud }, { id: 'aliyun', label: '阿里云接入', icon: Cloud }] },
   {
     group: '应用托管',
     items: [{ id: 'deployment', label: '部署接入', icon: Server }, { id: 'github', label: 'GitHub 接入', icon: Network }],
@@ -169,6 +170,7 @@ export function SettingsPage() {
               {id === 'platform-ai' && <AiSettingsCard active={active === id} />}
               {id === 'llm-gateway' && <LlmGatewaySettingsCard active={active === id} />}
               {id === 'oss' && <OssSettingsCard active={active === id} />}
+              {id === 'aliyun' && <AliyunSettingsCard active={active === id} />}
               {id === 'github' && <GithubSettings active={active === id} />}
               {id === 'feishu' && <FeishuSettings active={active === id} />}
               {id === 'deployment' && <DokploySettingsCard active={active === id} />}

@@ -1,4 +1,5 @@
 import { RequestsModule } from './requests/requests.module';
+import { AliyunModule } from './aliyun/aliyun.module';
 import { GithubModule } from './github/github.module';
 import { OssModule } from './oss/oss.module';
 import { Module, OnModuleInit } from '@nestjs/common';
@@ -29,6 +30,7 @@ import { LlmGatewayModule } from './llm-gateway/llm-gateway.module';
 @Module({
   imports: [
     DbModule,
+    AliyunModule,
     RequestsModule,
     AuditModule,
     NotifyModule,

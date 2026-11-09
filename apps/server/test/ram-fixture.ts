@@ -42,6 +42,7 @@ export class TestRamCloud extends RamCloud {
   lostKeyResponse = false;
   failKeyStatus = false;
   failCleanup = false;
+  failListPoliciesMarker: string | undefined;
   constructor() {
     super();
     this.registerAccount(
@@ -67,6 +68,7 @@ export class TestRamCloud extends RamCloud {
     );
     this.keySerial = this.userSerial = 0;
     this.lostKeyResponse = this.failKeyStatus = this.failCleanup = false;
+    this.failListPoliciesMarker = undefined;
   }
   isManagement(c: RamCredentials): boolean {
     return this.credentials.get(c.accessKeyId)?.secret === c.accessKeySecret;
@@ -154,6 +156,8 @@ export class TestRamCloud extends RamCloud {
       };
     }
     if (action === 'ListPolicies') {
+      if (this.failListPoliciesMarker !== undefined && args.marker === this.failListPoliciesMarker)
+        throw new RamCloudError(action, 'NETWORK_ERROR');
       const rows = [...policies.values()]
         .filter((p) => p.policyType === args.policyType)
         .sort((a, b) => a.policyName.localeCompare(b.policyName));
