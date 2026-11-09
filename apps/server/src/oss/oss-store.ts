@@ -36,7 +36,8 @@ export class OssStore {
     private readonly ram: RamCloud,
   ) {}
   /** Session advisory lock spans cloud work, but never holds a SQL transaction across network I/O. */
-  async exclusive<T>(work: (guard: () => void) => Promise<T>): Promise<T> {
+  async exclusive<T>(work: (guard: () => void) => Promise<T>, migration = false): Promise<T> {
+    if (!migration) await this.assertWritable();
     const c = await this.pool.connect();
     let held = false,
       lost = false;
@@ -50,6 +51,7 @@ export class OssStore {
       ).rows[0].held;
       if (!held)
         throw new ConflictException('OSS 正在执行其他操作，请稍后重试');
+      if (!migration) await this.assertWritable();
       return await work(() => {
         if (lost) throw new ConflictException('OSS 操作锁已中断，将重新恢复');
       });
@@ -61,6 +63,11 @@ export class OssStore {
       c.off('error', onError);
       c.release(lost);
     }
+  }
+  async assertWritable() {
+    const [setting] = await this.db.select({ state: ossSettings.migrationState }).from(ossSettings).limit(1);
+    if (setting && ['running', 'partial'].includes(setting.state))
+      throw new ConflictException('OSS 身份迁移尚未完成，写操作已暂停；请管理员在 OSS 设置重试迁移');
   }
   async row(): Promise<OssSettingRow> {
     const [r] = await this.db
@@ -233,7 +240,8 @@ export class OssStore {
       .where(eq(ossOperations.id, id));
   }
   /** Must run under exclusive(). The pending rule is journaled before PutBucketPolicy. */
-  async syncPublic(extraPrefixes: string[] = [], omitSpace?: string) {
+  async syncPublic(extraPrefixes: string[] = [], omitSpace?: string, guard: () => void = () => {}) {
+    guard();
     const r = await this.row(),
       c = this.connection(r);
     const spaces = await this.db
@@ -249,7 +257,9 @@ export class OssStore {
       ...spaces.filter((s) => s.id !== omitSpace).map((s) => s.prefix),
       ...extraPrefixes,
     ]);
+    guard();
     const current = await this.cloud.bucketPolicy(c);
+    guard();
     const merged = mergePublicPolicy(
       current,
       r.managedPolicy,
@@ -264,8 +274,10 @@ export class OssStore {
       canonical(current ?? { Version: '1', Statement: [] }) !==
       canonical(merged)
     )
-      await this.cloud.writeBucketPolicy(c, merged);
+      { guard(); await this.cloud.writeBucketPolicy(c, merged); }
+    guard();
     const verified = await this.cloud.bucketPolicy(c);
+    guard();
     if (
       canonical(verified ?? { Version: '1', Statement: [] }) !==
       canonical(merged)

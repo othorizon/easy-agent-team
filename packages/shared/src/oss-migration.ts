@@ -52,3 +52,16 @@ export const ossMigrationPreviewSchema = z.object({
 export type OssMigrationConflict = z.infer<typeof ossMigrationConflictSchema>;
 export type OssMigrationIdentityPreview = z.infer<typeof ossMigrationIdentityPreviewSchema>;
 export type OssMigrationPreview = z.infer<typeof ossMigrationPreviewSchema>;
+
+export const executeOssMigrationSchema = z.object({ confirm: z.literal(true) });
+export type ExecuteOssMigration = z.infer<typeof executeOssMigrationSchema>;
+export const ossMigrationStatusSchema = z.object({
+  state: z.enum(['pending', 'running', 'partial', 'complete']),
+  results: z.array(z.object({
+    userId: z.uuid(), name: z.string(), email: z.string(), accountId: z.string(), identityId: z.uuid(),
+    oldRamName: z.string(), targetRamName: z.string(), cloudUserId: z.string().nullable(),
+    stage: z.enum(['preflight', 'verified', 'secured', 'renamed', 'identity', 'linked', 'policy', 'complete']),
+    state: z.enum(['running', 'failed', 'complete']), error: z.string().nullable(), attempts: z.number().int(), updatedAt: z.iso.datetime(),
+  })),
+});
+export type OssMigrationStatus = z.infer<typeof ossMigrationStatusSchema>;

@@ -33,6 +33,8 @@ export interface RequestType {
   withdraw: (action: RequestAction) => Promise<unknown>;
   resubmit: (action: RequestAction) => Promise<unknown>;
   afterReject?: (action: RequestAction) => Promise<unknown>;
+  /** Resource-wide write barrier spans the action and its transaction commit. */
+  runAction?: (kind: 'approve' | 'reject' | 'withdraw' | 'resubmit' | 'remind', work: (guard: () => void) => Promise<void>) => Promise<void>;
   loadDetails?: (row: any, user: AuthUser) => Promise<Record<string, unknown>>;
   presentation?: (row: any) => Partial<Omit<RequestPresentation, 'label'>> & { approvalHint?: string; cardLines?: string[] };
 }

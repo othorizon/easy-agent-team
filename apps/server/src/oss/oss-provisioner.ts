@@ -1,10 +1,14 @@
+import { CloudIdentitiesService, cloudIdentityMarker } from '../cloud-identities/cloud-identities.service';
 import type { OssCheck } from '@eat/shared';
 import { ConflictException, Injectable } from '@nestjs/common';
 import { and, eq, inArray } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
+  aliyunConnections,
+  cloudIdentities,
   ossAccounts,
+  ossMigrationResults,
   ossOperations,
   ossSettings,
   ossSpaces,
@@ -48,6 +52,7 @@ export class OssProvisioner {
     private readonly store: OssStore,
     private readonly cloud: OssCloud,
     private readonly ram: RamCloud,
+    private readonly identities: CloudIdentitiesService,
   ) {}
   async syncUser(
     userId: string,
@@ -58,6 +63,37 @@ export class OssProvisioner {
       c = this.store.connection(r);
     let account = await this.store.account(userId);
     if (!account && !create) return;
+    if (account?.identityId || r.migrationState === 'complete') {
+      if (!r.accountId) throw new ConflictException('OSS 云账号尚未验证');
+      return this.identities.run(r.accountId, userId, c, async session => {
+        const safe = () => { guard(); session.guard(); };
+        const [user] = await this.store.db.select().from(users).where(eq(users.id, userId));
+        const identity = account?.identityId ? (await session.inspect()).identity : await session.ensure();
+        if (!identity || account?.identityId && identity.id !== account.identityId) throw new ConflictException('OSS 个人身份引用不符');
+        safe();
+        if (!account) {
+          [account] = await this.store.db.transaction(async tx => {
+            // Publish OSS usage against the same account barrier as Aliyun deletion. The identity
+            // session prevents cleanup work from running while we establish this reference.
+            const [connection] = await tx.select().from(aliyunConnections).where(eq(aliyunConnections.accountId, r.accountId!)).for('update');
+            const [current] = await tx.select().from(cloudIdentities).where(eq(cloudIdentities.id, identity.id));
+            if (!current || connection?.cleanupState || current.cleanupPending) throw new ConflictException('此云账号的个人身份正在清理，请完成接入清理后重试空间开通');
+            safe();
+            return tx.insert(ossAccounts).values({ userId, identityId: identity.id,
+              ramName: identity.ramName, policyName: ossRamName(r.instanceId, userId) }).returning();
+          });
+        }
+        const spaces = await this.store.db.select().from(ossSpaces).where(and(eq(ossSpaces.ownerId, userId), inArray(ossSpaces.status, ['active', 'provisioning', 'failed'])));
+        // Disabled users may retain valid spaces: only credentials are disabled, policies stay Allow.
+        if (user.status === 'disabled') await session.syncUserStatus();
+        safe();
+        if (spaces.length) await this.ram.applyUserPolicy(c, identity.ramName, account!.policyName,
+          ossMarker(r.instanceId, userId), userPolicy(r.bucket, spaces.map(space => space.prefix)), safe);
+        else await session.setPolicy(account!.policyName, false);
+        safe();
+        return account;
+      }, guard);
+    }
     const [u] = await this.store.db
       .select()
       .from(users)
@@ -75,6 +111,7 @@ export class OssProvisioner {
       c,
       account.ramName,
       ossMarker(r.instanceId, userId),
+      guard,
     );
     const spaces = await this.store.db
       .select()
@@ -95,11 +132,30 @@ export class OssProvisioner {
         r.bucket,
         u.status === 'active' ? spaces.map((s) => s.prefix) : [],
       ),
+      guard,
     );
     return account;
   }
-  async ensureKey(userId: string, guard: () => void, generation?: number) {
-    const c = this.store.connection(await this.store.row());
+  async ensureKey(userId: string, guard: () => void, generation?: number, allowCreate = true) {
+    const setting = await this.store.row();
+    const c = this.store.connection(setting);
+    const account = await this.store.account(userId);
+    if (account?.identityId) {
+      if (!setting.accountId) throw new ConflictException('OSS 云账号尚未验证');
+      return this.identities.run(setting.accountId, userId, c, async session => {
+        const [identity] = await this.store.db.select().from(cloudIdentities).where(eq(cloudIdentities.id, account.identityId!));
+        const safe = () => { guard(); session.guard(); };
+        const key = await session.key({ reset: generation !== undefined && generation === identity.keyGeneration, resume: true, allowCreate });
+        safe();
+        if (!key) throw new ConflictException('个人凭证尚未就绪');
+        const wait = new Date(key.readyAt).getTime() - Date.now();
+        if (wait > 0) { await delay(wait); safe(); }
+        await session.key({ resume: true, allowCreate });
+        await session.syncUserStatus();
+        safe();
+        await this.store.updateAccount(userId, { syncPending: false, lastError: null });
+      }, guard);
+    }
     let a = await this.store.account(userId);
     if (!a) throw new ConflictException('RAM 账号尚未创建');
     if (a.keyBaseline !== null) {
@@ -129,6 +185,7 @@ export class OssProvisioner {
         keyBaseline: null,
         retiringKeyIds: retiring,
         keyGeneration: a.keyGeneration + 1,
+        keyReadyAt: new Date(Date.now() + this.identities.keyPropagationMs),
       });
       await this.cloud.waitForNewKey();
     }
@@ -149,6 +206,16 @@ export class OssProvisioner {
   async syncUserStatus(userId: string, guard: () => void) {
     const a = await this.store.account(userId);
     if (!a) return;
+    if (a.identityId) {
+      const setting = await this.store.row();
+      if (!setting.accountId) throw new ConflictException('OSS 云账号尚未验证');
+      await this.identities.run(setting.accountId, userId, this.store.connection(setting), async session => {
+        await session.syncUserStatus(); guard(); session.guard();
+        const [identity] = await this.store.db.select().from(cloudIdentities).where(eq(cloudIdentities.id, a.identityId!));
+        await this.store.updateAccount(userId, { userEnabled: identity.userEnabled, syncPending: identity.syncPending, lastError: identity.lastError });
+      }, guard);
+      return;
+    }
     const [u] = await this.store.db
       .select()
       .from(users)
@@ -179,6 +246,35 @@ export class OssProvisioner {
       syncPending: false,
       lastError: null,
     });
+  }
+  /** Migration freezes ordinary work, but disabling a person must still cut authentication.
+   * Never ensure users or rewrite policies here: the source may already have been renamed. */
+  async secureDuringMigration(userId: string, guard: () => void) {
+    const setting = await this.store.row(), account = await this.store.account(userId);
+    if (!account || !setting.accountId) return;
+    await this.identities.run(setting.accountId, userId, this.store.connection(setting), async session => {
+      const safe = () => { guard(); session.guard(); };
+      const [user] = await this.store.db.select().from(users).where(eq(users.id, userId));
+      if (user.status !== 'disabled') return; // Restores wait for ordinary migration recovery.
+      if (account.identityId) await session.syncUserStatus();
+      else {
+        const [journal] = await this.store.db.select().from(ossMigrationResults).where(eq(ossMigrationResults.userId, userId));
+        const c = this.store.connection(setting);
+        let cloud;
+        for (const name of new Set([account.ramName, journal?.targetRamName].filter((n): n is string => !!n))) {
+          safe();
+          try { cloud = await this.ram.getUser(c, name); break; }
+          catch (e) { if (!ramMissing(e)) throw e; }
+        }
+        safe();
+        if (!cloud || journal?.cloudUserId && journal.cloudUserId !== cloud.id ||
+          cloud.comments !== ossMarker(setting.instanceId, userId) && !(journal && cloud.comments.startsWith(cloudIdentityMarker(journal.identityId))))
+          throw new ConflictException('迁移中的 RAM 用户归属不符，安全同步需管理员处理');
+        for (const key of await this.ram.keys(c, cloud.name)) { safe(); await this.ram.keyStatus(c, cloud.name, key.id, false); }
+        safe(); await this.ram.deleteLoginProfile(c, cloud.name);
+      }
+      safe(); await this.store.updateAccount(userId, { userEnabled: false, syncPending: false, lastError: null });
+    }, guard);
   }
   private async eventually(work: () => Promise<void>) {
     for (let n = 0; ; n++) {
@@ -373,14 +469,14 @@ export class OssProvisioner {
             );
           context.publicTouched = true;
           await this.store.updateOperation(op.id, { context });
-          await this.store.syncPublic([own]);
+          await this.store.syncPublic([own], undefined, guard);
           await this.eventually(async () => {
             if ((await this.cloud.anonymousStatus(c, object)) !== 200)
               throw new ConflictException(
                 '公开读未生效，请检查账号或 Bucket 的阻止公共访问配置',
               );
           });
-          await this.store.syncPublic();
+          await this.store.syncPublic([], undefined, guard);
           await this.eventually(async () => {
             if ((await this.cloud.anonymousStatus(c, object)) !== 403)
               throw new ConflictException('撤销公开授权后匿名读取未被拒绝');
@@ -407,7 +503,7 @@ export class OssProvisioner {
     }
     await check('清理本次测试资源', async () => {
       guard();
-      if (context.publicTouched) await this.store.syncPublic();
+      if (context.publicTouched) await this.store.syncPublic([], undefined, guard);
       if (context.multipartStarted)
         await this.cloud.cleanMultipartProbe(c, `${own}multipart`);
       if (context.objectsStarted) {

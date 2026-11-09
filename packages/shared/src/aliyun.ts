@@ -97,8 +97,13 @@ export type AliyunDriftSnapshot = z.infer<typeof aliyunDriftSnapshotSchema>;
 export const aliyunIdentityDriftSchema = aliyunDriftSnapshotSchema.extend({ identityId: z.string().uuid(), userId: z.string().uuid(), userName: z.string(), connectionId: z.string().uuid(), connectionName: z.string(), ramName: z.string(), canRepair: z.boolean() });
 export type AliyunIdentityDrift = z.infer<typeof aliyunIdentityDriftSchema>;
 export const aliyunRepairResultSchema = z.object({ ok: z.boolean(), drift: aliyunIdentityDriftSchema });
+export const aliyunOssSpaceSchema = z.object({
+  id: z.uuid(), name: z.string(), prefix: z.string(), status: z.string(),
+  accountId: z.string(), identityId: z.uuid(), connectionId: z.uuid().nullable(), connectionName: z.string().nullable(),
+});
+export type AliyunOssSpace = z.infer<typeof aliyunOssSpaceSchema>;
 export const aliyunGrantsResultSchema = z.object({
-  grants: z.array(aliyunGrantInfoSchema), accounts: z.array(aliyunIdentityAccountInfoSchema), drift: z.array(aliyunIdentityDriftSchema).optional(),
+  grants: z.array(aliyunGrantInfoSchema), accounts: z.array(aliyunIdentityAccountInfoSchema), ossSpaces: z.array(aliyunOssSpaceSchema).default([]), drift: z.array(aliyunIdentityDriftSchema).optional(),
 });
 export type GrantAliyunPermissionRequest = z.infer<typeof grantAliyunPermissionSchema>;
 export type RevokeAliyunGrantRequest = z.infer<typeof revokeAliyunGrantSchema>;
@@ -114,9 +119,10 @@ export const aliyunCredentialsSchema = z.object({
 });
 export type AliyunCredentials = z.infer<typeof aliyunCredentialsSchema>;
 /** Resolve only accounts with an effective personal authorization; callers must reject 0/multiple hits. */
-export function matchAliyunAccounts(grants: AliyunGrantInfo[], ref?: string) {
-  const accounts = [...new Map(grants.filter(g => g.state === 'active').map(g => [g.accountId, {
-    accountId: g.accountId, connectionId: g.connectionId, connectionName: g.connectionName,
+export function matchAliyunAccounts(grants: AliyunGrantInfo[], ref?: string, ossSpaces: AliyunOssSpace[] = []) {
+  const sources = [...grants.filter(g => g.state === 'active' && g.cloudExists !== false), ...ossSpaces.filter(s => s.status === 'active' && s.connectionId !== null && s.connectionName !== null)];
+  const accounts = [...new Map(sources.map(g => [g.accountId, {
+    accountId: g.accountId, connectionId: g.connectionId!, connectionName: g.connectionName!,
   }])).values()];
   return ref === undefined ? accounts : accounts.filter(a => a.accountId === ref.trim() || a.connectionName === ref.trim());
 }

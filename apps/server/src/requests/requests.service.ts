@@ -202,6 +202,10 @@ export class RequestsService {
     }
   }
 
+  private async runAction(type: string, kind: 'approve' | 'reject' | 'withdraw' | 'resubmit' | 'remind', work: (guard: () => void) => Promise<void>) {
+    const guard = this.types.get(type).runAction;
+    return guard ? guard(kind, work) : work(() => {});
+  }
   async decide(user: AuthUser, id: string, input: RequestDecision) {
     const parsed = requestDecisionSchema.safeParse(input);
     if (!parsed.success) throw new BadRequestException(parsed.error.issues[0]?.message);
@@ -211,17 +215,20 @@ export class RequestsService {
       if (r.status !== 'pending') throw new ConflictException('该申请已处理，请刷新');
       const type = this.types.get(r.type);
       const action = { row: r, client: c, user, decision: dto };
-      if (dto.decision === 'rejected') {
-        await c.query('BEGIN');
-        try {
-          await type.reject(action);
-          await c.query('COMMIT');
-        } catch (error) { await c.query('ROLLBACK'); throw error; }
-        await type.afterReject?.(action);
-      } else {
-        if (r.approval_blocker) throw new ConflictException(r.approval_blocker);
-        await type.approve(action);
-      }
+      await this.runAction(r.type, dto.decision === 'approved' ? 'approve' : 'reject', async guard => {
+        if (dto.decision === 'rejected') {
+          await c.query('BEGIN');
+          try {
+            await type.reject(action);
+            guard();
+            await c.query('COMMIT');
+          } catch (error) { await c.query('ROLLBACK'); throw error; }
+          await type.afterReject?.(action);
+        } else {
+          if (r.approval_blocker) throw new ConflictException(r.approval_blocker);
+          await type.approve(action);
+        }
+      });
     });
     await this.audit.record({
       actorId: user.id,
@@ -254,18 +261,21 @@ export class RequestsService {
     await this.locked(user, id, async (r, c) => {
       if (r.requester_id !== user.id) throw new ForbiddenException('只能撤回自己的申请');
       if (r.status !== 'pending') throw new ConflictException('仅待审批申请可撤回');
-      await c.query('BEGIN');
-      try {
-        await c.query(
-          `UPDATE approval_request SET status='withdrawn',closed_reason='申请人主动撤回',decided_at=now() WHERE id=$1`,
-          [id],
-        );
-        await this.types.get(r.type).withdraw({ row: r, client: c, user, decision: { decision: 'rejected' } });
-        await c.query('COMMIT');
-      } catch (e) {
-        await c.query('ROLLBACK');
-        throw e;
-      }
+      await this.runAction(r.type, 'withdraw', async guard => {
+        await c.query('BEGIN');
+        try {
+          await c.query(
+            `UPDATE approval_request SET status='withdrawn',closed_reason='申请人主动撤回',decided_at=now() WHERE id=$1`,
+            [id],
+          );
+          await this.types.get(r.type).withdraw({ row: r, client: c, user, decision: { decision: 'rejected' } });
+          guard();
+          await c.query('COMMIT');
+        } catch (e) {
+          await c.query('ROLLBACK');
+          throw e;
+        }
+      });
     });
     return this.get(user, id);
   }
@@ -273,36 +283,42 @@ export class RequestsService {
     let nextId = id;
     await this.locked(user, id, async (r, c) => {
       if (!this.info(r, user).canResubmit) throw new ConflictException('该申请不可重新提交，请查看最新记录');
-      await c.query('BEGIN');
-      try {
-        await this.types.get(r.type).resubmit({ row: r, client: c, user, decision: { decision: 'approved' }, reason });
-        const {
-          rows: [next],
-        } = await c.query('SELECT id FROM approval_request WHERE group_key=$1 AND latest', [r.group_key]);
-        nextId = next.id;
-        await c.query('COMMIT');
-      } catch (e) {
-        await c.query('ROLLBACK');
-        throw e;
-      }
+      await this.runAction(r.type, 'resubmit', async guard => {
+        await c.query('BEGIN');
+        try {
+          await this.types.get(r.type).resubmit({ row: r, client: c, user, decision: { decision: 'approved' }, reason });
+          const {
+            rows: [next],
+          } = await c.query('SELECT id FROM approval_request WHERE group_key=$1 AND latest', [r.group_key]);
+          nextId = next.id;
+          guard();
+          await c.query('COMMIT');
+        } catch (e) {
+          await c.query('ROLLBACK');
+          throw e;
+        }
+      });
     });
     return this.get(user, nextId);
   }
   async remind(user: AuthUser, id: string) {
     await this.locked(user, id, async (r, c) => {
       if (!this.info(r, user).canRemind) throw new ConflictException('仅自己的待审批申请可提醒，每 24 小时一次');
-      await c.query('BEGIN');
-      try {
-        await c.query('UPDATE approval_request SET reminded_at=now() WHERE id=$1', [id]);
-        await c.query(
-          `INSERT INTO approval_notification(request_id,event) VALUES($1,'reminder') ON CONFLICT(request_id,event) DO UPDATE SET state='pending',retry_at=now(),attempts=0,sent_to='[]'`,
-          [id],
-        );
-        await c.query('COMMIT');
-      } catch (e) {
-        await c.query('ROLLBACK');
-        throw e;
-      }
+      await this.runAction(r.type, 'remind', async guard => {
+        await c.query('BEGIN');
+        try {
+          await c.query('UPDATE approval_request SET reminded_at=now() WHERE id=$1', [id]);
+          await c.query(
+            `INSERT INTO approval_notification(request_id,event) VALUES($1,'reminder') ON CONFLICT(request_id,event) DO UPDATE SET state='pending',retry_at=now(),attempts=0,sent_to='[]'`,
+            [id],
+          );
+          guard();
+          await c.query('COMMIT');
+        } catch (e) {
+          await c.query('ROLLBACK');
+          throw e;
+        }
+      });
     });
     return this.get(user, id);
   }

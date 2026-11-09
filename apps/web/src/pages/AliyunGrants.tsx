@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { ALIYUN_CREDENTIAL_NOTE, type AliyunCredentials, grantAliyunPermissionSchema, revokeAliyunGrantSchema, type AliyunIdentityDrift, type AliyunGrantInfo, type AliyunGrantsResult, type AliyunPermissionInfo, type GrantAliyunPermissionRequest, type RevokeAliyunGrantRequest, type UserPublic } from '@eat/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -53,7 +54,7 @@ export function AliyunGrants({ manage = false }: { manage?: boolean }) {
       <div className="flex flex-wrap items-center gap-2"><h2 className="font-medium break-all">{a.connectionName}</h2>{a.connectionStatus === 'paused' && <Badge variant="secondary">接入已暂停</Badge>}</div>
       <p className="break-all text-xs text-muted-foreground">云账号 ID：{a.accountId} · 个人身份：{a.ramName}</p>
       <p className="text-sm">已绑定的自定义策略：{a.customPolicyCount === null ? '暂时无法读取' : `${a.customPolicyCount} 条`}</p>
-      <AliyunKeyCard connectionId={a.connectionId} connectionName={a.connectionName} paused={a.connectionStatus === 'paused'} authorized={result.data!.grants.some(g => g.accountId === a.accountId && g.state === 'active')} />
+      <AliyunKeyCard connectionId={a.connectionId} connectionName={a.connectionName} paused={a.connectionStatus === 'paused'} authorized={result.data!.grants.some(g => g.accountId === a.accountId && g.state === 'active') || result.data!.ossSpaces?.some(s => s.accountId === a.accountId && s.status === 'active')} />
       {a.error && <p role="alert" className="break-words text-sm text-destructive">{a.error}</p>}
     </section>)}
     {manage && result.data?.drift?.filter(d => d.error || d.repairError || d.missing.length || d.extra.length).map(d => <section key={d.identityId} className="space-y-2 rounded-xl border border-destructive/30 bg-card p-4">
@@ -68,6 +69,11 @@ export function AliyunGrants({ manage = false }: { manage?: boolean }) {
       </Confirm>
       {!d.canRepair && <p className="text-xs text-muted-foreground">接入已暂停或正在清理，暂不能修复。</p>}
     </section>)}
+    {!manage && !!result.data?.ossSpaces?.length && <section className="space-y-3"><h2 className="text-sm font-semibold">OSS 空间（只读）</h2><DataTable data={result.data.ossSpaces} getRowId={row => row.id} columns={[
+      { id: 'name', header: '空间', cell: ({ row: { original: row } }) => <Link className="text-primary hover:underline" to={`/oss/${row.id}`}>{row.name}</Link> },
+      { accessorKey: 'accountId', header: '云账号', cell: ({ row: { original: row } }) => <span className="break-all text-xs">{row.connectionName ? `${row.connectionName} · ` : ''}{row.accountId}</span> },
+      { id: 'status', header: '状态', cell: ({ row: { original: row } }) => <Badge variant="secondary">{row.status === 'active' ? '可用' : row.status === 'revoked' ? '已回收' : row.status}</Badge> },
+    ]} /></section>}
     {manage && <h2 className="text-sm font-semibold">授权清单</h2>}
     <DataTable columns={columns} data={result.data?.grants} loading={result.isPending} getRowId={g => g.id} empty={<Empty text={manage ? '暂无可管理的授权' : '暂无阿里云授权'} />} />
     <Dialog open={!!revoking} onOpenChange={v => !v && setRevoking(null)}><DialogContent><DialogHeader><DialogTitle>撤销阿里云授权</DialogTitle><DialogDescription>{revoking?.userName} · {revoking?.policyName}。撤销后通知持有人，其他授权不受影响。</DialogDescription></DialogHeader>{revoking && <RevokeForm row={revoking} done={() => { setRevoking(null); invalidate(); }} />}</DialogContent></Dialog>

@@ -25,13 +25,15 @@ export async function aliyunRequest(ref: string, opts: { reason: string; account
 
 async function ownGrants(api: Api) { return (await api.request<AliyunGrantsResult>('GET', '/api/aliyun/grants')).grants; }
 async function account(api: Api, ref?: string) {
-  const hits = matchAliyunAccounts(await ownGrants(api), ref);
+  const result = await api.request<AliyunGrantsResult>('GET', '/api/aliyun/grants');
+  const hits = matchAliyunAccounts(result.grants, ref, result.ossSpaces);
   if (!hits.length) throw new Error(`没有${ref ? `云账号 ${ref} 的` : '任何云账号的'}有效授权，请用 eat aliyun list 查看目录并申请，或在控制台阿里云权限目录向 Owner 申请。`);
   if (hits.length > 1) throw new Error(`有多个有权云账号，请指定接入名称或云账号 ID：${hits.map(a => `${a.connectionName} (${a.accountId})`).join('、')}`);
   return hits[0];
 }
 export async function aliyunGrants() {
-  const grants = await ownGrants(Api.fromSaved());
+  const { grants, ossSpaces = [] } = await Api.fromSaved().request<AliyunGrantsResult>('GET', '/api/aliyun/grants');
+  for (const space of ossSpaces) console.log(`[${space.status}] OSS 空间 ${space.name} @ ${space.accountId}（只读行，使用 eat oss 查看）`);
   if (!grants.length) console.log('暂无阿里云授权，请用 eat aliyun list 查看目录，在控制台向 Owner 申请。');
   for (const g of grants) console.log(`[${g.state}] ${g.policyName} @ ${g.connectionName} (${g.accountId})${g.error ? ` · ${g.error}` : ''}`);
   console.log(ALIYUN_CREDENTIAL_NOTE);

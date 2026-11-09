@@ -5,7 +5,7 @@ import type { AuthUser } from '../auth/auth.decorators';
 import { AuditService } from '../audit/audit.service';
 import { CloudIdentitiesService } from '../cloud-identities/cloud-identities.service';
 import { DB, type Db } from '../db/db.module';
-import { aliyunConnections, aliyunGrants, aliyunPermissions, cloudIdentities, users } from '../db/schema';
+import { aliyunConnections, aliyunGrants, aliyunPermissions, cloudIdentities, ossAccounts, ossSpaces, users } from '../db/schema';
 import { AliyunService } from './aliyun.service';
 
 /** Aliyun authorization checks stay here; the shared identity/key layer also serves OSS independently. */
@@ -29,7 +29,12 @@ export class AliyunCredentialsService {
     const [grant] = await this.db.select({ id: aliyunGrants.id }).from(aliyunGrants)
       .innerJoin(aliyunPermissions, eq(aliyunPermissions.id, aliyunGrants.permissionId))
       .where(and(eq(aliyunGrants.userId, userId), eq(aliyunGrants.state, 'active'), eq(aliyunPermissions.connectionId, connectionId), eq(aliyunPermissions.cloudExists, true))).limit(1);
-    if (!grant) throw new ForbiddenException('没有此云账号的有效授权，请在阿里云权限目录向 Owner 申请');
+    const connection = await this.aliyun.connection(connectionId);
+    const [oss] = grant ? [] : await this.db.select({ id: ossSpaces.id }).from(ossSpaces)
+      .innerJoin(ossAccounts, eq(ossAccounts.userId, ossSpaces.ownerId))
+      .innerJoin(cloudIdentities, eq(cloudIdentities.id, ossAccounts.identityId))
+      .where(and(eq(ossSpaces.ownerId, userId), eq(ossSpaces.status, 'active'), eq(cloudIdentities.accountId, connection.accountId))).limit(1);
+    if (!grant && !oss) throw new ForbiddenException('没有此云账号的有效授权，请在阿里云权限目录向 Owner 申请');
   }
   async credentials(actor: AuthUser, connectionId: string, reset = false): Promise<AliyunCredentials> {
     await this.authorized(actor.id, connectionId);
@@ -62,9 +67,11 @@ export class AliyunCredentialsService {
           const [grant] = await this.db.select({ id: aliyunGrants.id }).from(aliyunGrants)
             .innerJoin(aliyunPermissions, eq(aliyunPermissions.id, aliyunGrants.permissionId))
             .where(and(eq(aliyunGrants.userId, identity.userId), eq(aliyunGrants.state, 'active'), eq(aliyunPermissions.connectionId, c.id), eq(aliyunPermissions.cloudExists, true))).limit(1);
+          const [oss] = grant ? [] : await this.db.select({ id: ossSpaces.id }).from(ossSpaces)
+            .innerJoin(ossAccounts, eq(ossAccounts.userId, ossSpaces.ownerId)).where(and(eq(ossAccounts.identityId, identity.id), eq(ossSpaces.status, 'active'))).limit(1);
           const current = await this.aliyun.connection(c.id);
           if (current.cleanupState || identity.cleanupPending) return;
-          await session.key({ resume: true, allowCreate: current.status === 'enabled' && user?.status === 'active' && !!grant });
+          await session.key({ resume: true, allowCreate: current.status === 'enabled' && user?.status === 'active' && !!(grant || oss) });
         });
       } catch { this.logger.warn(`个人 Key 待恢复（${identity.id}）`); }
     }

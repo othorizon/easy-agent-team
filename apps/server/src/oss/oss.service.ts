@@ -1,3 +1,4 @@
+import { CloudIdentitiesService } from '../cloud-identities/cloud-identities.service';
 import {
   ConflictException,
   ForbiddenException,
@@ -20,6 +21,7 @@ import type { AuthUser } from '../auth/auth.decorators';
 import { AuditService } from '../audit/audit.service';
 import { decryptSecret } from '../common/crypto';
 import {
+  cloudIdentities,
   ossAccounts,
   ossOperations,
   ossSettings,
@@ -45,6 +47,7 @@ export class OssService implements OnModuleInit, OnApplicationShutdown {
     readonly store: OssStore,
     private readonly provisioner: OssProvisioner,
     private readonly audit: AuditService,
+    private readonly identities: CloudIdentitiesService,
   ) {}
   onModuleInit() {
     this.timer = setInterval(() => this.wake(), 30_000);
@@ -402,7 +405,11 @@ export class OssService implements OnModuleInit, OnApplicationShutdown {
     );
   }
   async accountInfo(user: AuthUser) {
-    const a = await this.store.account(user.id);
+    let a = await this.store.account(user.id);
+    if (a?.identityId) {
+      const [identity] = await this.store.db.select().from(cloudIdentities).where(eq(cloudIdentities.id, a.identityId));
+      a = { ...a, ...identity, userId: a.userId, policyName: a.policyName, syncPending: a.syncPending || identity.syncPending || !!identity.keyBaseline || !!identity.keyTargetGeneration || !!identity.retiringKeyIds.length || !!identity.keyReadyAt && identity.keyReadyAt.getTime() > Date.now() };
+    }
     return {
       configured: !!a?.keyIdEncrypted,
       accessKeyIdMasked: a?.keyIdEncrypted
@@ -413,10 +420,15 @@ export class OssService implements OnModuleInit, OnApplicationShutdown {
     };
   }
   async credentials(user: AuthUser): Promise<OssCredentialInfo> {
-    return this.store.exclusive(async () => {
+    return this.store.exclusive(async guard => {
       await this.actorActive(user);
       const r = await this.store.enabled();
-      const a = await this.store.account(user.id);
+      let a = await this.store.account(user.id);
+      if (a?.identityId) {
+        const [identity] = await this.store.db.select().from(cloudIdentities).where(eq(cloudIdentities.id, a.identityId));
+        if (identity.syncPending || identity.keyReadyAt && identity.keyReadyAt.getTime() > Date.now()) throw new ConflictException('个人凭证正在同步或等待云端生效');
+        a = { ...a, ...identity, userId: a.userId, policyName: a.policyName, syncPending: a.syncPending || identity.syncPending };
+      }
       if (
         (await this.pendingReset(user.id)) ||
         !a?.keyIdEncrypted ||
@@ -434,6 +446,14 @@ export class OssService implements OnModuleInit, OnApplicationShutdown {
           and(eq(ossSpaces.ownerId, user.id), eq(ossSpaces.status, 'active')),
         );
       if (!spaces.length) throw new ConflictException('尚无已批准空间');
+      let personalKey: { accessKeyId: string; accessKeySecret: string } | undefined;
+      if (a.identityId) {
+        personalKey = await this.identities.run(r.accountId!, user.id, this.store.connection(r), async session => {
+          const key = await session.key({ allowCreate: false });
+          if (!key || new Date(key.readyAt).getTime() > Date.now()) throw new ConflictException('个人凭证尚未生效');
+          return key;
+        }, guard);
+      }
       await this.audit.record({
         actorId: user.id,
         action: 'oss_credentials.read',
@@ -441,8 +461,8 @@ export class OssService implements OnModuleInit, OnApplicationShutdown {
         targetId: user.id,
       });
       return {
-        accessKeyId: decryptSecret(a.keyIdEncrypted),
-        accessKeySecret: decryptSecret(a.keySecretEncrypted),
+        accessKeyId: personalKey?.accessKeyId ?? decryptSecret(a.keyIdEncrypted),
+        accessKeySecret: personalKey?.accessKeySecret ?? decryptSecret(a.keySecretEncrypted),
         scope: 'all-approved-spaces',
         bucket: r.bucket,
         region: r.region,
@@ -455,7 +475,11 @@ export class OssService implements OnModuleInit, OnApplicationShutdown {
     const result = await this.store.exclusive(async () => {
       await this.store.enabled();
       await this.actorActive(user);
-      const a = await this.store.account(user.id);
+      let a = await this.store.account(user.id);
+      if (a?.identityId) {
+        const [identity] = await this.store.db.select().from(cloudIdentities).where(eq(cloudIdentities.id, a.identityId));
+        a = { ...a, ...identity, userId: a.userId, policyName: a.policyName };
+      }
       if (!a?.keyIdEncrypted) throw new ConflictException('尚未分配凭证');
       const [existing] = await this.store.db
         .select()
@@ -571,6 +595,13 @@ export class OssService implements OnModuleInit, OnApplicationShutdown {
     const a = await this.store.account(userId);
     if (!a) return false;
     await this.store.updateAccount(userId, { syncPending: true });
+    if (['running', 'partial'].includes((await this.store.row()).migrationState)) {
+      // Security-only work takes ONLY this person's identity lock, and never asks for OSS lock.
+      // A long migration of another person cannot postpone an EAT disable until the batch ends.
+      try { await this.provisioner.secureDuringMigration(userId, () => {}); }
+      catch (e) { await this.store.updateAccount(userId, { syncPending: true, lastError: ossError(e) }); }
+      return !!(await this.store.account(userId))?.syncPending;
+    }
     this.wake();
     return true;
   }
@@ -580,6 +611,18 @@ export class OssService implements OnModuleInit, OnApplicationShutdown {
       .from(ossSettings)
       .limit(1);
     if (!configured || this.stopped) return;
+    const migration = (await this.store.row()).migrationState;
+    if (['running', 'partial'].includes(migration)) {
+      // Security-only recovery never acquires OSS lock; it cannot wait behind the whole batch.
+      const guard = () => {};
+      const disabled = await this.store.db.select({ id: users.id }).from(ossAccounts)
+        .innerJoin(users, eq(users.id, ossAccounts.userId)).where(eq(users.status, 'disabled'));
+      for (const user of disabled) {
+        try { await this.provisioner.secureDuringMigration(user.id, guard); }
+        catch (e) { await this.store.updateAccount(user.id, { syncPending: true, lastError: ossError(e) }); }
+      }
+      return;
+    }
     await this.store.exclusive(async (guard) => {
       // Security revocation remains enabled even when the capability is disabled.
       const accounts = await this.store.db
@@ -595,12 +638,24 @@ export class OssService implements OnModuleInit, OnApplicationShutdown {
             guard();
             await this.provisioner.syncUserStatus(a.userId, guard);
           } catch (e) {
+            guard();
             await this.store.updateAccount(a.userId, {
               syncPending: true,
               lastError: ossError(e),
             });
           }
         }
+      // OSS owns recovery for its referenced unified identities even without an Aliyun connection.
+      // Read the identity, never the legacy Key snapshot, when deciding what still needs recovery.
+      for (const { a, status } of accounts) {
+        if (!a.identityId || status !== 'active') continue;
+        const [identity] = await this.store.db.select().from(cloudIdentities).where(eq(cloudIdentities.id, a.identityId));
+        if (!identity.keyBaseline && identity.keyTargetGeneration === null && !identity.retiringKeyIds.length) continue;
+        const [space] = await this.store.db.select({ id: ossSpaces.id }).from(ossSpaces)
+          .where(and(eq(ossSpaces.ownerId, a.userId), inArray(ossSpaces.status, ['active', 'provisioning', 'failed']))).limit(1);
+        try { await this.provisioner.ensureKey(a.userId, guard, undefined, !!space); }
+        catch (e) { guard(); await this.store.updateAccount(a.userId, { syncPending: true, lastError: ossError(e) }); }
+      }
       const capabilityEnabled = (await this.store.row()).status === 'enabled';
       const ops = await this.store.db
         .select()
@@ -625,6 +680,7 @@ export class OssService implements OnModuleInit, OnApplicationShutdown {
         const enabled = (await this.store.row()).status === 'enabled';
         if (!['setup', 'revoke', 'sync'].includes(op.kind) && !enabled)
           continue;
+        guard();
         await this.store.updateOperation(op.id, {
           state: 'running',
           attempts: op.attempts + 1,
@@ -633,6 +689,7 @@ export class OssService implements OnModuleInit, OnApplicationShutdown {
         try {
           guard();
           await this.execute(op, guard);
+          guard();
           await this.store.updateOperation(op.id, {
             state: 'complete',
             retryAt: null,
@@ -646,6 +703,7 @@ export class OssService implements OnModuleInit, OnApplicationShutdown {
             meta: { kind: op.kind },
           });
         } catch (e) {
+          guard();
           const message = ossError(e);
           await this.store.updateOperation(op.id, {
             state: 'failed',
@@ -728,7 +786,7 @@ export class OssService implements OnModuleInit, OnApplicationShutdown {
     } else if (op.kind === 'revoke') {
       await this.provisioner.syncUser(s.ownerId, guard, false);
       guard();
-      await this.store.syncPublic([], s.id);
+      await this.store.syncPublic([], s.id, guard);
       await this.store.db
         .update(ossSpaces)
         .set({
@@ -742,7 +800,7 @@ export class OssService implements OnModuleInit, OnApplicationShutdown {
         .where(eq(ossSpaces.id, s.id));
     } else if (op.kind === 'public') {
       guard();
-      await this.store.syncPublic();
+      await this.store.syncPublic([], undefined, guard);
       await this.store.db
         .update(ossSpaces)
         .set({

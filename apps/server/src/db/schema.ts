@@ -132,6 +132,7 @@ export const feishuEvents = pgTable('feishu_event', {
 export const ossSettings = pgTable('oss_setting', {
   id: integer('id').primaryKey().default(1),
   instanceId: uuid('instance_id').notNull().defaultRandom(),
+  migrationState: text('migration_state').$type<'pending' | 'running' | 'partial' | 'complete'>().notNull().default('pending'),
   bucket: text('bucket').notNull(),
   region: text('region').notNull(),
   accountId: text('account_id'),
@@ -147,11 +148,13 @@ export const ossSettings = pgTable('oss_setting', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 export const ossAccounts = pgTable('oss_account', {
+  identityId: uuid('identity_id').references(() => cloudIdentities.id, { onDelete: 'restrict' }),
   userId: uuid('user_id').primaryKey().references(() => users.id),
   ramName: text('ram_name').notNull().unique(),
   policyName: text('policy_name').notNull().unique(),
   keyIdEncrypted: text('key_id_encrypted'),
   keySecretEncrypted: text('key_secret_encrypted'),
+  keyReadyAt: timestamp('key_ready_at', { withTimezone: true }),
   // Persist before creating a key. New cloud keys outside this baseline are recoverable orphans.
   keyBaseline: jsonb('key_baseline').$type<string[] | null>(),
   retiringKeyIds: jsonb('retiring_key_ids').$type<string[]>().notNull().default([]),
@@ -1387,3 +1390,18 @@ export const aliyunOperations = pgTable('aliyun_operation', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [uniqueIndex('aliyun_operation_grant_unique').on(t.grantId), index('aliyun_operation_retry_idx').on(t.state, t.retryAt)]);
+
+/** Recovery journal is intentionally independent of cloud_identity: reserve the identity ID before rename. */
+export const ossMigrationResults = pgTable('oss_migration_result', {
+  userId: uuid('user_id').primaryKey().references(() => users.id, { onDelete: 'restrict' }),
+  accountId: text('account_id').notNull(),
+  identityId: uuid('identity_id').notNull(),
+  oldRamName: text('old_ram_name').notNull(),
+  targetRamName: text('target_ram_name').notNull(),
+  cloudUserId: text('cloud_user_id'),
+  stage: text('stage').$type<'preflight' | 'verified' | 'secured' | 'renamed' | 'identity' | 'linked' | 'policy' | 'complete'>().notNull().default('preflight'),
+  state: text('state').$type<'running' | 'failed' | 'complete'>().notNull().default('running'),
+  error: text('error'),
+  attempts: integer('attempts').notNull().default(0),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});

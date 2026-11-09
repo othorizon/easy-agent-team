@@ -67,6 +67,7 @@ export const builtinRequestTypes: Provider = {
     }));
     types.register(sourceRequest({
       type: 'oss', label: 'OSS 空间申请', table: 'oss_space', owner: 'NULL::uuid',
+      runAction: (kind, work) => kind === 'approve' ? work(() => {}) : oss.store.exclusive(guard => work(guard)),
       resourceExists: "EXISTS(SELECT 1 FROM oss_space WHERE id=r.source_id AND status IN ('rejected','withdrawn'))",
       invalidReason: "CASE WHEN NOT EXISTS(SELECT 1 FROM oss_space WHERE id=r.resource_id) THEN '存储空间已删除' END",
       approve: ({ user, row }) => oss.decide(user, row.source_id, 'approve'),

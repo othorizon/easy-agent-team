@@ -351,6 +351,13 @@
       "when": 1794218480668,
       "tag": "0049_aliyun_cleanup_drift",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1794219060525,
+      "tag": "0050_oss_identity_migration",
+      "breakpoints": true
     }
   ]
 }

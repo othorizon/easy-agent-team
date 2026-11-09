@@ -1,3 +1,4 @@
+import { OssMigrationService } from './oss-migration.service';
 import { RequestsService } from '../requests/requests.service';
 import {
   Body,
@@ -12,6 +13,8 @@ import {
   Header,
 } from '@nestjs/common';
 import {
+  executeOssMigrationSchema,
+  type ExecuteOssMigration,
   requestOssSpaceSchema,
   updateOssSpaceSchema,
   updateOssSettingsSchema,
@@ -116,6 +119,7 @@ export class OssSettingsController {
     private readonly oss: OssService,
     private readonly audit: AuditService,
     private readonly migrationPreview: OssMigrationPreviewService,
+    private readonly migration: OssMigrationService,
   ) {}
   @Get() get() {
     return this.oss.store.info();
@@ -136,6 +140,10 @@ export class OssSettingsController {
   }
   @Get('migration-preview') @Header('Cache-Control', 'no-store') preview() {
     return this.migrationPreview.preview();
+  }
+  @Get('migration') @Header('Cache-Control', 'no-store') migrationStatus() { return this.migration.status(); }
+  @Post('migration') migrate(@CurrentUser() u: AuthUser, @Body(new ZodValidationPipe(executeOssMigrationSchema)) body: ExecuteOssMigration) {
+    return this.migration.execute(u, body);
   }
   @Get('domains') domains() {
     return this.oss.store.domains();

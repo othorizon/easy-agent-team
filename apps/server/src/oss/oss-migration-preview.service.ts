@@ -6,7 +6,7 @@ import {
   type OssMigrationIdentityPreview,
   type OssMigrationPreview,
 } from '@eat/shared';
-import { cloudIdentities, ossAccounts, ossOperations, ossSpaces, users } from '../db/schema';
+import { cloudIdentities, ossAccounts, ossMigrationResults, ossOperations, ossSpaces, users } from '../db/schema';
 import { decryptSecret } from '../common/crypto';
 import { cloudIdentityMarker } from '../cloud-identities/cloud-identities.service';
 import { RamCloud, ramMissing, type RamCredentials, type RamUser } from '../ram/ram-cloud';
@@ -24,16 +24,17 @@ export class OssMigrationPreviewService {
     catch (e) { if (ramMissing(e)) return null; throw e; }
   }
 
-  async preview(): Promise<OssMigrationPreview> {
+  async preview(userId?: string): Promise<OssMigrationPreview> {
     const setting = await this.store.row();
     const credentials = this.store.connection(setting);
     // Start with ALL OSS identities, including people with no remaining spaces.
-    const [accounts, spaces, identities, operations] = await Promise.all([
+    const [accounts, spaces, identities, operations, journals] = await Promise.all([
       this.store.db.select({ account: ossAccounts, user: users }).from(ossAccounts)
-        .innerJoin(users, eq(users.id, ossAccounts.userId)).orderBy(asc(ossAccounts.userId)),
+        .innerJoin(users, eq(users.id, ossAccounts.userId)).where(userId ? eq(ossAccounts.userId, userId) : undefined).orderBy(asc(ossAccounts.userId)),
       this.store.db.select().from(ossSpaces).orderBy(asc(ossSpaces.prefix)),
       setting.accountId ? this.store.db.select().from(cloudIdentities).where(eq(cloudIdentities.accountId, setting.accountId)) : [],
       this.store.db.select().from(ossOperations).where(ne(ossOperations.state, 'complete')),
+      this.store.db.select().from(ossMigrationResults),
     ]);
     const conflicts: OssMigrationConflict[] = [];
     if (!setting.accountId) conflicts.push({ code: 'account-unverified', message: 'OSS 云账号尚未验证，请管理员先完成原有接入检查。' });
@@ -41,6 +42,7 @@ export class OssMigrationPreviewService {
       conflicts.push({ code: 'operations-pending', message: 'OSS 仍有启用检查或全局操作未完成，请处理后重新预演。' });
     const rows: OssMigrationIdentityPreview[] = [];
     for (const { account, user } of accounts) {
+      const journal = journals.find(j => j.userId === user.id);
       const identity = identities.find(i => i.userId === user.id);
       const targetRamName = `eat-${user.id.replaceAll('-', '')}`;
       const marker = ossMarker(setting.instanceId, user.id);
@@ -71,7 +73,7 @@ export class OssMigrationPreviewService {
         row.targetCloudUserId = target?.id ?? null;
         const owned = (cloud: RamUser) => {
           const cloudIdMatches = !identity?.cloudUserId || identity.cloudUserId === cloud.id;
-          return cloudIdMatches && (cloud.comments === marker || !!identity && cloud.comments.startsWith(cloudIdentityMarker(identity.id)));
+          return cloudIdMatches && (cloud.comments === marker || !!identity && cloud.comments.startsWith(cloudIdentityMarker(identity.id)) || !!journal && journal.cloudUserId === cloud.id && cloud.comments.startsWith(cloudIdentityMarker(journal.identityId)));
         };
         if (old && !owned(old)) row.conflicts.push({ code: 'old-user-provenance', message: '旧 RAM 用户的来源标记或已保存的云端 UserId 不符，拒绝接管，请管理员处理。' });
         if (identity && (

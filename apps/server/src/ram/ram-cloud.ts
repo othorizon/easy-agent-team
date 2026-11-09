@@ -170,18 +170,22 @@ export class RamCloud {
     c: RamCredentials,
     userName: string,
     marker: string,
+    guard: () => void = () => {},
   ): Promise<RamUser> {
+    guard();
     let user: RamUser;
     try {
       user = await this.getUser(c, userName);
     } catch (e) {
       if (!ramMissing(e)) throw e;
+      guard();
       user = await this.createUser(c, {
         name: userName,
         comments: marker,
         displayName: userName,
       });
     }
+    guard();
     if (user.comments !== marker)
       throw new Error('RAM 用户归属不匹配，拒绝接管已有用户');
     return user;
@@ -292,13 +296,16 @@ export class RamCloud {
     policyName: string,
     marker: string,
     policy: unknown,
+    guard: () => void = () => {},
   ) {
+    guard();
     let found: (RamPolicy & { document: string }) | undefined;
     try {
       found = await this.getPolicy(c, policyName);
     } catch (e) {
       if (!ramMissing(e)) throw e;
     }
+    guard();
     if (!found)
       await this.createPolicy(c, policyName, marker, JSON.stringify(policy));
     else {
@@ -312,12 +319,16 @@ export class RamCloud {
           rotateStrategy: 'DeleteOldestNonDefaultVersionWhenLimitExceeded',
         });
     }
+    guard();
     if (
       !(await this.userPolicies(c, userName)).some(
         (p) => p.name === policyName && p.type === 'Custom',
       )
-    )
+    ) {
+      guard();
       await this.attachPolicy(c, userName, policyName);
+    }
+    guard();
   }
   async keys(
     c: RamCredentials,

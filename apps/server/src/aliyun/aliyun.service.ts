@@ -210,7 +210,7 @@ export class AliyunService {
         accessKeyId: decryptSecret(oss.accessKeyIdEncrypted),
         accessKeySecret: decryptSecret(oss.accessKeySecretEncrypted),
       }));
-    if (ossAccountId === accountId)
+    if (ossAccountId === accountId && oss.migrationState !== 'complete')
       throw new ConflictException(
         '请先在 OSS 设置完成 OSS 身份迁移，再接入此云账号',
       );

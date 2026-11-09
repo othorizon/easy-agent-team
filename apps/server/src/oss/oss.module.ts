@@ -1,3 +1,5 @@
+import { CloudIdentitiesModule } from '../cloud-identities/cloud-identities.module';
+import { OssMigrationService } from './oss-migration.service';
 import { OssMigrationPreviewService } from './oss-migration-preview.service';
 import { OssToolsService } from './oss-tools.service';
 import { Module } from '@nestjs/common';
@@ -9,9 +11,9 @@ import { OssService } from './oss.service';
 import { OssController, OssSettingsController } from './oss.controller';
 
 @Module({
-  imports: [RamModule],
+  imports: [RamModule, CloudIdentitiesModule],
   controllers: [OssController, OssSettingsController],
-  providers: [OssCloud, OssStore, OssProvisioner, OssService, OssToolsService, OssMigrationPreviewService],
+  providers: [OssMigrationService, OssCloud, OssStore, OssProvisioner, OssService, OssToolsService, OssMigrationPreviewService],
   exports: [OssService, OssToolsService, OssMigrationPreviewService],
 })
 export class OssModule {}

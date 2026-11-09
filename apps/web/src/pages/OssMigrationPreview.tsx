@@ -1,6 +1,7 @@
+import { Confirm } from '../components/confirm';
 import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
-import { ossMigrationPreviewSchema, type OssMigrationIdentityPreview } from '@eat/shared';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ossMigrationPreviewSchema, ossMigrationStatusSchema, type OssMigrationIdentityPreview } from '@eat/shared';
 import { api } from '../api';
 import { DataTable, type DataTableColumn } from '../components/data-table';
 import { SettingsGroup } from '../components/settings';
@@ -8,6 +9,8 @@ import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Tip } from '../components/ui/tooltip';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
+
+const STAGE = { preflight: '核对来源', verified: '已确认云端身份', secured: '已切断停用用户凭证', renamed: '已改名', identity: '已保存个人身份', linked: '已关联 OSS', policy: '已同步空间授权', complete: '已完成' };
 
 const columns: DataTableColumn<OssMigrationIdentityPreview>[] = [
   {
@@ -97,18 +100,34 @@ const columns: DataTableColumn<OssMigrationIdentityPreview>[] = [
 
 export function OssMigrationPreview({ disabled }: { disabled: boolean }) {
   const [open, setOpen] = useState(false);
+  const client = useQueryClient();
+  const status = useQuery({ queryKey: ['oss', 'migration'], enabled: !disabled,
+    queryFn: async () => ossMigrationStatusSchema.parse(await api('GET', '/api/admin/oss-settings/migration')),
+    refetchInterval: query => query.state.data?.state === 'running' ? 3000 : false });
+  const execute = useMutation({
+    mutationFn: async () => ossMigrationStatusSchema.parse(await api('POST', '/api/admin/oss-settings/migration', { confirm: true })),
+    onSuccess: data => { client.setQueryData(['oss', 'migration'], data); void client.invalidateQueries({ queryKey: ['oss'] }); },
+    onSettled: () => { void status.refetch(); },
+  });
   const preview = useMutation({
     mutationFn: async () => ossMigrationPreviewSchema.parse(await api('GET', '/api/admin/oss-settings/migration-preview')),
   });
   const report = preview.data;
   return (
-    <SettingsGroup title="个人身份迁移" description="预演会逐人核对旧 RAM 身份、有效空间、拟迁移授权与真实 Key 状态。预演结果仅保存在当前窗口。">
+    <SettingsGroup title="个人身份迁移" description="预演会逐人核对旧 RAM 身份、有效空间、拟迁移授权与真实 Key 状态。执行会保留原 Key、空间前缀和聚合策略名。未完成时暂停 OSS 写操作，可重试恢复。">
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="secondary">只读预演</Badge>
+        <Badge variant="secondary">{status.data?.state === 'complete' ? '迁移完成' : status.data?.state === 'partial' ? '部分失败，写操作已暂停' : status.data?.state === 'running' ? '迁移中 / 待恢复' : '尚未迁移'}</Badge>
         <Button type="button" variant="outline" disabled={disabled} onClick={() => { preview.reset(); setOpen(true); preview.mutate(); }}>
           迁移预演
         </Button>
       </div>
+      {status.error && <p role="alert" className="text-sm text-destructive">{status.error.message}</p>}
+      {execute.error && <p role="alert" className="text-sm text-destructive">{execute.error.message}</p>}
+      {!!status.data?.results.length && <DataTable data={status.data.results} getRowId={row => row.userId} columns={[
+        { id: 'user', header: 'EAT 用户', cell: ({ row: { original: row } }) => <div className="space-y-1"><p>{row.name}</p><p className="break-all text-xs text-muted-foreground">{row.email}</p></div> },
+        { id: 'target', header: '目标个人身份', cell: ({ row: { original: row } }) => <code className="break-all text-xs">{row.targetRamName}</code> },
+        { id: 'state', header: '结果', cell: ({ row: { original: row } }) => <div className="space-y-1"><Badge variant={row.state === 'complete' ? 'success' : row.state === 'failed' ? 'destructive' : 'secondary'}>{row.state === 'complete' ? '已完成' : row.state === 'failed' ? '失败，可重试' : '待恢复'}</Badge><p className="text-xs text-muted-foreground">进度：{STAGE[row.stage]}</p>{row.error && <p className="break-words text-xs text-destructive">{row.error}</p>}</div> },
+      ]} />}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="sm:max-w-6xl">
           <DialogHeader>
@@ -116,6 +135,7 @@ export function OssMigrationPreview({ disabled }: { disabled: boolean }) {
             <DialogDescription>读取当前云端状态；不会改名、创建个人身份、修改 Key 或写入迁移结果。执行前需要重新核对。</DialogDescription>
           </DialogHeader>
           {preview.isPending && <p role="status" className="text-sm text-muted-foreground">正在读取 RAM 个人身份、Key 和策略…</p>}
+          {execute.error && <p role="alert" className="break-words text-sm text-destructive">{execute.error.message}</p>}
           {preview.error && <p role="alert" className="break-words text-sm text-destructive">{preview.error.message}</p>}
           {report && (
             <>
@@ -131,9 +151,9 @@ export function OssMigrationPreview({ disabled }: { disabled: boolean }) {
           )}
           <div className="flex flex-wrap justify-end gap-2">
             <Button type="button" variant="outline" loading={preview.isPending} onClick={() => preview.mutate()}>重新预演</Button>
-            <Tip content="执行迁移功能尚未启用；当前仅提供只读预演。">
-              <span tabIndex={0}><Button type="button" disabled>执行迁移</Button></span>
-            </Tip>
+            <Confirm title="执行 OSS 个人身份迁移？" description="将逐人改名并迁入统一个人身份，保留当前 Key；没有有效空间的旧 Deny 会解绑。迁移期间暂停 OSS 写操作，失败的人可再次确认重试，已完成的人会跳过。执行时服务器将重新预检，单人冲突不影响其他人。" confirmText="确认执行迁移" onConfirm={() => execute.mutate()}>
+              <Button type="button" loading={execute.isPending} disabled={!report || !!report.conflicts.length || execute.isPending || status.data?.state === 'complete'}>{status.data?.state === 'partial' || status.data?.state === 'running' ? '重试未完成迁移' : '执行迁移'}</Button>
+            </Confirm>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>关闭</Button>
           </div>
         </DialogContent>

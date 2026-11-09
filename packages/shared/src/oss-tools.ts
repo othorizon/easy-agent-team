@@ -79,7 +79,7 @@ export function buildOssTools(): EatToolDef[] {
     },
     {
       name: 'reset_oss_credentials',
-      description: `重置本人共享 OSS 凭证。${OSS_CREDENTIAL_NOTE} 只有用户明确要求重置时使用；用 get_oss_operation 查询完成后重新领取凭证。`,
+      description: `重置本人的个人凭证；同一云账号下的 OSS 空间与阿里云权限共用这把 Key，旧凭证都会失效。${OSS_CREDENTIAL_NOTE} 只有用户明确要求重置时使用；用 get_oss_operation 查询完成后重新领取凭证。`,
       inputSchema: { type: 'object', properties: {} },
     },
     {

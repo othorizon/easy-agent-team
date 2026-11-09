@@ -63,9 +63,9 @@ export function registerOssCommands(program: Command) {
     .action(() => ossCall('get_oss_credentials'));
   credentials
     .command('reset')
-    .description('重置共享凭证，所有空间的旧凭证将失效')
+    .description('重置个人凭证，同一云账号下所有 OSS 空间与阿里云权限的旧凭证将失效')
     .requiredOption('--yes', '确认影响全部空间')
-    .action(() => ossCall('reset_oss_credentials'));
+    .action(() => { console.error('同一云账号下的 OSS 空间与阿里云权限共用这把 Key，重置后都需更新配置。'); return ossCall('reset_oss_credentials'); });
   oss
     .command('operation <id>')
     .description('查询重置等后台操作状态')

@@ -1,11 +1,11 @@
 import { ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { and, asc, eq, lte, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, lte, ne, sql } from 'drizzle-orm';
 import type { AliyunGrantInfo, AliyunGrantsResult, AliyunGrantSource, GrantAliyunPermissionRequest } from '@eat/shared';
 import type { AuthUser } from '../auth/auth.decorators';
 import { AuditService } from '../audit/audit.service';
 import { CloudIdentitiesService, type IdentitySession } from '../cloud-identities/cloud-identities.service';
 import { DB, type Db } from '../db/db.module';
-import { aliyunConnections, aliyunGrants, aliyunOperations, aliyunPermissions, cloudIdentities, users } from '../db/schema';
+import { aliyunConnections, aliyunGrants, aliyunOperations, aliyunPermissions, cloudIdentities, ossAccounts, ossSpaces, users } from '../db/schema';
 import { NotifierService } from '../notify/notifier.service';
 import { RamCloudError } from '../ram/ram-cloud';
 import { AliyunService } from './aliyun.service';
@@ -203,7 +203,14 @@ export class AliyunGrantsService {
         accounts.push({ accountId: c.accountId, connectionId: c.id, connectionName: c.name, connectionStatus: c.status, identityId: identity.id, ramName: identity.ramName, customPolicyCount, error });
       }
     }
-    return { grants, accounts, drift: manage ? await this.maintenance.inspectAll(actor) : [] };
+    const spaces = manage ? [] : await this.db.select({ space: ossSpaces, identity: cloudIdentities, connection: aliyunConnections }).from(ossSpaces)
+      .innerJoin(ossAccounts, eq(ossAccounts.userId, ossSpaces.ownerId))
+      .innerJoin(cloudIdentities, eq(cloudIdentities.id, ossAccounts.identityId))
+      .leftJoin(aliyunConnections, eq(aliyunConnections.accountId, cloudIdentities.accountId))
+      .where(and(eq(ossSpaces.ownerId, actor.id), isNotNull(ossAccounts.identityId)));
+    return { grants, accounts, drift: manage ? await this.maintenance.inspectAll(actor) : [], ossSpaces: spaces.map(({ space, identity, connection }) => ({ id: space.id, name: space.name,
+      prefix: space.prefix, status: space.status, accountId: identity.accountId, identityId: identity.id,
+      connectionId: connection?.id ?? null, connectionName: connection?.name ?? null })) };
   }
   private async info(actor: AuthUser, id: string): Promise<AliyunGrantInfo> {
     // The holder may relinquish an authorization that is not visible in the management list.

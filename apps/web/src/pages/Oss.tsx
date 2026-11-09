@@ -337,7 +337,7 @@ function Credentials({ enabled }: { enabled: boolean }) {
           </Button>
           <Confirm
             title="重置所有空间的凭证？"
-            description="旧 AK/SK 将失效，所有使用它的客户端都需要更新。重置任务完成后可重新查看凭证。"
+            description="同一云账号下的 OSS 空间与阿里云权限共用个人 Key；重置后旧 AK/SK 将失效，所有使用它的客户端都需要更新。重置任务完成后可重新查看凭证。"
             onConfirm={() => reset.mutate()}
           >
             <Button

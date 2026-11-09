@@ -83,3 +83,17 @@ it('grants输出个人用途说明，revoke按权限点只放弃本人授权且�
   await expect(aliyunRevoke('eat-perm-read')).rejects.toThrow(/--account/);
   expect(request.mock.calls.filter(([m]) => m === 'POST')).toHaveLength(0);
 });
+
+it('仅剩同云账号有效OSS空间时仍可解析并读取同一把个人Key，已回收空间不提供候选', async () => {
+  const request = fixture([]);
+  const space = { id: 'space', name: 'OSS', prefix: 'prefix/', status: 'active', accountId: 'account-one', connectionId: 'c1', connectionName: 'cloud-one', identityId: 'identity' };
+  request.mockImplementation(async (method, url) => method === 'GET' ? { grants: [], accounts: [], ossSpaces: [space] } : credential);
+  await aliyunCredentials({ account: 'cloud-one' });
+  expect(request).toHaveBeenCalledWith('POST', '/api/aliyun/connections/c1/credentials');
+  await aliyunGrants();
+  expect(console.log).toHaveBeenCalledWith(expect.stringContaining('OSS 空间 OSS'));
+  request.mockClear();
+  request.mockImplementation(async () => ({ grants: [], accounts: [], ossSpaces: [{ ...space, status: 'revoked' }] }));
+  await expect(aliyunRun(undefined, [process.execPath, '-e', 'process.exit(77)'])).rejects.toThrow(/没有任何.*授权/);
+  expect(request.mock.calls.filter(([method]) => method === 'POST')).toHaveLength(0);
+});
