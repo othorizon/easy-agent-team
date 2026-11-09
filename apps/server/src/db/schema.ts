@@ -1277,6 +1277,12 @@ export const dbPersonalRoles = pgTable('db_personal_role', {
   pendingPasswordEncrypted: text('pending_password_encrypted'),
   provisioned: boolean('provisioned').notNull().default(false),
   passwordError: text('password_error'),
+  /** 已完成的个人登录状态；期望值始终取当前 EAT 用户状态。 */
+  loginEnabled: boolean('login_enabled').notNull().default(true),
+  syncPending: boolean('sync_pending').notNull().default(false),
+  syncError: text('sync_error'),
+  syncAttempts: integer('sync_attempts').notNull().default(0),
+  syncRetryAt: timestamp('sync_retry_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [uniqueIndex('db_personal_role_instance_user_idx').on(t.instanceId, t.userId)]);
 

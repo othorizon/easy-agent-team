@@ -9,6 +9,6 @@ import { DbsService } from './dbs.service';
   controllers: [DbsController, DbAccessController],
   providers: [DbsService, DbAccessService, DbAccessRequests],
   // MCP 端点的工具实现直接调这层（决策 55：不绕回自己的 REST）
-  exports: [DbsService, DbAccessRequests],
+  exports: [DbsService, DbAccessRequests, DbAccessService],
 })
 export class DbsModule {}

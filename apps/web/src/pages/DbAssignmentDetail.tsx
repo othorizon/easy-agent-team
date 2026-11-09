@@ -108,6 +108,7 @@ export function DbAssignmentDetailPage() {
               <Dt>申请人</Dt>
               <Dd>
                 {r.requesterName}
+                {r.ownerDisabled && <Badge variant="warning" className="ml-2">Owner 已停用</Badge>}
                 <span className="ml-2 text-xs text-muted-foreground">{formatDateTime(r.createdAt)} 申请</span>
               </Dd>
               <Dt>处理</Dt>

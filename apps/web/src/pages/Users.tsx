@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { createUserRequestSchema, resetUserPasswordRequestSchema, type UserListItem, type UserNotificationStatus } from '@eat/shared';
+import { createUserRequestSchema, resetUserPasswordRequestSchema, type UpdateUserResult, type UserListItem, type UserNotificationStatus } from '@eat/shared';
 import { toast } from 'sonner';
 import { api, ApiError, getStoredUser, getToken, setSession } from '../api';
 import { Switch } from '../components/ui/switch';
@@ -64,7 +64,7 @@ export function UsersPage() {
   const [name, setName] = useState('');
   const [bio, setBio] = useState('');
 
-  const users = useQuery({ queryKey: ['users'], queryFn: () => api<UserRow[]>('GET', '/api/users') });
+  const users = useQuery({ queryKey: ['users'], queryFn: () => api<UserRow[]>('GET', '/api/users'), refetchInterval: query => query.state.data?.some(u => u.dbSyncPending) ? 5000 : false });
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['users'] });
   const onError = (err: unknown) => toast.error(err instanceof ApiError ? err.message : '操作失败');
 
@@ -81,12 +81,13 @@ export function UsersPage() {
 
   const update = useMutation({
     mutationFn: (v: { id: string; role?: 'admin' | 'member'; status?: 'active' | 'disabled'; canNotifyAll?: boolean }) =>
-      api<{ llmGatewaySyncPending?: boolean; ossSyncPending?: boolean }>('PATCH', `/api/users/${v.id}`, { role: v.role, status: v.status, canNotifyAll: v.canNotifyAll }),
+      api<UpdateUserResult>('PATCH', `/api/users/${v.id}`, { role: v.role, status: v.status, canNotifyAll: v.canNotifyAll }),
     onSuccess: (_d, v) => {
       setPermissions(null); setStatusUser(null);
-      toast.success(v.status === 'disabled' ? '已禁用（其 EAT 登录凭证已吊销）' : '已更新');
+      toast.success(v.status === 'disabled' ? '已停用（其 EAT 登录凭证已吊销）' : '已更新');
       if (_d.ossSyncPending) toast.info('OSS 凭证状态正在同步，可在对应 OSS 空间详情查看进度');
       if (_d.llmGatewaySyncPending) toast.info('模型 API Key 的状态仍在同步，请在“LLM API 网关 → 成员与额度”查看进度');
+      if (_d.dbSyncPending) toast.info('个人数据库身份同步待完成，平台将自动重试；用户列表显示同步状态');
       invalidate();
     },
     onError,
@@ -128,7 +129,8 @@ export function UsersPage() {
     { accessorKey: 'role', header: '角色', meta: { hideBelow: 'md' }, cell: ({ row: { original: row } }) =>
       <Badge variant={row.role === 'admin' ? 'warning' : 'secondary'}>{row.role === 'admin' ? '管理员' : '成员'}</Badge> },
     { accessorKey: 'status', header: '状态', meta: { className: 'whitespace-nowrap' }, cell: ({ row: { original: row } }) =>
-      <Badge variant={row.status === 'active' ? 'success' : 'destructive'}>{row.status === 'active' ? '正常' : '已禁用'}</Badge> },
+      <div className="space-y-1"><Badge variant={row.status === 'active' ? 'success' : 'destructive'}>{row.status === 'active' ? '正常' : '已停用'}</Badge>
+        {row.dbSyncPending && <div><Tip content={row.dbSyncError ?? '个人数据库身份状态正在同步，平台将自动重试'}><Badge variant="warning">数据库同步待完成</Badge></Tip></div>}</div> },
     { id: 'broadcast', header: '全员通知', meta: { hideBelow: 'lg' }, cell: ({ row: { original: row } }) =>
       row.canNotifyAll ? <Badge variant="outline">允许发送</Badge> : <span className="text-sm text-muted-foreground">未授权</span> },
     { id: 'feishu', header: '飞书通知', meta: { hideBelow: 'lg' }, cell: ({ row: { original: row } }) => <NotificationBadge status={row.notification} /> },
@@ -144,7 +146,7 @@ export function UsersPage() {
           <DropdownMenuItem onSelect={() => setGithubUser(row)}>GitHub 详情</DropdownMenuItem>
           {row.id !== me?.id && <><DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => setResetting(row)}>重置密码</DropdownMenuItem>
-            <DropdownMenuItem destructive={row.status === 'active'} onSelect={() => setStatusUser(row)}>{row.status === 'active' ? '禁用账号' : '启用账号'}</DropdownMenuItem>
+            <DropdownMenuItem destructive={row.status === 'active'} onSelect={() => setStatusUser(row)}>{row.status === 'active' ? '停用用户' : '启用用户'}</DropdownMenuItem>
           </>}
         </DropdownMenuContent>
       </DropdownMenu> },
@@ -154,7 +156,7 @@ export function UsersPage() {
     <div className="space-y-5">
       <PageHeader
         title="用户"
-        description="管理团队账号、角色与通知权限。"
+        description="管理团队用户、角色与通知权限。"
         actions={
           <>
             <Button variant="outline" asChild><Link to="/settings?section=registration">注册与登录设置</Link></Button>
@@ -170,8 +172,8 @@ export function UsersPage() {
         <CardContent className="space-y-4">
           <div className="flex flex-wrap gap-3">
             <Input className="w-full sm:max-w-xs" aria-label="搜索用户" placeholder="搜索姓名、邮箱、ID 或 GitHub" value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} />
-            <Select value={status} onValueChange={v => { setStatus(v); setPage(1); }}><SelectTrigger className="w-32" aria-label="账号状态"><SelectValue /></SelectTrigger><SelectContent>
-              <SelectItem value="all">全部状态</SelectItem><SelectItem value="active">正常</SelectItem><SelectItem value="disabled">已禁用</SelectItem>
+            <Select value={status} onValueChange={v => { setStatus(v); setPage(1); }}><SelectTrigger className="w-32" aria-label="用户状态"><SelectValue /></SelectTrigger><SelectContent>
+              <SelectItem value="all">全部状态</SelectItem><SelectItem value="active">正常</SelectItem><SelectItem value="disabled">已停用</SelectItem>
             </SelectContent></Select>
           </div>
           {users.isError ? <div role="alert" className="text-sm text-destructive">用户列表加载失败。<Button variant="ghost" onClick={() => void users.refetch()}>重试</Button></div> : <>
@@ -197,10 +199,10 @@ export function UsersPage() {
         <GithubAccountPanel userId={githubUser.id} />
       </DialogContent></Dialog>}
       {statusUser && <Dialog open onOpenChange={open => !open && !update.isPending && setStatusUser(null)}><DialogContent>
-        <DialogHeader><DialogTitle>{statusUser.status === 'active' ? '禁用' : '启用'} {statusUser.name}？</DialogTitle><DialogDescription>
-          {statusUser.status === 'active' ? '其 EAT 登录凭证将立即吊销，模型 API Key 和 OSS 权限将同步停用，云端生效存在传播延迟。' : '恢复账号使用权限，用户需要重新登录。'}
+        <DialogHeader><DialogTitle>{statusUser.status === 'active' ? '停用' : '启用'} {statusUser.name}？</DialogTitle><DialogDescription>
+          {statusUser.status === 'active' ? '其 EAT 登录凭证将立即吊销，模型 API Key、OSS 个人凭证和数据库个人登录角色将同步停用，并断开数据库个人会话。分配的 owner 账号照常可用。同步失败时平台会自动重试。' : '恢复 EAT 用户和个人凭证，原数据库授权与级别保留；用户需要重新登录。'}
         </DialogDescription></DialogHeader><div className="flex justify-end gap-2"><Button variant="outline" disabled={update.isPending} onClick={() => setStatusUser(null)}>取消</Button>
-          <Button variant={statusUser.status === 'active' ? 'destructive' : 'default'} loading={update.isPending} onClick={() => update.mutate({ id: statusUser.id, status: statusUser.status === 'active' ? 'disabled' : 'active' })}>确认{statusUser.status === 'active' ? '禁用' : '启用'}</Button></div>
+          <Button variant={statusUser.status === 'active' ? 'destructive' : 'default'} loading={update.isPending} onClick={() => update.mutate({ id: statusUser.id, status: statusUser.status === 'active' ? 'disabled' : 'active' })}>确认{statusUser.status === 'active' ? '停用' : '启用'}</Button></div>
       </DialogContent></Dialog>}
       {creating && (
         <CreateUserDialog pending={create.isPending} onClose={() => setCreating(false)} onSubmit={(v) => create.mutate(v)} />

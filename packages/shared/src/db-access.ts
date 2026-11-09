@@ -37,6 +37,7 @@ export const dbAccessDeletedSchema = z.object({ ok: z.literal(true) });
 export const dbCatalogInfoSchema = z.object({
   id: z.string().nullable(), assignmentId: z.string().nullable(), instanceId: z.string(), instanceName: z.string(),
   dbName: z.string(), source: z.enum(['eat', 'external']), ownerId: z.string(), ownerName: z.string(),
+  ownerDisabled: z.boolean(),
   creatorRole: z.string().nullable(), publicCheck: dbPublicCheckSchema.nullable(),
   open: z.boolean(), schemas: z.array(z.string()), state: z.enum(['pending', 'active', 'failed']),
   error: z.string().nullable(), canManage: z.boolean(), drift: dbAccessDriftSchema.optional(),

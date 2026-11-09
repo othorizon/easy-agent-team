@@ -68,6 +68,7 @@ export const dbAssignmentInfoSchema = z.object({
   status: dbAssignmentStatusSchema,
   requesterId: z.string(),
   requesterName: z.string(),
+  ownerDisabled: z.boolean(),
   /** 最后一次处理（批准 / 驳回 / 禁用 / 恢复 / 删除）的管理员，未处理过为 null */
   decidedByName: z.string().nullable(),
   /**

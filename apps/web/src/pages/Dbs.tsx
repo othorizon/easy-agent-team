@@ -136,6 +136,7 @@ export function DbsPage() {
       cell: ({ row: { original: r } }) => (
         <Link to={`/db/${r.id}`}>
           <InlineCode className="text-primary hover:underline">{r.dbName}</InlineCode>
+          {r.ownerDisabled && <Badge variant="warning" className="ml-2">Owner 已停用</Badge>}
         </Link>
       ),
     },

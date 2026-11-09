@@ -9,6 +9,9 @@ export interface UserListItem {
   role: 'admin' | 'member';
   /** 仅管理员返回；普通用户目录只包含正常账号，不返回状态字段。 */
   status?: 'active' | 'disabled';
+  /** 个人数据库身份的状态同步摘要，仅管理员可见。 */
+  dbSyncPending?: boolean;
+  dbSyncError?: string | null;
   bio: string;
   canNotifyAll: boolean;
   notificationReady: boolean;

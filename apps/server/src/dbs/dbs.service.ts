@@ -154,10 +154,10 @@ export class DbsService {
     const userNameById = new Map(
       (
         await this.db
-          .select({ id: users.id, name: users.name })
+          .select({ id: users.id, name: users.name, status: users.status })
           .from(users)
           .where(inArray(users.id, userIds))
-      ).map((u) => [u.id, u.name]),
+      ).map((u) => [u.id, u]),
     );
     return rows.map((row) => {
       const instance = instanceById.get(row.instanceId);
@@ -173,9 +173,10 @@ export class DbsService {
         purpose: row.purpose,
         status: row.status,
         requesterId: row.requesterId,
-        requesterName: userNameById.get(row.requesterId) ?? "(已删除)",
+        requesterName: userNameById.get(row.requesterId)?.name ?? "(已删除)",
+        ownerDisabled: userNameById.get(row.requesterId)?.status !== 'active',
         decidedByName: row.decidedBy
-          ? (userNameById.get(row.decidedBy) ?? "(已删除)")
+          ? (userNameById.get(row.decidedBy)?.name ?? "(已删除)")
           : null,
         hasCredentials: row.passwordEncrypted !== null,
         error: row.error,

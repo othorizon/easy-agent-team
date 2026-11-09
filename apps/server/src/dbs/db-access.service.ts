@@ -11,7 +11,7 @@ import { DB, PG_POOL, type Db } from '../db/db.module';
 import { dbAccessGrants, dbAssignments, dbCatalog, dbInstances, dbPersonalRoles, users } from '../db/schema';
 import { NotifierService } from '../notify/notifier.service';
 import { grantPostgresAccess, openPostgresAccess, revokePostgresAccess } from './access-provisioner';
-import { resetPostgresPersonalPassword } from './personal-role-provisioner';
+import { resetPostgresPersonalPassword, syncPostgresPersonalLogin } from './personal-role-provisioner';
 import type { AdminConn } from './provisioner';
 import { inspectPostgresAccess, repairPostgresAccess, type ExpectedDbMember } from './access-drift-provisioner';
 import { cleanupPostgresAccessRoles, type ManagedDbRole } from './access-cleanup-provisioner';
@@ -48,6 +48,12 @@ export class DbAccessService {
     await this.lockPool.end();
   }
   private async recover() {
+    const statusPending = await this.db.select({ p: dbPersonalRoles }).from(dbPersonalRoles).innerJoin(users, eq(users.id, dbPersonalRoles.userId))
+      .where(and(or(eq(dbPersonalRoles.syncPending, true), sql`${dbPersonalRoles.loginEnabled} <> (${users.status}='active')`), or(sql`${dbPersonalRoles.syncRetryAt} is null`, sql`${dbPersonalRoles.syncRetryAt} <= now()`)));
+    for (const { p } of statusPending) {
+      if (this.stopped) return;
+      await this.syncPersonalStatus(p);
+    }
     const rotating = await this.db.select().from(dbPersonalRoles).where(isNotNull(dbPersonalRoles.pendingPasswordEncrypted));
     for (const initial of rotating) {
       if (this.stopped) return;
@@ -82,6 +88,40 @@ export class DbAccessService {
     }
     // 外部执行已完成但快照写入前进程退出时，下次恢复仍会修正申请中心。
     await this.syncRequestExecution();
+  }
+
+  async onUserStatusChanged(userId: string): Promise<boolean> {
+    const identities = await this.db.select().from(dbPersonalRoles).where(eq(dbPersonalRoles.userId, userId));
+    for (const p of identities) await this.syncPersonalStatus(p, true);
+    const [result] = await this.db.select({ pending: sql<boolean>`exists(select 1 from db_personal_role p where p.user_id=${userId} and (p.sync_pending or p.login_enabled <> ("user".status='active')))` }).from(users).where(eq(users.id, userId));
+    return result?.pending ?? false;
+  }
+  private async syncPersonalStatus(initial: PersonalRole, force = false): Promise<void> {
+    try {
+      await this.locked(initial.instanceId, async guard => {
+        const [p] = await this.db.select().from(dbPersonalRoles).where(eq(dbPersonalRoles.id, initial.id));
+        if (!p) return; // 实例删除与安全同步使用同一把实例锁。
+        if (!force && p.syncRetryAt && p.syncRetryAt > new Date()) return;
+        await this.applyPersonalStatus(p, guard);
+      });
+    } catch (e) { this.logger.warn(`个人数据库身份状态同步待完成：${this.error(e)}`); }
+  }
+  private async applyPersonalStatus(identity: PersonalRole, guard: () => void): Promise<boolean> {
+    const [target] = await this.db.select({ status: users.status }).from(users).where(eq(users.id, identity.userId));
+    const enabled = target?.status === 'active';
+    guard();
+    await this.db.update(dbPersonalRoles).set({ syncPending: true }).where(eq(dbPersonalRoles.id, identity.id));
+    try {
+      await syncPostgresPersonalLogin(await this.connection(identity.instanceId, true), identity, enabled, guard);
+      guard();
+      await this.db.update(dbPersonalRoles).set({ loginEnabled: enabled, syncPending: sql`exists(select 1 from "user" u where u.id=${identity.userId} and (u.status='active') <> ${enabled})`, syncError: null, syncAttempts: 0, syncRetryAt: null }).where(eq(dbPersonalRoles.id, identity.id));
+      return true;
+    } catch (e) {
+      guard();
+      const attempts = identity.syncAttempts + 1;
+      await this.db.update(dbPersonalRoles).set({ syncPending: true, syncError: this.error(e), syncAttempts: attempts, syncRetryAt: new Date(Date.now() + Math.min(30_000 * 2 ** Math.min(attempts - 1, 7), 3_600_000)) }).where(eq(dbPersonalRoles.id, identity.id));
+      return false;
+    }
   }
 
   /** 跨进程按实例串行执行；外部 PG 操作不放在平台数据库事务中。 */
@@ -224,14 +264,14 @@ export class DbAccessService {
     });
   }
   async listCatalog(user: AuthUser, checkDrift = false): Promise<DbCatalogInfo[]> {
-    const rows = await this.db.select({ a: dbAssignments, c: dbCatalog, i: dbInstances, ownerName: users.name })
+    const rows = await this.db.select({ a: dbAssignments, c: dbCatalog, i: dbInstances, ownerName: users.name, ownerStatus: users.status })
       .from(dbAssignments).innerJoin(dbInstances, eq(dbInstances.id, dbAssignments.instanceId))
       .innerJoin(users, eq(users.id, dbAssignments.requesterId)).leftJoin(dbCatalog, eq(dbCatalog.assignmentId, dbAssignments.id))
       .where(and(eq(dbInstances.engine, 'postgres'), inArray(dbAssignments.status, ['active', 'disabled']), user.role === 'admin' ? undefined : or(eq(dbAssignments.requesterId, user.id), and(eq(dbCatalog.open, true), eq(dbCatalog.state, 'active')))));
-    const external = await this.db.select({ c: dbCatalog, i: dbInstances, ownerName: users.name })
+    const external = await this.db.select({ c: dbCatalog, i: dbInstances, ownerName: users.name, ownerStatus: users.status })
       .from(dbCatalog).innerJoin(dbInstances, eq(dbInstances.id, dbCatalog.instanceId)).innerJoin(users, eq(users.id, dbCatalog.ownerId))
       .where(and(eq(dbCatalog.source, 'external'), user.role === 'admin' ? undefined : or(eq(dbCatalog.ownerId, user.id), and(eq(dbCatalog.open, true), eq(dbCatalog.state, 'active')))));
-    const result: DbCatalogInfo[] = [...rows.map(({ a, c, i, ownerName }) => ({ id: c?.id ?? null, assignmentId: a.id, instanceId: i.id, instanceName: i.name, dbName: a.dbName, source: 'eat' as const, creatorRole: c?.creatorRole ?? a.dbUser, publicCheck: c?.publicCheck ?? null, ownerId: a.requesterId, ownerName, open: c?.open ?? false, schemas: c?.schemas ?? ['public'], state: c?.state ?? 'pending', error: c?.error ?? null, canManage: user.role === 'admin' || a.requesterId === user.id })), ...external.map(({ c, i, ownerName }) => ({ ...c, instanceName: i.name, ownerName, canManage: user.role === 'admin' || c.ownerId === user.id }))];
+    const result: DbCatalogInfo[] = [...rows.map(({ a, c, i, ownerName, ownerStatus }) => ({ id: c?.id ?? null, assignmentId: a.id, instanceId: i.id, instanceName: i.name, dbName: a.dbName, source: 'eat' as const, creatorRole: c?.creatorRole ?? a.dbUser, publicCheck: c?.publicCheck ?? null, ownerId: a.requesterId, ownerName, ownerDisabled: ownerStatus !== 'active', open: c?.open ?? false, schemas: c?.schemas ?? ['public'], state: c?.state ?? 'pending', error: c?.error ?? null, canManage: user.role === 'admin' || a.requesterId === user.id })), ...external.map(({ c, i, ownerName, ownerStatus }) => ({ ...c, instanceName: i.name, ownerName, ownerDisabled: ownerStatus !== 'active', canManage: user.role === 'admin' || c.ownerId === user.id }))];
     if (checkDrift && user.role === 'admin') for (const item of result) if (item.id) {
       try { item.drift = await this.inspectDrift(await this.catalog(item.id)); }
       catch (e) { item.drift = { checkedAt: new Date().toISOString(), consistent: false, error: this.error(e), members: [] }; }
@@ -422,6 +462,11 @@ export class DbAccessService {
       let [identity] = await this.db.select().from(dbPersonalRoles).where(and(eq(dbPersonalRoles.instanceId, c.instanceId), eq(dbPersonalRoles.userId, g.userId)));
       guard();
       if (!identity) [identity] = await this.db.insert(dbPersonalRoles).values({ instanceId: c.instanceId, userId: g.userId, roleName: `eat-${g.userId}`, passwordEncrypted: encryptSecret(randomBytes(24).toString('hex')) }).returning();
+      await this.assertPersonalUserActive(identity.userId);
+      if (identity.syncPending || !identity.loginEnabled) {
+        if (!await this.applyPersonalStatus(identity, guard)) throw new ConflictException('个人数据库身份同步待完成，请稍后重试');
+        [identity] = await this.db.select().from(dbPersonalRoles).where(eq(dbPersonalRoles.id, identity.id));
+      }
       if (identity.pendingPasswordEncrypted) {
         if (!await this.applyPassword(identity, guard)) throw new ConflictException('个人密码重置待完成，请稍后重试');
         [identity] = await this.db.select().from(dbPersonalRoles).where(eq(dbPersonalRoles.id, identity.id));
@@ -447,11 +492,22 @@ export class DbAccessService {
     if (!g) throw new ForbiddenException('只有授权持有人本人可读取或重置个人凭证，且授权必须已生效');
     return g;
   }
+  private async assertPersonalUserActive(userId: string): Promise<void> {
+    const [target] = await this.db.select({ status: users.status }).from(users).where(eq(users.id, userId));
+    if (target?.status !== 'active') throw new ConflictException('目标 EAT 用户已停用，不能创建或启用个人身份');
+  }
   private async personalIdentity(c: Catalog, g: Grant, guard: () => void): Promise<PersonalRole> {
     let [identity] = await this.db.select().from(dbPersonalRoles).where(and(eq(dbPersonalRoles.instanceId, c.instanceId), eq(dbPersonalRoles.userId, g.userId)));
     if (!identity) {
       guard();
       [identity] = await this.db.insert(dbPersonalRoles).values({ instanceId: c.instanceId, userId: g.userId, roleName: `eat-${g.userId}`, passwordEncrypted: encryptSecret(randomBytes(24).toString('hex')) }).returning();
+    }
+    // 先持久化身份，再检查用户状态：状态钩子一定能发现后续远端操作。
+    await this.assertPersonalUserActive(identity.userId);
+    if (identity.syncPending || !identity.loginEnabled) {
+      if (!await this.applyPersonalStatus(identity, guard)) throw new ConflictException('个人数据库身份同步待完成，请稍后重试');
+      [identity] = await this.db.select().from(dbPersonalRoles).where(eq(dbPersonalRoles.id, identity.id));
+      if (identity.syncPending || !identity.loginEnabled) throw new ConflictException('个人数据库身份同步待完成，请稍后重试');
     }
     if (!identity.provisioned) {
       try {
