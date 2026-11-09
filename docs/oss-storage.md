@@ -20,6 +20,8 @@ EAT 为成员在同一个阿里云 OSS Bucket 下分配空间。管理员先配�
 
 用户可自行设置空间内对象 ACL。关闭目录公开读只移除 EAT 授权，不重写对象 ACL，也不清理 CDN 缓存。私有 Bucket 回源不代表 CDN 访客需要鉴权。
 
+RAM 用户、策略、AccessKey 和 STS 身份读取统一经过独立的 `RamCloud` 适配层，OSS 的 Bucket、对象和 Bucket Policy 调用保留在 `OssCloud`。每次 RAM 调用都显式传入 OSS 的管理凭证；适配层不保存全局凭证。测试的 RAM 状态由 `TestRamCloud` 管理，对象存储替身从同一份 RAM 状态判断用户 Key 与策略授权。接口与错误分类见 [RAM 适配层](ram.md)。
+
 ## 管理凭证权限
 
 建议使用专用 RAM 管理身份。所需操作以实际启用检查为准，至少包括：

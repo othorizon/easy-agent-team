@@ -16,6 +16,7 @@ import {
 } from '../db/schema';
 import { decryptSecret, encryptSecret } from '../common/crypto';
 import { OssCloud, type OssConnection } from './oss-cloud';
+import { RamCloud } from '../ram/ram-cloud';
 import { canonical, mergePublicPolicy, publicStatements } from './oss-policy';
 
 export type OssSettingRow = typeof ossSettings.$inferSelect;
@@ -32,6 +33,7 @@ export class OssStore {
     @Inject(DB) readonly db: Db,
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly cloud: OssCloud,
+    private readonly ram: RamCloud,
   ) {}
   /** Session advisory lock spans cloud work, but never holds a SQL transaction across network I/O. */
   async exclusive<T>(work: (guard: () => void) => Promise<T>): Promise<T> {
@@ -149,7 +151,7 @@ export class OssStore {
         );
         if (
           info.accountId !== r.accountId ||
-          (await this.cloud.callerAccount(
+          (await this.ram.callerAccount(
             this.connection({ ...r, ...values }),
           )) !== r.accountId
         )

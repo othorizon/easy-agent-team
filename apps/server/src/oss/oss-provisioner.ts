@@ -11,25 +11,25 @@ import {
   users,
 } from '../db/schema';
 import { decryptSecret, encryptSecret } from '../common/crypto';
-import {
-  OssCloud,
-  OssCloudError,
-  cloudMissing,
-  type OssConnection,
-} from './oss-cloud';
+import { OssCloud, OssCloudError, type OssConnection } from './oss-cloud';
 import {
   OssStore,
   type OssAccountRow,
   type OssOperationRow,
 } from './oss-store';
 import { userPolicy } from './oss-policy';
+import { RamCloud, RamCloudError, ramMissing } from '../ram/ram-cloud';
 
 export const ossMarker = (instance: string, owner: string) =>
   `EAT OSS ${instance} ${owner}`;
 export const ossRamName = (instance: string, owner: string) =>
   `eat-oss-${instance.replaceAll('-', '').slice(0, 12)}-${owner.replaceAll('-', '')}`;
 export function ossError(e: unknown): string {
-  if (e instanceof OssCloudError || e instanceof ConflictException)
+  if (
+    e instanceof OssCloudError ||
+    e instanceof RamCloudError ||
+    e instanceof ConflictException
+  )
     return e.message;
   // Policy/ownership errors are locally authored; never forward arbitrary SDK or DB messages.
   if (
@@ -47,6 +47,7 @@ export class OssProvisioner {
   constructor(
     private readonly store: OssStore,
     private readonly cloud: OssCloud,
+    private readonly ram: RamCloud,
   ) {}
   async syncUser(
     userId: string,
@@ -70,7 +71,7 @@ export class OssProvisioner {
         .returning();
     }
     guard();
-    await this.cloud.ensureUser(
+    await this.ram.ensureUser(
       c,
       account.ramName,
       ossMarker(r.instanceId, userId),
@@ -85,7 +86,7 @@ export class OssProvisioner {
         ),
       );
     guard();
-    await this.cloud.applyUserPolicy(
+    await this.ram.applyUserPolicy(
       c,
       account.ramName,
       account.policyName,
@@ -102,23 +103,23 @@ export class OssProvisioner {
     let a = await this.store.account(userId);
     if (!a) throw new ConflictException('RAM 账号尚未创建');
     if (a.keyBaseline !== null) {
-      for (const k of await this.cloud.keys(c, a.ramName))
+      for (const k of await this.ram.keys(c, a.ramName))
         if (!a.keyBaseline.includes(k.id)) {
           guard();
-          await this.cloud.deleteKey(c, a.ramName, k.id);
+          await this.ram.deleteKey(c, a.ramName, k.id);
         }
       a = await this.store.updateAccount(userId, { keyBaseline: null });
     }
     const reset = generation !== undefined && a.keyGeneration === generation;
     if (!a.keyIdEncrypted || reset) {
-      const baseline = (await this.cloud.keys(c, a.ramName)).map((k) => k.id);
+      const baseline = (await this.ram.keys(c, a.ramName)).map((k) => k.id);
       if (baseline.length >= 2)
         throw new ConflictException(
           'RAM 用户密钥配额已满，请先处理非 EAT 管理的密钥',
         );
       await this.store.updateAccount(userId, { keyBaseline: baseline });
       guard();
-      const key = await this.cloud.createKey(c, a.ramName);
+      const key = await this.ram.createKey(c, a.ramName);
       const retiring = a.keyIdEncrypted
         ? [...a.retiringKeyIds, decryptSecret(a.keyIdEncrypted)]
         : a.retiringKeyIds;
@@ -134,11 +135,11 @@ export class OssProvisioner {
     for (const id of a.retiringKeyIds) {
       guard();
       try {
-        await this.cloud.keyStatus(c, a.ramName, id, false);
+        await this.ram.keyStatus(c, a.ramName, id, false);
       } catch (e) {
-        if (!cloudMissing(e)) throw e;
+        if (!ramMissing(e)) throw e;
       }
-      await this.cloud.deleteKey(c, a.ramName, id);
+      await this.ram.deleteKey(c, a.ramName, id);
       a = await this.store.updateAccount(userId, {
         retiringKeyIds: a.retiringKeyIds.filter((v) => v !== id),
       });
@@ -156,7 +157,7 @@ export class OssProvisioner {
     const c = this.store.connection(await this.store.row());
     if (a.keyIdEncrypted) {
       guard();
-      await this.cloud.keyStatus(
+      await this.ram.keyStatus(
         c,
         a.ramName,
         decryptSecret(a.keyIdEncrypted),
@@ -165,9 +166,9 @@ export class OssProvisioner {
     }
     if (!enabled) {
       // A response-lost key creation may have produced a key not yet stored locally.
-      for (const key of await this.cloud.keys(c, a.ramName)) {
+      for (const key of await this.ram.keys(c, a.ramName)) {
         guard();
-        await this.cloud.keyStatus(c, a.ramName, key.id, false);
+        await this.ram.keyStatus(c, a.ramName, key.id, false);
       }
     }
     // Also revoke the path policy while disabled; OSS may still cache an otherwise valid V4 key.
@@ -251,7 +252,7 @@ export class OssProvisioner {
       try {
         await check('Bucket 信息、私有 ACL 与域名', async () => {
           const info = await this.cloud.bucketInfo(c);
-          if ((await this.cloud.callerAccount(c)) !== info.accountId)
+          if ((await this.ram.callerAccount(c)) !== info.accountId)
             throw new ConflictException(
               '管理凭证必须属于 Bucket 所属阿里云账号',
             );
@@ -295,15 +296,15 @@ export class OssProvisioner {
         await check('RAM 用户、密钥及策略创建与更新', async () => {
           context.ramStarted = true;
           await this.store.updateOperation(op.id, { context });
-          await this.cloud.ensureUser(c, name, marker);
-          await this.cloud.applyUserPolicy(
+          await this.ram.ensureUser(c, name, marker);
+          await this.ram.applyUserPolicy(
             c,
             name,
             name,
             marker,
             userPolicy(c.bucket, []),
           );
-          await this.cloud.applyUserPolicy(
+          await this.ram.applyUserPolicy(
             c,
             name,
             name,
@@ -312,15 +313,15 @@ export class OssProvisioner {
           );
           if (!context.keyId) {
             if (context.keyBaseline) {
-              for (const key of await this.cloud.keys(c, name))
+              for (const key of await this.ram.keys(c, name))
                 if (!context.keyBaseline.includes(key.id))
-                  await this.cloud.deleteKey(c, name, key.id);
+                  await this.ram.deleteKey(c, name, key.id);
             }
-            context.keyBaseline = (await this.cloud.keys(c, name)).map(
+            context.keyBaseline = (await this.ram.keys(c, name)).map(
               (k) => k.id,
             );
             await this.store.updateOperation(op.id, { context });
-            const key = await this.cloud.createKey(c, name);
+            const key = await this.ram.createKey(c, name);
             context = {
               ...context,
               keyId: key.id,
@@ -387,9 +388,9 @@ export class OssProvisioner {
         });
         await check('RAM 密钥停用与恢复（状态回读）', async () => {
           for (const active of [false, true]) {
-            await this.cloud.keyStatus(c, name, context.keyId!, active);
+            await this.ram.keyStatus(c, name, context.keyId!, active);
             await this.eventually(async () => {
-              const key = (await this.cloud.keys(c, name)).find(
+              const key = (await this.ram.keys(c, name)).find(
                 (k) => k.id === context.keyId,
               );
               if (key?.status !== (active ? 'Active' : 'Inactive'))
@@ -413,7 +414,7 @@ export class OssProvisioner {
         await this.cloud.cleanProbeObjects(c, prefix, [object, forbidden]);
       }
       if (context.ramStarted)
-        await this.cloud.deleteProbeUser(c, name, name, marker);
+        await this.ram.deleteProbeUser(c, name, name, marker);
     });
     await this.store.updateOperation(op.id, {
       context: { probeId, cleanup: true, probeError: context.probeError },

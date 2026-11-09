@@ -1,10 +1,7 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import OSS from 'ali-oss';
 import { setTimeout as delay } from 'node:timers/promises';
-import StsClient from '@alicloud/sts20150401';
-import RamClient, * as Ram from '@alicloud/ram20150501';
-import { $OpenApiUtil } from '@alicloud/openapi-core';
-import { canonical, type OssPolicy } from './oss-policy';
+import type { OssPolicy } from './oss-policy';
 
 export interface OssConnection {
   bucket: string;
@@ -20,8 +17,6 @@ export class OssCloudError extends ServiceUnavailableException {
     super(`${action} 失败（${code}），请检查阿里云权限、配额及配置`);
   }
 }
-export const cloudMissing = (e: unknown) =>
-  e instanceof OssCloudError && /^(NoSuch|EntityNotExist)/.test(e.code);
 type Raw = Record<string, any>; // Provider boundary only; do not return raw responses or exceptions to clients.
 
 @Injectable()
@@ -48,47 +43,6 @@ export class OssCloud {
         .slice(0, 100);
       throw new OssCloudError(action, code || 'UNKNOWN');
     }
-  }
-  private async ram(c: OssConnection, action: string, args: Raw): Promise<Raw> {
-    const client = new RamClient(
-      new $OpenApiUtil.Config({
-        accessKeyId: c.accessKeyId,
-        accessKeySecret: c.accessKeySecret,
-        endpoint: 'ram.aliyuncs.com',
-        protocol: 'https',
-        connectTimeout: 10_000,
-        readTimeout: 20_000,
-      }),
-    );
-    const models = Ram as unknown as Record<string, new (v: Raw) => unknown>;
-    const method = action[0].toLowerCase() + action.slice(1);
-    return this.safe(`RAM ${action}`, async () => {
-      const result = await (
-        client as unknown as Record<
-          string,
-          (v: unknown) => Promise<{ body: Raw }>
-        >
-      )[method](new models[`${action}Request`](args));
-      return result.body;
-    });
-  }
-  async callerAccount(c: OssConnection): Promise<string> {
-    return this.safe('STS GetCallerIdentity', async () => {
-      const client = new StsClient(
-        new $OpenApiUtil.Config({
-          accessKeyId: c.accessKeyId,
-          accessKeySecret: c.accessKeySecret,
-          endpoint: 'sts.aliyuncs.com',
-          protocol: 'https',
-          connectTimeout: 10_000,
-          readTimeout: 20_000,
-        }),
-      );
-      const result = await client.getCallerIdentity();
-      if (!result.body?.accountId)
-        throw new OssCloudError('STS GetCallerIdentity', 'MissingAccountId');
-      return result.body.accountId;
-    });
   }
   async bucketInfo(
     c: OssConnection,
@@ -151,163 +105,9 @@ export class OssCloud {
       else await this.client(c).deleteBucketPolicy(c.bucket);
     });
   }
-  async ensureUser(c: OssConnection, userName: string, marker: string) {
-    let user: Raw;
-    try {
-      user = (await this.ram(c, 'GetUser', { userName })).user;
-    } catch (e) {
-      if (!cloudMissing(e)) throw e;
-      user = (
-        await this.ram(c, 'CreateUser', {
-          userName,
-          comments: marker,
-          displayName: userName,
-        })
-      ).user;
-    }
-    if (user.comments !== marker)
-      throw new Error('RAM 用户归属不匹配，拒绝接管已有用户');
-  }
-  async applyUserPolicy(
-    c: OssConnection,
-    userName: string,
-    policyName: string,
-    marker: string,
-    policy: OssPolicy,
-  ) {
-    let found: Raw | null = null;
-    try {
-      found = await this.ram(c, 'GetPolicy', {
-        policyType: 'Custom',
-        policyName,
-      });
-    } catch (e) {
-      if (!cloudMissing(e)) throw e;
-    }
-    if (!found)
-      await this.ram(c, 'CreatePolicy', {
-        policyName,
-        description: marker,
-        policyDocument: JSON.stringify(policy),
-      });
-    else {
-      if (found.policy.description !== marker)
-        throw new Error('RAM 策略归属不匹配，拒绝覆盖已有策略');
-      const document = found.defaultPolicyVersion.policyDocument;
-      let old: unknown;
-      try {
-        old = JSON.parse(document);
-      } catch {
-        old = JSON.parse(decodeURIComponent(document));
-      }
-      if (canonical(old) !== canonical(policy))
-        await this.ram(c, 'CreatePolicyVersion', {
-          policyName,
-          policyDocument: JSON.stringify(policy),
-          setAsDefault: true,
-          rotateStrategy: 'DeleteOldestNonDefaultVersionWhenLimitExceeded',
-        });
-    }
-    const attached = await this.ram(c, 'ListPoliciesForUser', { userName });
-    if (
-      !(attached.policies?.policy ?? []).some(
-        (p: Raw) => p.policyName === policyName && p.policyType === 'Custom',
-      )
-    )
-      await this.ram(c, 'AttachPolicyToUser', {
-        userName,
-        policyName,
-        policyType: 'Custom',
-      });
-  }
-  async keys(
-    c: OssConnection,
-    userName: string,
-  ): Promise<{ id: string; status: string }[]> {
-    const r = await this.ram(c, 'ListAccessKeys', { userName });
-    return (r.accessKeys?.accessKey ?? []).map((k: Raw) => ({
-      id: String(k.accessKeyId),
-      status: String(k.status),
-    }));
-  }
-  /** OSS V4 may take time to recognize a just-created RAM key. Allow initial propagation before probing it. */
+  /** OSS V4 may take time to recognize a just-created RAM key. */
   async waitForNewKey() {
     await delay(45_000);
-  }
-  async createKey(
-    c: OssConnection,
-    userName: string,
-  ): Promise<{ id: string; secret: string }> {
-    const r = await this.ram(c, 'CreateAccessKey', { userName });
-    return { id: r.accessKey.accessKeyId, secret: r.accessKey.accessKeySecret };
-  }
-  async keyStatus(
-    c: OssConnection,
-    userName: string,
-    userAccessKeyId: string,
-    active: boolean,
-  ) {
-    await this.ram(c, 'UpdateAccessKey', {
-      userName,
-      userAccessKeyId,
-      status: active ? 'Active' : 'Inactive',
-    });
-  }
-  async deleteKey(c: OssConnection, userName: string, userAccessKeyId: string) {
-    try {
-      await this.ram(c, 'DeleteAccessKey', { userName, userAccessKeyId });
-    } catch (e) {
-      if (!cloudMissing(e)) throw e;
-    }
-  }
-  /** Only called for a persisted, uniquely named probe user with a matching marker. */
-  async deleteProbeUser(
-    c: OssConnection,
-    userName: string,
-    policyName: string,
-    marker: string,
-  ) {
-    try {
-      const r = await this.ram(c, 'GetUser', { userName });
-      if (r.user.comments !== marker) throw new Error('测试用户归属不匹配');
-      for (const k of await this.keys(c, userName))
-        await this.deleteKey(c, userName, k.id);
-      const r2 = await this.ram(c, 'ListPoliciesForUser', { userName });
-      if (
-        (r2.policies?.policy ?? []).some(
-          (p: Raw) => p.policyName === policyName,
-        )
-      )
-        await this.ram(c, 'DetachPolicyFromUser', {
-          userName,
-          policyName,
-          policyType: 'Custom',
-        });
-      await this.ram(c, 'DeleteUser', { userName });
-    } catch (e) {
-      if (!cloudMissing(e)) throw e;
-    }
-    try {
-      const p = await this.ram(c, 'GetPolicy', {
-        policyType: 'Custom',
-        policyName,
-      });
-      if (p.policy.description !== marker)
-        throw new Error('测试策略归属不匹配');
-      const versions = await this.ram(c, 'ListPolicyVersions', {
-        policyType: 'Custom',
-        policyName,
-      });
-      for (const v of versions.policyVersions?.policyVersion ?? [])
-        if (!v.isDefaultVersion)
-          await this.ram(c, 'DeletePolicyVersion', {
-            policyName,
-            versionId: v.versionId,
-          });
-      await this.ram(c, 'DeletePolicy', { policyName });
-    } catch (e) {
-      if (!cloudMissing(e)) throw e;
-    }
   }
   async put(c: OssConnection, key: string, bytes: Buffer) {
     await this.safe('OSS PutObject', () => this.client(c).put(key, bytes));
