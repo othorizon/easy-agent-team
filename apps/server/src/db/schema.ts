@@ -1243,17 +1243,19 @@ export const approvalNotifications=pgTable('approval_notification',{
   sentTo:jsonb('sent_to').$type<string[]>().notNull().default([]),
 },t=>[uniqueIndex('approval_notification_request_id_event_key').on(t.requestId,t.event)]);
 
-/** EAT 建的库首次开放时创建；库与 owner 账号仍由分配持有。 */
+/** EAT 建的库首次开放时创建；外部库由管理员登记，不持有库与 owner 账号。 */
 export const dbCatalog = pgTable('db_catalog', {
   id: uuid('id').primaryKey().defaultRandom(),
   instanceId: uuid('instance_id').notNull().references(() => dbInstances.id, { onDelete: 'restrict' }),
-  assignmentId: uuid('assignment_id').notNull().references(() => dbAssignments.id, { onDelete: 'restrict' }),
+  assignmentId: uuid('assignment_id').references(() => dbAssignments.id, { onDelete: 'restrict' }),
+  source: text('source', { enum: ['eat', 'external'] }).notNull().default('eat'),
   dbName: text('db_name').notNull(),
   ownerId: uuid('owner_id').notNull().references(() => users.id),
   openedBy: uuid('opened_by').notNull().references(() => users.id),
   open: boolean('open').notNull().default(false),
   schemas: jsonb('schemas').$type<string[]>().notNull().default(['public']),
-  creatorRole: text('creator_role').notNull(),
+  creatorRole: text('creator_role'),
+  publicCheck: jsonb('public_check').$type<import('@eat/shared').DbPublicCheck>(),
   readRole: text('read_role').notNull(),
   writeRole: text('write_role').notNull(),
   state: text('state', { enum: ['pending', 'active', 'failed'] }).notNull().default('pending'),

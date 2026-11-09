@@ -12,6 +12,16 @@ EAT 建的 PostgreSQL 库，由分配申请人担任 Owner。Owner 和管理员�
 
 每人在每个实例只有一个个人登录角色 `eat-<用户 UUID>` 和一套密码；每个库各有一条授权。重复授予和失败重试复用原记录、角色与密码。对已有授权选择新级别会修改同一条授权；从读写降为只读时，先加入只读组再退出读写组，提交后终止这个人在该库的会话，同实例其他库不受影响。升级则先加入读写组再退出只读组。角色有 EAT 来源标记，来源不明的同名角色会让执行失败，平台不会接管。
 
+## 外部库登记
+
+管理员在「数据库实例」的 PostgreSQL 实例行中选择「登记外部库」，填写实际库名、EAT Owner、schema 列表和可选的建表角色。登记前校验目标库连接、CREATEROLE、库 CONNECT 的授予能力，以及各 schema、表、视图和序列的实际授权能力。管理账号可以预先取得实际对象 owner 的 SET 权限，或持有相应权限的 GRANT OPTION；填写建表角色时还需能切换到该角色以维护默认权限。校验失败显示 DBA 可执行的修复 SQL，不会把 PostgreSQL 的 warning 当作授权成功。
+
+登记结果与「权限检查」展示 PUBLIC 的 CONNECT、PUBLIC 在 public schema 上的 CREATE、PUBLIC 的有效表权限（含列授权），以及已有角色的有效 CONNECT、schema CREATE、表权限和继承链。报告提供供 DBA 评估的 REVOKE SQL，EAT 不执行它们，也不会自行添加外部 owner 的成员关系。对预定义全库读写角色或对象 owner 的继承路径，报告同时提示 DBA 处理相应成员关系。重新应用授权会刷新报告。若 PUBLIC 或其他角色仍提供访问路径，撤销 EAT 授权后这些已有权限仍然存在。
+
+外部库在目录中标明「外部库」、实例和 Owner。登记时不开放申请，Owner 和管理员可以开放或关闭、直接授予、修改级别、撤销与重新应用授权，使用同一套个人角色和会话终止流程。外部库的开放和重新应用始终保留 PUBLIC 权限；需要隔离 CONNECT 或禁止 PUBLIC 建表时，由 DBA 自行确认并执行收紧 SQL。
+
+填写建表角色后，该角色未来创建的表、视图和序列自动按级别向组开放；留空时仅授权已有对象，新建对象后需要重新应用。修改 schema 或建表角色后自动重新应用，并清除原建表角色留给 EAT 组的旧默认权限。库和原有 owner 账号不会被接管或删除。
+
 ## Schema 与重新应用
 
 Owner 和管理员可修改覆盖的 schema 列表，保存后自动重新应用；关闭申请的库也能修改。省略 schema 字段只切换开放状态，保留原范围。EAT 建的库的建表角色固定为分配的 owner 账号。
@@ -51,6 +61,8 @@ CLI 使用 `eat db run <库名>[@实例名] -- <命令>`，与 `eat db credentia
 | 接口 | 用途 |
 | --- | --- |
 | `GET /api/db/access/catalog` | 开放目录及自己负责的库 |
+| `POST /api/db/instances/:id/access/catalog` | 管理员登记外部 PostgreSQL 库 |
+| `POST /api/db/access/catalog/:id/access` | 外部库开放、关闭或修改 schema / 建表角色 |
 | `POST /api/db/assignments/:id/access` | 开放或关闭申请，选择或修改 schema |
 | `POST /api/db/access/catalog/:id/reapply` | 重新应用现有对象及默认权限，保留开放状态 |
 | `GET /api/db/access/grants` | 本人持有及可管理的授权；`?scope=mine` 只返回本人持有 |
@@ -62,3 +74,5 @@ CLI 使用 `eat db run <库名>[@实例名] -- <命令>`，与 `eat db credentia
 | `POST /api/db/access/catalog/:id/credentials` | 本人按需读取个人凭证 |
 
 服务端 e2e 在本地 PostgreSQL 16 上用非超级管理角色验证查询、写入拒绝、schema 范围、未来对象默认权限、双库隔离、改级别、断会话、通知、失败重试、并发幂等及重启恢复；读写、未来表和序列、其他角色的新表、schema 增减与重应用另见 `db-access-levels.spec.ts`。
+
+外部库登记、权限检查与 DBA 提示、GRANT OPTION 管理角色、未来表、只读/读写及撤销断会话见 `db-external.spec.ts`；测试只操作本轮唯一前缀的新建库与角色。

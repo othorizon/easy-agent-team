@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Inject, Inj
 import { and, eq, inArray, isNotNull, or } from 'drizzle-orm';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
-import { dbConnectionUrl, type DbAccessCredentials, type DbAccessGrantInfo, type DbCatalogInfo, type DbPersonalPasswordReset, type GrantDbAccessRequest, type OpenDbAccessRequest } from '@eat/shared';
+import { dbConnectionUrl, type DbAccessCredentials, type DbAccessGrantInfo, type DbCatalogInfo, type DbPersonalPasswordReset, type DbPublicCheck, type GrantDbAccessRequest, type OpenDbAccessRequest, type RegisterExternalDbRequest } from '@eat/shared';
 import { AuditService } from '../audit/audit.service';
 import type { AuthUser } from '../auth/auth.decorators';
 import { decryptSecret, encryptSecret } from '../common/crypto';
@@ -13,6 +13,7 @@ import { NotifierService } from '../notify/notifier.service';
 import { grantPostgresAccess, openPostgresAccess, revokePostgresAccess } from './access-provisioner';
 import { resetPostgresPersonalPassword } from './personal-role-provisioner';
 import type { AdminConn } from './provisioner';
+import { checkExternalPostgresAccess, openExternalPostgresAccess } from './external-provisioner';
 
 type Catalog = typeof dbCatalog.$inferSelect;
 type Grant = typeof dbAccessGrants.$inferSelect;
@@ -120,7 +121,54 @@ export class DbAccessService {
       .from(dbAssignments).innerJoin(dbInstances, eq(dbInstances.id, dbAssignments.instanceId))
       .innerJoin(users, eq(users.id, dbAssignments.requesterId)).leftJoin(dbCatalog, eq(dbCatalog.assignmentId, dbAssignments.id))
       .where(and(eq(dbInstances.engine, 'postgres'), inArray(dbAssignments.status, ['active', 'disabled']), user.role === 'admin' ? undefined : or(eq(dbAssignments.requesterId, user.id), and(eq(dbCatalog.open, true), eq(dbCatalog.state, 'active')))));
-    return rows.map(({ a, c, i, ownerName }) => ({ id: c?.id ?? null, assignmentId: a.id, instanceId: i.id, instanceName: i.name, dbName: a.dbName, source: 'eat', ownerId: a.requesterId, ownerName, open: c?.open ?? false, schemas: c?.schemas ?? ['public'], state: c?.state ?? 'pending', error: c?.error ?? null, canManage: user.role === 'admin' || a.requesterId === user.id }));
+    const external = await this.db.select({ c: dbCatalog, i: dbInstances, ownerName: users.name })
+      .from(dbCatalog).innerJoin(dbInstances, eq(dbInstances.id, dbCatalog.instanceId)).innerJoin(users, eq(users.id, dbCatalog.ownerId))
+      .where(and(eq(dbCatalog.source, 'external'), user.role === 'admin' ? undefined : or(eq(dbCatalog.ownerId, user.id), and(eq(dbCatalog.open, true), eq(dbCatalog.state, 'active')))));
+    return [...rows.map(({ a, c, i, ownerName }) => ({ id: c?.id ?? null, assignmentId: a.id, instanceId: i.id, instanceName: i.name, dbName: a.dbName, source: 'eat' as const, creatorRole: c?.creatorRole ?? a.dbUser, publicCheck: c?.publicCheck ?? null, ownerId: a.requesterId, ownerName, open: c?.open ?? false, schemas: c?.schemas ?? ['public'], state: c?.state ?? 'pending', error: c?.error ?? null, canManage: user.role === 'admin' || a.requesterId === user.id })), ...external.map(({ c, i, ownerName }) => ({ ...c, instanceName: i.name, ownerName, canManage: user.role === 'admin' || c.ownerId === user.id }))];
+  }
+  async registerExternal(user: AuthUser, instanceId: string, dto: RegisterExternalDbRequest): Promise<DbCatalogInfo> {
+    if (user.role !== 'admin') throw new ForbiddenException('仅管理员可登记外部库');
+    const [instance] = isFullId(instanceId) ? await this.db.select().from(dbInstances).where(eq(dbInstances.id, instanceId)) : [];
+    if (!instance) throw new NotFoundException('实例不存在');
+    if (instance.engine !== 'postgres') throw new BadRequestException('MySQL 实例上不能登记外部库');
+    const [owner] = await this.db.select().from(users).where(eq(users.id, dto.ownerId));
+    if (!owner || owner.status !== 'active') throw new BadRequestException('请选择启用中的 EAT 用户作为 Owner');
+    return this.locked(instanceId, async guard => {
+      const [existing] = await this.db.select().from(dbCatalog).where(and(eq(dbCatalog.instanceId, instanceId), eq(dbCatalog.dbName, dto.dbName)));
+      const [assignment] = await this.db.select().from(dbAssignments).where(and(eq(dbAssignments.instanceId, instanceId), eq(dbAssignments.dbName, dto.dbName), inArray(dbAssignments.status, ['active', 'disabled', 'provisioning'])));
+      if (existing || assignment) throw new ConflictException('此库已有目录记录或 EAT 分配，请从原记录管理');
+      const id = randomUUID();
+      const values = { id, source: 'external' as const, assignmentId: null, instanceId, dbName: dto.dbName, ownerId: dto.ownerId, openedBy: user.id, open: false, schemas: dto.schemas, creatorRole: dto.creatorRole ?? null, readRole: `eat-db-${id}-read`, writeRole: `eat-db-${id}-write` };
+      let publicCheck: DbPublicCheck;
+      try { publicCheck = await checkExternalPostgresAccess(await this.connection(instanceId), values); }
+      catch (e) { throw new BadRequestException(this.error(e)); }
+      guard();
+      const [row] = await this.db.insert(dbCatalog).values({ ...values, publicCheck }).returning();
+      await this.executeOpen(row, guard);
+      const result = (await this.listCatalog(user)).find(c => c.id === id)!;
+      await this.audit.record({ actorId: user.id, action: 'db_access.external_registered', targetType: 'db_catalog', targetId: id });
+      if (result.error) throw new BadRequestException({ error: 'DB_EXTERNAL_REGISTRATION_FAILED', message: result.error, details: { catalogId: id } });
+      return result;
+    });
+  }
+  async configureExternal(user: AuthUser, id: string, dto: OpenDbAccessRequest): Promise<DbCatalogInfo> {
+    const initial = await this.catalog(id);
+    this.manage(user, initial.ownerId);
+    if (initial.source !== 'external') throw new BadRequestException('EAT 建的库请从分配记录配置');
+    return this.locked(initial.instanceId, async guard => {
+      const row = await this.catalog(id);
+      this.manage(user, row.ownerId);
+      const schemas = dto.schemas ?? row.schemas;
+      const creatorRole = dto.creatorRole === undefined ? row.creatorRole : dto.creatorRole;
+      const changed = JSON.stringify(schemas) !== JSON.stringify(row.schemas) || creatorRole !== row.creatorRole;
+      guard();
+      if (row.state !== 'active' || changed) {
+        await this.db.update(dbCatalog).set({ open: dto.open, schemas, creatorRole, state: 'pending', error: null, openedBy: user.id, updatedAt: new Date() }).where(eq(dbCatalog.id, id));
+        await this.executeOpen({ ...row, open: dto.open, schemas, creatorRole }, guard);
+      } else await this.db.update(dbCatalog).set({ open: dto.open, updatedAt: new Date() }).where(eq(dbCatalog.id, id));
+      await this.audit.record({ actorId: user.id, action: dto.open ? 'db_access.opened' : 'db_access.closed', targetType: 'db_catalog', targetId: id });
+      return (await this.listCatalog(user)).find(c => c.id === id)!;
+    });
   }
   async open(user: AuthUser, assignmentId: string, dto: OpenDbAccessRequest): Promise<DbCatalogInfo> {
     const [a] = isFullId(assignmentId) ? await this.db.select().from(dbAssignments).where(eq(dbAssignments.id, assignmentId)) : [];
@@ -165,9 +213,12 @@ export class DbAccessService {
   }
   private async executeOpen(row: Catalog, guard: () => void): Promise<void> {
     try {
-      await openPostgresAccess(await this.connection(row.instanceId), row, guard);
+      const connection = await this.connection(row.instanceId);
+      let publicCheck: DbPublicCheck | null = null;
+      if (row.source === 'external') publicCheck = await openExternalPostgresAccess(connection, row, guard);
+      else await openPostgresAccess(connection, row, guard);
       guard();
-      await this.db.update(dbCatalog).set({ state: 'active', open: row.open, error: null, updatedAt: new Date() }).where(eq(dbCatalog.id, row.id));
+      await this.db.update(dbCatalog).set({ state: 'active', open: row.open, publicCheck, error: null, updatedAt: new Date() }).where(eq(dbCatalog.id, row.id));
     } catch (e) {
       guard();
       await this.db.update(dbCatalog).set({ state: 'failed', error: this.error(e), updatedAt: new Date() }).where(eq(dbCatalog.id, row.id));
@@ -294,7 +345,7 @@ export class DbAccessService {
     // Drizzle 包装错误含 SQL 参数；只呈现底层错误，避免把密文送到日志和客户端。
     const seen = new Set<unknown>();
     while (e instanceof Error && e.cause instanceof Error && !seen.has(e)) { seen.add(e); e = e.cause; }
-    return (e instanceof Error ? e.message : String(e)).slice(0, 1000);
+    return (e instanceof Error ? e.message : String(e)).slice(0, 10000);
   }
 
   async revoke(user: AuthUser, id: string, reason: string, relinquish = false): Promise<DbAccessGrantInfo> {

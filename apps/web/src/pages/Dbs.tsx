@@ -29,12 +29,14 @@ import { z } from '../lib/zod';
 import { AssignmentActions, DB_STATUS_BADGE, useAssignmentAction } from './db-shared';
 
 import { DbAccessTab } from './DbAccess';
+import { ExternalDbDialog } from './DbExternal';
 
 export function DbsPage() {
   const queryClient = useQueryClient();
   const me = getStoredUser();
   const isAdmin = me?.role === 'admin';
   const [addingInstance, setAddingInstance] = useState(false);
+  const [externalInstance, setExternalInstance] = useState<DbInstanceInfo | null>(null);
   const [requesting, setRequesting] = useState(false);
   const [params, setParams] = useQueryParams({ tab: 'mine', q: '', page: '1', pageSize: '20' });
   const tab = params.tab === 'access' ? 'access' : params.tab === 'instances' ? 'instances' : isAdmin && params.tab === 'all' ? 'all' : 'mine';
@@ -268,8 +270,10 @@ export function DbsPage() {
           {
             id: 'actions',
             header: '操作',
-            meta: { className: 'w-20' },
+            meta: { className: 'w-40' },
             cell: ({ row: { original: r } }) => (
+              <div className="flex flex-wrap gap-1.5">
+              {r.engine === 'postgres' && <Button size="sm" variant="outline" onClick={() => setExternalInstance(r)}>登记外部库</Button>}
               <Confirm
                 title="删除实例登记？"
                 description="不影响实例本身，仅移除平台上的登记。"
@@ -280,6 +284,7 @@ export function DbsPage() {
                   删除
                 </Button>
               </Confirm>
+              </div>
             ),
           } satisfies DataTableColumn<DbInstanceInfo>,
         ]
@@ -382,6 +387,7 @@ export function DbsPage() {
         )}
       </Tabs>
 
+      {externalInstance && <ExternalDbDialog instance={externalInstance} close={() => setExternalInstance(null)} done={() => { void queryClient.invalidateQueries({ queryKey: ['db-access-catalog'] }); }} />}
       {addingInstance && (
         <AddInstanceDialog
           pending={addInstance.isPending}
