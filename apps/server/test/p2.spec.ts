@@ -483,14 +483,14 @@ describe('数据库账号分配（真实建库）', () => {
 
   it('禁用后拒绝登录，恢复后可再连', async () => {
     await api('POST', `/api/db/assignments/${assignmentId}/disable`, { token: adminToken });
-    const blocked = new Client({ host: creds.DB_HOST, port: Number(creds.DB_PORT), user: creds.DB_USER, database: creds.DB_NAME });
+    const blocked = new Client({ host: creds.DB_HOST, port: Number(creds.DB_PORT), user: creds.DB_USER, password: creds.DB_PASSWORD, database: creds.DB_NAME });
     await expect(blocked.connect()).rejects.toThrow();
     // 禁用期间不给凭证（账号登不上，给了也没用，还平白多一次密码外泄）
     const disabled = await api('POST', `/api/db/assignments/${assignmentId}/credentials`, { token: m1Token });
     expect(disabled.status).toBe(409);
     await api('POST', `/api/db/assignments/${assignmentId}/enable`, { token: adminToken });
     expect((await api('POST', `/api/db/assignments/${assignmentId}/credentials`, { token: m1Token })).status).toBe(201);
-    const ok = new Client({ host: creds.DB_HOST, port: Number(creds.DB_PORT), user: creds.DB_USER, database: creds.DB_NAME });
+    const ok = new Client({ host: creds.DB_HOST, port: Number(creds.DB_PORT), user: creds.DB_USER, password: creds.DB_PASSWORD, database: creds.DB_NAME });
     await ok.connect();
     await ok.end();
   });

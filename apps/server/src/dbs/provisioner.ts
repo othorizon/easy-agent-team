@@ -15,7 +15,7 @@ export interface AdminConn {
 
 const logger = new Logger('DbProvisioner');
 
-async function withAdmin<T>(conn: AdminConn, database: string, fn: (c: Client) => Promise<T>): Promise<T> {
+export async function withAdmin<T>(conn: AdminConn, database: string, fn: (c: Client) => Promise<T>): Promise<T> {
   const client = new Client({
     host: conn.host,
     port: conn.port,
@@ -32,8 +32,16 @@ async function withAdmin<T>(conn: AdminConn, database: string, fn: (c: Client) =
   }
 }
 
-const q = (s: string) => `"${s}"`;
+export const q = (s: string) => `"${s.replaceAll('"', '""')}"`;
 const escapePassword = (s: string) => s.replace(/'/g, "''");
+
+/** PG16 CREATEROLE 默认只有 ADMIN；显式取得 SET，兼容旧实例。 */
+export async function allowSetRole(c: Client, role: string, admin: string): Promise<void> {
+  const version = Number((await c.query('show server_version_num')).rows[0].server_version_num);
+  const statement = `grant ${q(role)} to ${q(admin)}${version >= 160000 ? ' with set true, inherit false' : ''}`;
+  try { await c.query(statement); }
+  catch (e) { throw new Error(`${(e as Error).message}；请有权限的 DBA 执行：${statement};`); }
+}
 
 /**
  * 把新库里的 public schema 归到分配账号名下。
@@ -50,6 +58,7 @@ const escapePassword = (s: string) => s.replace(/'/g, "''");
  */
 async function ensurePublicSchema(conn: AdminConn, dbName: string, dbUser: string): Promise<void> {
   await withAdmin(conn, dbName, async (c) => {
+    await c.query(`set role ${q(dbUser)}`);
     const exists = (await c.query(`select 1 from pg_namespace where nspname = 'public'`)).rowCount ?? 0;
     try {
       if (exists === 0) {
@@ -73,6 +82,7 @@ async function ensurePublicSchema(conn: AdminConn, dbName: string, dbUser: strin
 export async function provisionPostgres(conn: AdminConn, dbName: string, dbUser: string, password: string): Promise<void> {
   await withAdmin(conn, 'postgres', async (c) => {
     await c.query(`create role ${q(dbUser)} login password '${escapePassword(password)}'`);
+    await allowSetRole(c, dbUser, conn.adminUser);
     await c.query(`create database ${q(dbName)} owner ${q(dbUser)}`);
   });
   await ensurePublicSchema(conn, dbName, dbUser);

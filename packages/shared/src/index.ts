@@ -33,3 +33,4 @@ export * from './github.js';
 export * from './requests.js';
 export * from './feishu-app.js';
 export * from './notification.js';
+export * from './db-access.js';

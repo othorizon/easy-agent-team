@@ -28,6 +28,8 @@ import { useQueryParams } from '../lib/use-query-params';
 import { z } from '../lib/zod';
 import { AssignmentActions, DB_STATUS_BADGE, useAssignmentAction } from './db-shared';
 
+import { DbAccessTab } from './DbAccess';
+
 export function DbsPage() {
   const queryClient = useQueryClient();
   const me = getStoredUser();
@@ -35,7 +37,7 @@ export function DbsPage() {
   const [addingInstance, setAddingInstance] = useState(false);
   const [requesting, setRequesting] = useState(false);
   const [params, setParams] = useQueryParams({ tab: 'mine', q: '', page: '1', pageSize: '20' });
-  const tab = params.tab === 'instances' ? 'instances' : isAdmin && params.tab === 'all' ? 'all' : 'mine';
+  const tab = params.tab === 'access' ? 'access' : params.tab === 'instances' ? 'instances' : isAdmin && params.tab === 'all' ? 'all' : 'mine';
   const requestedPage = Number(params.page);
   const pageSize = PAGE_SIZE_OPTIONS.includes(Number(params.pageSize)) ? Number(params.pageSize) : 20;
 
@@ -320,6 +322,7 @@ export function DbsPage() {
       <Tabs value={tab} onValueChange={(value) => setParams({ tab: value, page: '1' })}>
         <TabsList>
           <TabsTrigger value="mine">我的数据库</TabsTrigger>
+          <TabsTrigger value="access">数据库权限</TabsTrigger>
           <TabsTrigger value="instances">数据库实例</TabsTrigger>
           {isAdmin && (
             <TabsTrigger value="all">
@@ -328,6 +331,8 @@ export function DbsPage() {
             </TabsTrigger>
           )}
         </TabsList>
+
+        <TabsContent value="access" className="mt-4"><DbAccessTab keyword={keyword} /></TabsContent>
 
         <TabsContent value="mine" className="mt-4">
           <Card>

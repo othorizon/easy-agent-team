@@ -281,6 +281,13 @@
       "when": 1794208935635,
       "tag": "0039_request_type_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1794211169550,
+      "tag": "0040_db_access",
+      "breakpoints": true
     }
   ]
 }

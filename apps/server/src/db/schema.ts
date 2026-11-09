@@ -1242,3 +1242,46 @@ export const approvalNotifications=pgTable('approval_notification',{
   retryAt:timestamp('retry_at',{withTimezone:true}).notNull().defaultNow(),lastError:text('last_error'),
   sentTo:jsonb('sent_to').$type<string[]>().notNull().default([]),
 },t=>[uniqueIndex('approval_notification_request_id_event_key').on(t.requestId,t.event)]);
+
+/** EAT 建的库首次开放时创建；库与 owner 账号仍由分配持有。 */
+export const dbCatalog = pgTable('db_catalog', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  instanceId: uuid('instance_id').notNull().references(() => dbInstances.id, { onDelete: 'restrict' }),
+  assignmentId: uuid('assignment_id').notNull().references(() => dbAssignments.id, { onDelete: 'restrict' }),
+  dbName: text('db_name').notNull(),
+  ownerId: uuid('owner_id').notNull().references(() => users.id),
+  openedBy: uuid('opened_by').notNull().references(() => users.id),
+  open: boolean('open').notNull().default(false),
+  schemas: jsonb('schemas').$type<string[]>().notNull().default(['public']),
+  creatorRole: text('creator_role').notNull(),
+  readRole: text('read_role').notNull(),
+  writeRole: text('write_role').notNull(),
+  state: text('state', { enum: ['pending', 'active', 'failed'] }).notNull().default('pending'),
+  error: text('error'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex('db_catalog_instance_name_idx').on(t.instanceId, t.dbName), uniqueIndex('db_catalog_assignment_idx').on(t.assignmentId)]);
+
+/** 每个用户在一个实例上只有一套个人登录凭证；没有授权后仍保留身份。 */
+export const dbPersonalRoles = pgTable('db_personal_role', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  instanceId: uuid('instance_id').notNull().references(() => dbInstances.id, { onDelete: 'restrict' }),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  roleName: text('role_name').notNull(),
+  passwordEncrypted: text('password_encrypted').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex('db_personal_role_instance_user_idx').on(t.instanceId, t.userId)]);
+
+export const dbAccessGrants = pgTable('db_access_grant', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  catalogId: uuid('catalog_id').notNull().references(() => dbCatalog.id, { onDelete: 'restrict' }),
+  userId: uuid('user_id').notNull().references(() => users.id),
+  level: text('level', { enum: ['read', 'write'] }).notNull().default('read'),
+  state: text('state', { enum: ['pending', 'active', 'failed', 'revoking', 'revoked'] }).notNull().default('pending'),
+  error: text('error'),
+  grantedBy: uuid('granted_by').notNull().references(() => users.id),
+  revokedBy: uuid('revoked_by').references(() => users.id),
+  revocationReason: text('revocation_reason'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex('db_access_grant_catalog_user_idx').on(t.catalogId, t.userId)]);
