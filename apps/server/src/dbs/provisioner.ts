@@ -47,8 +47,7 @@ export async function allowSetRole(c: Client, role: string, admin: string): Prom
  * 把新库里的 public schema 归到分配账号名下。
  *
  * `CREATE DATABASE ... OWNER x` 只改库的归属，public schema 是从 template1 复制过来的，归属跟着模板走：
- * - PG 15+ 干净集群：owner 是 pg_database_owner（库 owner 隐式是它的成员，能建表，但 `\dn` 显示的不是自己的账号，
- *   `DROP SCHEMA public` / `ALTER SCHEMA` / `COMMENT ON SCHEMA` 之外的迁移工具动作也就都做不了）；
+ * - PG 15+ 干净集群：owner 是 pg_database_owner，库 owner 隐式拥有它的权限；
  * - PG 14 及更早（含 pg_upgrade 上来的集群）：owner 是超级用户，建表只靠 PUBLIC 默认的 CREATE 授权兜底，
  *   DBA 一句 `REVOKE ALL ON SCHEMA public FROM PUBLIC`（PG 15 默认就是这个方向）分配账号连建表都做不了；
  * - 模板里 public 被删过：新库压根没有 public，分配账号 `create table` 直接报 "no schema has been selected to create in"。
@@ -58,16 +57,27 @@ export async function allowSetRole(c: Client, role: string, admin: string): Prom
  */
 async function ensurePublicSchema(conn: AdminConn, dbName: string, dbUser: string): Promise<void> {
   await withAdmin(conn, dbName, async (c) => {
-    await c.query(`set role ${q(dbUser)}`);
     const exists = (await c.query(`select 1 from pg_namespace where nspname = 'public'`)).rowCount ?? 0;
+    const statement = exists === 0
+      ? `create schema public authorization ${q(dbUser)}`
+      : `alter schema public owner to ${q(dbUser)}`;
     try {
-      if (exists === 0) {
-        await c.query(`create schema public authorization ${q(dbUser)}`);
-      } else {
-        await c.query(`alter schema public owner to ${q(dbUser)}`);
+      // 模板的 schema 可能属于管理账号；提前 SET ROLE 会丢掉这份 owner / 超级用户权限。
+      await c.query(statement);
+    } catch {
+      if (exists > 0) {
+        // 托管实例可能只给管理账号 schema 的 GRANT OPTION，无法转移归属。
+        // 仍以管理身份补 owner 的建表权限；PG 可能只发 warning，最终必须核对实际权限。
+        try { await c.query(`grant usage, create on schema public to ${q(dbUser)}`); }
+        catch { /* 再尝试使用数据库 owner 的权限。 */ }
       }
-    } catch (err) {
-      logger.warn(`库 ${dbName} 的 public schema 未能归属到 ${dbUser}（管理账号权限不足？）：${(err as Error).message}`);
+      try {
+        // PG16 的管理账号对新 owner 使用 INHERIT FALSE；pg_database_owner 的权限须显式切换后使用。
+        await c.query(`set role ${q(dbUser)}`);
+        await c.query(statement);
+      } catch (err) {
+        logger.warn(`库 ${dbName} 的 public schema 未能归属到 ${dbUser}（管理账号权限不足？）：${(err as Error).message}`);
+      }
     }
     const ok = (await c.query(`select has_schema_privilege($1, 'public', 'CREATE') as ok`, [dbUser])).rows[0]?.ok;
     if (!ok) {
