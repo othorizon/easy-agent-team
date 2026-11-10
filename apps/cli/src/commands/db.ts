@@ -163,7 +163,7 @@ export async function dbAccessList(): Promise<void> {
   for (const c of catalog.filter(c => c.open)) console.log(`  ${c.dbName}@${c.instanceName} · Owner ${c.ownerName}`);
   console.log('我的授权：');
   for (const g of grants) console.log(`  [${g.state}] ${g.dbName}@${g.instanceName} · ${g.level === 'read' ? '只读' : '读写'}${g.error ? ` · ${g.error}` : ''}`);
-  console.log('申请：eat db access request <库@实例> --level read|write --reason "用途"。个人凭证只供本人临时使用，不要配进线上服务。');
+  console.log('申请：eat db access request <库@实例> --level read|write --reason "用途"。个人凭证绑定 EAT 用户，停用用户或撤销授权会中断相应连接。');
 }
 
 async function resolveOwnGrant(api: Api, ref: string, activeOnly: boolean): Promise<DbAccessGrantInfo> {
@@ -184,7 +184,7 @@ export async function dbAccessRevoke(ref: string): Promise<void> {
 export async function dbAccessResetPassword(ref: string): Promise<void> {
   const api = Api.fromSaved();
   const grant = await resolveOwnGrant(api, ref, true);
-  console.error(`提示：同一实例 ${grant.instanceName} 上其他库的授权也会使用新密码。个人凭证不要配进线上服务。`);
+  console.error(`提示：同一实例 ${grant.instanceName} 上其他库的授权也会使用新密码。已保存的旧密码将失效，请更新使用该凭证的连接配置。`);
   const result = await api.request<DbPersonalPasswordReset>('POST', `/api/db/access/catalog/${grant.catalogId}/reset-password`);
   if (result.state !== 'complete') throw new Error(`个人密码重置待完成：${result.error ?? '平台将自动重试'}。请稍后用 eat db run 重试。`);
   console.log('个人密码已重置。下次 eat db run 将自动使用新密码。');

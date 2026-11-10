@@ -102,7 +102,7 @@ export function DbAccessTab({ keyword }: { keyword: string }) {
       <DataTable columns={columns} data={(catalog.data ?? []).filter(matches)} loading={catalog.isLoading} getRowId={r => r.id ?? r.assignmentId!} empty={<Empty text="暂无开放申请的库" />} />
     </CardContent></Card>
     <Card><CardContent className="space-y-4">
-      <div><h2 className="text-sm font-semibold">我的授权</h2><p className="mt-1 text-sm text-muted-foreground">个人凭证只供本人临时使用，不要配进线上服务。同一实例的全部库共用一套个人凭证。</p></div>
+      <div><h2 className="text-sm font-semibold">我的授权</h2><p className="mt-1 text-sm text-muted-foreground">同一实例的全部库授权共用一套个人凭证。停用用户或撤销授权会中断相应连接。</p></div>
       <DataTable columns={grantColumns(false)} data={mine} loading={grants.isLoading} getRowId={r => r.id} empty={<Empty text="暂无数据库授权" />} />
     </CardContent></Card>
     {managed.length > 0 && <Card><CardContent className="space-y-4"><h2 className="text-sm font-semibold">授权管理</h2><DataTable columns={grantColumns(true)} data={managed} getRowId={r => r.id} /></CardContent></Card>}
@@ -112,7 +112,7 @@ export function DbAccessTab({ keyword }: { keyword: string }) {
     <Dialog open={!!checking} onOpenChange={v => !v && setChecking(null)}><DialogContent className="max-h-[85vh] overflow-y-auto"><DialogHeader><DialogTitle>外部库权限检查</DialogTitle><DialogDescription>{checking?.dbName} · 重新应用授权会刷新检查结果。</DialogDescription></DialogHeader>{checking?.publicCheck && <DbPublicCheckReport check={checking.publicCheck} />}</DialogContent></Dialog>
     <Dialog open={!!granting} onOpenChange={v => !v && setGranting(null)}><DialogContent><DialogHeader><DialogTitle>授予数据库权限</DialogTitle><DialogDescription>{granting?.dbName} · 已有授权会改为所选级别；降级会断开这个库上的连接。</DialogDescription></DialogHeader>{granting && <GrantForm row={granting} done={() => { setGranting(null); invalidate(); }} />}</DialogContent></Dialog>
     <Dialog open={!!revoking} onOpenChange={v => !v && setRevoking(null)}><DialogContent><DialogHeader><DialogTitle>撤销数据库授权</DialogTitle><DialogDescription>{revoking?.userName} 在 {revoking?.dbName} 上的连接会被断开，持有人收到撤销通知。</DialogDescription></DialogHeader>{revoking && <RevokeForm row={revoking} done={() => { setRevoking(null); invalidate(); }} />}</DialogContent></Dialog>
-    <Dialog open={!!credentials} onOpenChange={v => !v && setCredentials(null)}><DialogContent><DialogHeader><DialogTitle>个人凭证</DialogTitle><DialogDescription>只供本人临时使用，不要配进线上服务。每次查看记入审计。</DialogDescription></DialogHeader>{credentials && <PersonalCredentials key={credentials.id} grant={credentials} />}</DialogContent></Dialog>
+    <Dialog open={!!credentials} onOpenChange={v => !v && setCredentials(null)}><DialogContent><DialogHeader><DialogTitle>个人凭证</DialogTitle><DialogDescription>凭证绑定当前 EAT 用户，停用用户或撤销授权会中断相应连接。每次查看记入审计。</DialogDescription></DialogHeader>{credentials && <PersonalCredentials key={credentials.id} grant={credentials} />}</DialogContent></Dialog>
   </div>;
 }
 
@@ -180,7 +180,7 @@ function PersonalCredentials({ grant }: { grant: DbAccessGrantInfo }) {
       <div className="flex flex-wrap items-center gap-1"><span className="text-muted-foreground">密码</span><InlineCode>{value.password}</InlineCode><CopyButton text={value.password} /><Button size="icon-sm" variant="ghost" aria-label="隐藏个人凭证" onClick={() => setValue(null)}><EyeOff /></Button></div>
       <div className="flex items-start gap-1"><InlineCode>{value.url}</InlineCode><CopyButton text={value.url} /></div>
     </div> : <div className="flex items-center gap-3"><InlineCode>••••••••••••</InlineCode><Button variant="outline" loading={loading} disabled={resetting} onClick={() => void reveal()}><Eye />查看个人凭证</Button></div>}
-    <div className="border-t pt-4"><Confirm title="重置个人密码？" description={`同一实例「${grant.instanceName}」上其他库的授权也会使用新密码。已保存的旧密码将失效。个人凭证只供本人临时使用，不要配进线上服务。`} confirmText="重置个人密码" onConfirm={() => void reset()}><Button variant="outline" loading={resetting} disabled={loading}>重置个人密码</Button></Confirm></div>
+    <div className="border-t pt-4"><Confirm title="重置个人密码？" description={`同一实例「${grant.instanceName}」上其他库的授权也会使用新密码。已保存的旧密码将失效，请更新使用该凭证的连接配置。`} confirmText="重置个人密码" onConfirm={() => void reset()}><Button variant="outline" loading={resetting} disabled={loading}>重置个人密码</Button></Confirm></div>
   </div>;
 }
 
