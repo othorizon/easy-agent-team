@@ -1,4 +1,4 @@
-import { Global, Module, OnApplicationShutdown, Inject } from '@nestjs/common';
+import { Global, Module, OnApplicationShutdown, Inject, Logger } from '@nestjs/common';
 import { drizzle, NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { loadConfig } from '../config';
@@ -14,7 +14,15 @@ export const PG_POOL = Symbol('PG_POOL');
   providers: [
     {
       provide: PG_POOL,
-      useFactory: () => new Pool({ connectionString: loadConfig().databaseUrl, max: 10 }),
+      useFactory: () => {
+        const pool = new Pool({ connectionString: loadConfig().databaseUrl, max: 10 });
+        const logger = new Logger('PgPool');
+        // pg 会移除断开的空闲连接；必须监听 error，否则短暂断连会让整个进程退出。
+        pool.on('error', (error: Error) => {
+          logger.warn(`PostgreSQL 空闲连接异常，已移除失效连接：${error.message}`);
+        });
+        return pool;
+      },
     },
     {
       provide: DB,
